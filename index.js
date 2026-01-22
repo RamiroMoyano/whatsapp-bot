@@ -309,23 +309,22 @@ app.post("/whatsapp", (req, res) => {
 
   // ===== HANDOFF A HUMANO =====
   // Si está en modo humano, solo deja salir con "menu" (o si admin lo resetea).
-  if (session.state === "HUMAN" && text !== "menu" && text !== "hola") {
-    // respondemos 1 vez (si no notificamos aún) y luego silencio
-    if (!session.humanNotified) {
-      session.humanNotified = true;
-      reply = "✅ Listo. Un asesor te va a responder en breve.";
-      sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
-    } else {
-      // silencio (pero Twilio requiere respuesta XML)
-      reply = "✅ Un asesor ya fue notificado.";
-    }
-
-    saveSession(session);
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-    res.type("text/xml").send(twiml.toString());
-    return;
+  if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !text.startsWith("admin")) {
+  // respondemos 1 vez (si no notificamos aún) y luego silencio
+  if (!session.humanNotified) {
+    session.humanNotified = true;
+    reply = "✅ Listo. Un asesor te va a responder en breve.";
+    sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
+  } else {
+    reply = "✅ Un asesor ya fue notificado.";
   }
+
+  saveSession(session);
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+  res.type("text/xml").send(twiml.toString());
+  return;
+}
 
   // Trigger humano
   if (isHumanTrigger(text)) {
