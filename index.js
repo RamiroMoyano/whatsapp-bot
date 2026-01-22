@@ -29,7 +29,7 @@ const PAYMENT = {
   },
 };
 
-// Guardado local (un pedido por linea) - se crea cuando se confirma o con testpedido
+// Guardado local (un pedido por linea)
 const ORDERS_FILE = `${process.cwd()}\\orders.jsonl`;
 
 function calcTotal(items) {
@@ -133,7 +133,7 @@ function paymentMpText(session) {
     const id = unique[0];
     const link = PAYMENT.mpLinks[id];
     if (link) return `✅ Link MercadoPago:\n${link}\n\nCuando pagues, mandá: pagado`;
-    return `Todavía no tengo cargado el link de MP para ese producto.\nPegalo en .env y reiniciá el bot.`;
+    return `Todavía no tengo cargado el link de MP para ese producto.\nPegalo en las variables de entorno y reiniciá el servicio.`;
   }
   return `Para múltiples ítems, por ahora te paso el link de MP manual.\n(Después lo automatizamos con MP API).`;
 }
@@ -236,7 +236,7 @@ app.post("/whatsapp", (req, res) => {
       `Para confirmar: confirmar\nPara cancelar: cancelar`;
   }
 
-  // Confirmar
+  // Confirmar (guarda a archivo)
   if (text === "confirmar") {
     if (session.cart.length === 0) {
       reply = "No hay carrito activo. Escribí catalogo.";
@@ -290,7 +290,7 @@ app.post("/whatsapp", (req, res) => {
     else reply = `Genial ✅ Ya registré el pago del pedido *${session.lastOrder.id}*. En breve te contacto para la entrega.`;
   }
 
-  // Atajo para testear guardado sin depender de Twilio
+  // Test de guardado
   if (text === "testpedido") {
     const orderId = newOrderId();
     const fake = {
@@ -310,7 +310,7 @@ app.post("/whatsapp", (req, res) => {
     saveOrderToFile(enriched);
     session.lastOrder = fake;
 
-    reply = `✅ Guardé un pedido de prueba: ${orderId}\n\nArchivo: ${ORDERS_FILE}`;
+    reply = `✅ Guardé un pedido de prueba: ${orderId}`;
   }
 
   const twiml = new twilio.twiml.MessagingResponse();
@@ -320,4 +320,3 @@ app.post("/whatsapp", (req, res) => {
 
 app.get("/", (req, res) => res.send("OK - server running"));
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
-
