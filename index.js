@@ -28,9 +28,37 @@ const PAYMENT = {
 };
 
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || "").trim();
-
 function isAdmin(from) {
   return ADMIN_NUMBER && from === ADMIN_NUMBER;
+}
+
+// Telegram (Node 22+ tiene fetch nativo)
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+
+    await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+
+    clearTimeout(t);
+  } catch (e) {
+    console.error("Telegram notify failed:", e?.message || e);
+  }
 }
 
 function calcTotal(items) {
@@ -305,7 +333,6 @@ app.post("/whatsapp", (req, res) => {
       }
     }
 
-    // Persistimos sesión y respondemos (cortamos el resto)
     saveSession(session);
     const twiml = new twilio.twiml.MessagingResponse();
     twiml.message(reply);
@@ -374,7 +401,7 @@ app.post("/whatsapp", (req, res) => {
       `Para confirmar: confirmar\nPara cancelar: cancelar`;
   }
 
-  // Confirmar (guarda en SQLite)
+  // Confirmar (guarda en SQLite + notifica Telegram)
   if (text === "confirmar") {
     if (session.cart.length === 0) {
       reply = "No hay carrito activo. Escribí catalogo.";
@@ -401,8 +428,21 @@ app.post("/whatsapp", (req, res) => {
         paymentMethod: "",
       });
 
-      session.lastOrderId = orderId;
+      // Notificación Telegram (no bloquea la respuesta al cliente)
+      const adminMsg =
+        `🛎️ Nuevo pedido ${orderId}\n` +
+        `Total: USD $${total}\n` +
+        `Cliente: ${from}\n` +
+        `Nombre: ${session.data.name || "—"}\n` +
+        `Contacto: ${session.data.contact || "—"}\n` +
+        `Notas: ${session.data.notes || "—"}\n` +
+        `Items:\n` +
+        itemsDetailed.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
 
+      // fire-and-forget
+      sendTelegram(adminMsg);
+
+      session.lastOrderId = orderId;
       session.state = "MENU";
       session.cart = [];
       session.data = { name: "", contact: "", notes: "" };
@@ -464,7 +504,6 @@ app.post("/whatsapp", (req, res) => {
     reply = `✅ Guardé un pedido de prueba: ${orderId}`;
   }
 
-  // Persistimos session SIEMPRE
   saveSession(session);
 
   const twiml = new twilio.twiml.MessagingResponse();
