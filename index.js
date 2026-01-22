@@ -103,6 +103,11 @@ function formatItems(items) {
   });
 }
 
+function waLink(fromNumber) {
+  const digits = (fromNumber || "").replace("whatsapp:", "").replace("+", "").trim();
+  return digits ? `https://wa.me/${digits}` : "";
+}
+
 function menuText() {
   return `👋 Hola! Soy tu asistente de compras.
 
@@ -228,10 +233,9 @@ function getSession(fromNumber) {
       fromNumber,
       state: "MENU",
       cart: [],
-      data: { name: "", contact: "", notes: "" },
+      data: { name: "", contact: "", notes: "", humanNotified: false },
       lastOrderId: null,
       lastOrderItems: [],
-      humanNotified: false,
     };
   }
   const data = JSON.parse(row.dataJson || "{}");
@@ -243,20 +247,15 @@ function getSession(fromNumber) {
     data,
     lastOrderId: row.lastOrderId || null,
     lastOrderItems: [],
-    humanNotified: !!data?.humanNotified,
   };
 }
 
 function saveSession(session) {
-  // guardamos humanNotified dentro de dataJson
-  const data = session.data || {};
-  data.humanNotified = !!session.humanNotified;
-
   upsertSessionStmt.run({
     fromNumber: session.fromNumber,
     state: session.state,
     cartJson: JSON.stringify(session.cart || []),
-    dataJson: JSON.stringify(data),
+    dataJson: JSON.stringify(session.data || {}),
     lastOrderId: session.lastOrderId || null,
   });
 }
@@ -271,6 +270,12 @@ const getOrderByIdStmt = db.prepare("SELECT * FROM orders WHERE id = ?");
 
 const setPaidStmt = db.prepare(`
   UPDATE orders SET paymentStatus='paid', paymentMethod=@paymentMethod WHERE id=@id
+`);
+
+const setContactedStmt = db.prepare(`
+  UPDATE orders
+  SET contactedAt=@contactedAt, contactedBy=@contactedBy
+  WHERE id=@id
 `);
 
 const listLastOrdersStmt = db.prepare(`
@@ -308,33 +313,30 @@ app.post("/whatsapp", (req, res) => {
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
   // ===== HANDOFF A HUMANO =====
-  // Si está en modo humano, solo deja salir con "menu" (o si admin lo resetea).
+  // Permite admin aun si está HUMAN
   if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !text.startsWith("admin")) {
-  // respondemos 1 vez (si no notificamos aún) y luego silencio
-  if (!session.humanNotified) {
-    session.humanNotified = true;
-    reply = "✅ Listo. Un asesor te va a responder en breve.";
-    sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
-  } else {
-    reply = "✅ Un asesor ya fue notificado.";
+    if (!session.data?.humanNotified) {
+      session.data = session.data || {};
+      session.data.humanNotified = true;
+      reply = "✅ Listo. Un asesor te va a responder en breve.";
+      sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
+    } else {
+      reply = "✅ Un asesor ya fue notificado.";
+    }
+
+    saveSession(session);
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    res.type("text/xml").send(twiml.toString());
+    return;
   }
 
-  saveSession(session);
-  const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(reply);
-  res.type("text/xml").send(twiml.toString());
-  return;
-}
-
-  // Trigger humano
   if (isHumanTrigger(text)) {
     session.state = "HUMAN";
-    session.humanNotified = true;
+    session.data = session.data || {};
+    session.data.humanNotified = true;
 
-    // intentamos incluir último pedido si existe
-    let extra = "";
-    if (session.lastOrderId) extra = `\nÚltimo pedido: ${session.lastOrderId}`;
-
+    const extra = session.lastOrderId ? `\nÚltimo pedido: ${session.lastOrderId}` : "";
     sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}${extra}\nMensaje: ${body}`);
 
     reply = "✅ Listo. Un asesor te va a responder en breve.";
@@ -357,6 +359,7 @@ app.post("/whatsapp", (req, res) => {
 • admin pedido PED-XXXXXX
 • admin hoy
 • admin telegram
+• admin contacted PED-XXXXXX
 • admin auto whatsapp:+54...`;
       }
 
@@ -387,6 +390,8 @@ app.post("/whatsapp", (req, res) => {
             `Contacto: ${row.contact || "—"}\n` +
             `Notas: ${row.notes || "—"}\n` +
             `Estado: ${row.paymentStatus}\n` +
+            `Contactado: ${row.contactedAt ? "✅ " + row.contactedAt : "❌ no"}\n` +
+            `Contactado por: ${row.contactedBy || "—"}\n` +
             `Total: USD $${row.total}\n\n` +
             `Items:\n${itemsText || "—"}`;
         }
@@ -410,14 +415,29 @@ app.post("/whatsapp", (req, res) => {
         reply = "Listo ✅ mandé un test a Telegram. Mirá tu Telegram y también los logs de Render.";
       }
 
+      // admin contacted PED-XXXXXX
+      const c = text.match(/^admin\s+contacted\s+(ped-[a-z0-9]+)$/i);
+      if (c) {
+        const orderId = c[1].toUpperCase();
+        const row = getOrderByIdStmt.get(orderId);
+        if (!row) {
+          reply = `No encontré el pedido ${orderId}`;
+        } else {
+          setContactedStmt.run({
+            id: orderId,
+            contactedAt: new Date().toISOString(),
+            contactedBy: from,
+          });
+          reply = `✅ Marcado como CONTACTADO: ${orderId}`;
+        }
+      }
+
       // admin auto whatsapp:+549...
       const a = text.match(/^admin\s+auto\s+(whatsapp:\+\d+)$/i);
       if (a) {
         const target = a[1];
-        // reseteamos sesión del cliente a modo automático
         const s = getSession(target);
         s.state = "MENU";
-        s.humanNotified = false;
         s.data = s.data || {};
         s.data.humanNotified = false;
         saveSession(s);
@@ -435,7 +455,8 @@ app.post("/whatsapp", (req, res) => {
   // Menu / Hola
   if (text === "hola" || text === "menu") {
     session.state = "MENU";
-    session.humanNotified = false;
+    session.data = session.data || {};
+    session.data.humanNotified = false;
     reply = menuText();
   }
 
@@ -443,9 +464,8 @@ app.post("/whatsapp", (req, res) => {
   if (text === "cancelar") {
     session.state = "MENU";
     session.cart = [];
-    session.data = { name: "", contact: "", notes: "" };
+    session.data = { name: "", contact: "", notes: "", humanNotified: false };
     session.lastOrderId = null;
-    session.humanNotified = false;
     reply = "🧹 Listo, reinicié todo.\n\n" + menuText();
   }
 
@@ -477,14 +497,17 @@ app.post("/whatsapp", (req, res) => {
 
   // Datos
   if (session.state === "ASK_NAME" && !isReserved(text)) {
+    session.data = session.data || {};
     session.data.name = body;
     session.state = "ASK_CONTACT";
     reply = "Genial. Pasame un contacto (email o WhatsApp alternativo).";
   } else if (session.state === "ASK_CONTACT" && !isReserved(text)) {
+    session.data = session.data || {};
     session.data.contact = body;
     session.state = "ASK_NOTES";
     reply = "¿Qué querés que haga el bot? (ventas, FAQs, turnos, etc). Si no, escribí: no";
   } else if (session.state === "ASK_NOTES" && !isReserved(text)) {
+    session.data = session.data || {};
     session.data.notes = text === "no" ? "" : body;
     session.state = "READY";
     reply =
@@ -507,6 +530,7 @@ app.post("/whatsapp", (req, res) => {
       const items = [...session.cart];
       const itemsDetailed = formatItems(items);
       const total = calcTotal(items);
+      const link = waLink(from);
 
       insertOrderStmt.run({
         id: orderId,
@@ -526,6 +550,7 @@ app.post("/whatsapp", (req, res) => {
         `🛎️ Nuevo pedido ${orderId}\n` +
         `Total: USD $${total}\n` +
         `Cliente: ${from}\n` +
+        (link ? `Contactar: ${link}\n` : "") +
         `Nombre: ${session.data.name || "—"}\n` +
         `Contacto: ${session.data.contact || "—"}\n` +
         `Notas: ${session.data.notes || "—"}\n` +
@@ -537,7 +562,7 @@ app.post("/whatsapp", (req, res) => {
       session.lastOrderId = orderId;
       session.state = "MENU";
       session.cart = [];
-      session.data = { name: "", contact: "", notes: "" };
+      session.data = { name: "", contact: "", notes: "", humanNotified: false };
 
       reply = `🎉 Pedido confirmado: *${orderId}*\n\nPara pagar escribí: pago`;
     }
@@ -604,3 +629,4 @@ app.post("/whatsapp", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
+
