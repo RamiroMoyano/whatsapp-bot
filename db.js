@@ -9,6 +9,7 @@ if (DB_PATH.startsWith("/var/")) {
 
 export const db = new Database(DB_PATH);
 
+// Creamos tablas base
 db.exec(`
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY,
@@ -33,3 +34,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 `);
 
+// Migraciones (NO rompen si ya existe)
+try { db.exec("ALTER TABLE orders ADD COLUMN contactedAt TEXT"); } catch {}
+try { db.exec("ALTER TABLE orders ADD COLUMN contactedBy TEXT"); } catch {}
