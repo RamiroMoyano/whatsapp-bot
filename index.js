@@ -27,6 +27,12 @@ const PAYMENT = {
   },
 };
 
+const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || "").trim();
+
+function isAdmin(from) {
+  return ADMIN_NUMBER && from === ADMIN_NUMBER;
+}
+
 function calcTotal(items) {
   let total = 0;
   for (const id of items) {
@@ -143,6 +149,10 @@ function isReserved(text) {
     "pagar transferencia",
     "pagado",
     "testpedido",
+    "admin",
+    "admin ayuda",
+    "admin pedidos",
+    "admin hoy",
   ].includes(text);
 }
 
@@ -178,7 +188,7 @@ function getSession(fromNumber) {
     cart,
     data,
     lastOrderId: row.lastOrderId || null,
-    lastOrderItems: [], // lo cargamos si hace falta
+    lastOrderItems: [],
   };
 }
 
@@ -199,8 +209,23 @@ const insertOrderStmt = db.prepare(`
 `);
 
 const getOrderByIdStmt = db.prepare("SELECT * FROM orders WHERE id = ?");
+
 const setPaidStmt = db.prepare(`
   UPDATE orders SET paymentStatus='paid', paymentMethod=@paymentMethod WHERE id=@id
+`);
+
+const listLastOrdersStmt = db.prepare(`
+  SELECT id, createdAt, fromNumber, total, paymentStatus
+  FROM orders
+  ORDER BY datetime(createdAt) DESC
+  LIMIT ?
+`);
+
+const listTodayOrdersStmt = db.prepare(`
+  SELECT id, createdAt, fromNumber, total, paymentStatus
+  FROM orders
+  WHERE datetime(createdAt) >= datetime(@start) AND datetime(createdAt) <= datetime(@end)
+  ORDER BY datetime(createdAt) DESC
 `);
 
 function loadLastOrderItems(session) {
@@ -210,7 +235,7 @@ function loadLastOrderItems(session) {
   session.lastOrderItems = JSON.parse(row.itemsJson || "[]");
 }
 
-// Health endpoint
+// Health endpoints
 app.get("/", (req, res) => res.send("OK - server running"));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -221,6 +246,72 @@ app.post("/whatsapp", (req, res) => {
 
   const session = getSession(from);
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
+
+  // -------- ADMIN COMMANDS (solo tu numero) --------
+  if (text.startsWith("admin")) {
+    if (!isAdmin(from)) {
+      reply = "⛔ Comando restringido.";
+    } else {
+      if (text === "admin" || text === "admin ayuda") {
+        reply = `🛠 Admin:
+• admin pedidos
+• admin pedido PED-XXXXXX
+• admin hoy`;
+      }
+
+      if (text === "admin pedidos") {
+        const rows = listLastOrdersStmt.all(5);
+        if (!rows.length) reply = "No hay pedidos todavía.";
+        else {
+          const lines = rows.map(
+            (r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber} — ${r.createdAt}`
+          );
+          reply = `📦 Últimos pedidos:\n${lines.join("\n")}\n\nUsá: admin pedido PED-XXXXXX`;
+        }
+      }
+
+      const m = text.match(/^admin\s+pedido\s+(ped-[a-z0-9]+)$/i);
+      if (m) {
+        const orderId = m[1].toUpperCase();
+        const row = getOrderByIdStmt.get(orderId);
+        if (!row) reply = `No encontré el pedido ${orderId}`;
+        else {
+          const items = JSON.parse(row.itemsDetailedJson || "[]");
+          const itemsText = items.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
+          reply =
+            `🧾 Pedido ${row.id}\n` +
+            `Fecha: ${row.createdAt}\n` +
+            `Cliente: ${row.fromNumber}\n` +
+            `Nombre: ${row.name || "—"}\n` +
+            `Contacto: ${row.contact || "—"}\n` +
+            `Notas: ${row.notes || "—"}\n` +
+            `Estado: ${row.paymentStatus}\n` +
+            `Total: USD $${row.total}\n\n` +
+            `Items:\n${itemsText || "—"}`;
+        }
+      }
+
+      if (text === "admin hoy") {
+        const now = new Date();
+        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)).toISOString();
+        const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59)).toISOString();
+
+        const rows = listTodayOrdersStmt.all({ start, end });
+        if (!rows.length) reply = "📭 No hay pedidos hoy.";
+        else {
+          const lines = rows.map((r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber}`);
+          reply = `📅 Pedidos de hoy:\n${lines.join("\n")}`;
+        }
+      }
+    }
+
+    // Persistimos sesión y respondemos (cortamos el resto)
+    saveSession(session);
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    res.type("text/xml").send(twiml.toString());
+    return;
+  }
 
   // Menu / Hola
   if (text === "hola" || text === "menu") {
@@ -320,7 +411,7 @@ app.post("/whatsapp", (req, res) => {
     }
   }
 
-  // Pago (cargamos items del ultimo pedido)
+  // Pago
   if (text === "pago" || text === "pagar") {
     if (!session.lastOrderId) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
     else reply = paymentMenuText(session.lastOrderId);
@@ -342,13 +433,12 @@ app.post("/whatsapp", (req, res) => {
   if (text === "pagado") {
     if (!session.lastOrderId) reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
     else {
-      // Por ahora lo marcamos pagado sin verificacion (MVP)
       setPaidStmt.run({ id: session.lastOrderId, paymentMethod: "manual" });
       reply = `Genial ✅ Ya registré el pago del pedido *${session.lastOrderId}*. En breve te contacto para la entrega.`;
     }
   }
 
-  // Test (guarda un pedido de prueba)
+  // Test
   if (text === "testpedido") {
     const orderId = newOrderId();
     const createdAt = new Date().toISOString();
@@ -383,3 +473,4 @@ app.post("/whatsapp", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
+
