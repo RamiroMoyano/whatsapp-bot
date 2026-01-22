@@ -8,6 +8,7 @@ dotenv.config();
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
+// ====== CONFIG ======
 const CATALOG = [
   { id: 1, name: "Bot para WhatsApp", price: 100 },
   { id: 2, name: "Bot para Instagram", price: 80 },
@@ -73,7 +74,9 @@ async function sendTelegram(text) {
   } catch (e) {
     console.error("Telegram notify failed:", e?.message || e);
   }
+}
 
+// ====== HELPERS ======
 function calcTotal(items) {
   let total = 0;
   for (const id of items) {
@@ -194,10 +197,11 @@ function isReserved(text) {
     "admin ayuda",
     "admin pedidos",
     "admin hoy",
+    "admin telegram",
   ].includes(text);
 }
 
-// ---- DB: sessions ----
+// ====== DB: sessions ======
 const getSessionStmt = db.prepare("SELECT * FROM sessions WHERE fromNumber = ?");
 const upsertSessionStmt = db.prepare(`
   INSERT INTO sessions (fromNumber, state, cartJson, dataJson, lastOrderId)
@@ -243,7 +247,7 @@ function saveSession(session) {
   });
 }
 
-// ---- DB: orders ----
+// ====== DB: orders ======
 const insertOrderStmt = db.prepare(`
   INSERT INTO orders (id, createdAt, fromNumber, name, contact, notes, itemsJson, itemsDetailedJson, total, paymentStatus, paymentMethod)
   VALUES (@id, @createdAt, @fromNumber, @name, @contact, @notes, @itemsJson, @itemsDetailedJson, @total, @paymentStatus, @paymentMethod)
@@ -276,10 +280,11 @@ function loadLastOrderItems(session) {
   session.lastOrderItems = JSON.parse(row.itemsJson || "[]");
 }
 
-// Health endpoints
+// ====== HEALTH ======
 app.get("/", (req, res) => res.send("OK - server running"));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// ====== WEBHOOK ======
 app.post("/whatsapp", (req, res) => {
   const from = req.body.From || "unknown";
   const body = (req.body.Body || "").trim();
@@ -289,12 +294,7 @@ app.post("/whatsapp", (req, res) => {
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
   // -------- ADMIN COMMANDS (solo tu numero) --------
-if (text === "admin telegram") {
-  sendTelegram("✅ Test Telegram OK (enviado desde WhatsApp bot)");
-  reply = "Listo ✅ mandé un test a Telegram. Mirá tu Telegram y también los logs de Render.";
-}
-  
-if (text.startsWith("admin")) {
+  if (text.startsWith("admin")) {
     if (!isAdmin(from)) {
       reply = "⛔ Comando restringido.";
     } else {
@@ -302,7 +302,8 @@ if (text.startsWith("admin")) {
         reply = `🛠 Admin:
 • admin pedidos
 • admin pedido PED-XXXXXX
-• admin hoy`;
+• admin hoy
+• admin telegram`;
       }
 
       if (text === "admin pedidos") {
@@ -348,6 +349,11 @@ if (text.startsWith("admin")) {
           const lines = rows.map((r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber}`);
           reply = `📅 Pedidos de hoy:\n${lines.join("\n")}`;
         }
+      }
+
+      if (text === "admin telegram") {
+        sendTelegram("✅ Test Telegram OK (enviado desde WhatsApp bot)");
+        reply = "Listo ✅ mandé un test a Telegram. Mirá tu Telegram y también los logs de Render.";
       }
     }
 
@@ -399,7 +405,7 @@ if (text.startsWith("admin")) {
     }
   }
 
-  // Datos (estados)
+  // Datos
   if (session.state === "ASK_NAME" && !isReserved(text)) {
     session.data.name = body;
     session.state = "ASK_CONTACT";
@@ -419,7 +425,7 @@ if (text.startsWith("admin")) {
       `Para confirmar: confirmar\nPara cancelar: cancelar`;
   }
 
-  // Confirmar (guarda en SQLite + notifica Telegram)
+  // Confirmar (guarda + notifica)
   if (text === "confirmar") {
     if (session.cart.length === 0) {
       reply = "No hay carrito activo. Escribí catalogo.";
@@ -446,7 +452,6 @@ if (text.startsWith("admin")) {
         paymentMethod: "",
       });
 
-      // Notificación Telegram (no bloquea la respuesta al cliente)
       const adminMsg =
         `🛎️ Nuevo pedido ${orderId}\n` +
         `Total: USD $${total}\n` +
@@ -457,7 +462,6 @@ if (text.startsWith("admin")) {
         `Items:\n` +
         itemsDetailed.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
 
-      // fire-and-forget
       sendTelegram(adminMsg);
 
       session.lastOrderId = orderId;
@@ -530,4 +534,3 @@ if (text.startsWith("admin")) {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
-
