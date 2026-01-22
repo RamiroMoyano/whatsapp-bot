@@ -1,14 +1,12 @@
 import express from "express";
 import twilio from "twilio";
 import dotenv from "dotenv";
-import fs from "fs";
+import { db } from "./db.js";
 
 dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
-
-const sessions = new Map();
 
 const CATALOG = [
   { id: 1, name: "Bot para WhatsApp", price: 100 },
@@ -28,9 +26,6 @@ const PAYMENT = {
     3: process.env.MP_LINK_COMBINADO || "",
   },
 };
-
-// Guardado local (un pedido por linea)
-const ORDERS_FILE = `${process.cwd()}\\orders.jsonl`;
 
 function calcTotal(items) {
   let total = 0;
@@ -56,22 +51,6 @@ function formatItems(items) {
       subtotal: unit * qty,
     };
   });
-}
-
-function saveOrderToFile(order) {
-  fs.appendFileSync(ORDERS_FILE, JSON.stringify(order) + "\n", { encoding: "utf8" });
-}
-
-function getSession(from) {
-  if (!sessions.has(from)) {
-    sessions.set(from, {
-      state: "MENU", // MENU | ASK_NAME | ASK_CONTACT | ASK_NOTES | READY
-      cart: [],
-      data: { name: "", contact: "", notes: "" },
-      lastOrder: null,
-    });
-  }
-  return sessions.get(from);
 }
 
 function menuText() {
@@ -128,12 +107,12 @@ Cuando pagues, mandá: pagado`;
 }
 
 function paymentMpText(session) {
-  const unique = [...new Set(session.lastOrder.items)];
+  const unique = [...new Set(session.lastOrderItems)];
   if (unique.length === 1) {
     const id = unique[0];
     const link = PAYMENT.mpLinks[id];
     if (link) return `✅ Link MercadoPago:\n${link}\n\nCuando pagues, mandá: pagado`;
-    return `Todavía no tengo cargado el link de MP para ese producto.\nPegalo en las variables de entorno y reiniciá el servicio.`;
+    return `Todavía no tengo cargado el link de MP para ese producto.\nCargalo en variables de entorno (Render) y redeploy.`;
   }
   return `Para múltiples ítems, por ahora te paso el link de MP manual.\n(Después lo automatizamos con MP API).`;
 }
@@ -167,6 +146,74 @@ function isReserved(text) {
   ].includes(text);
 }
 
+// ---- DB: sessions ----
+const getSessionStmt = db.prepare("SELECT * FROM sessions WHERE fromNumber = ?");
+const upsertSessionStmt = db.prepare(`
+  INSERT INTO sessions (fromNumber, state, cartJson, dataJson, lastOrderId)
+  VALUES (@fromNumber, @state, @cartJson, @dataJson, @lastOrderId)
+  ON CONFLICT(fromNumber) DO UPDATE SET
+    state=excluded.state,
+    cartJson=excluded.cartJson,
+    dataJson=excluded.dataJson,
+    lastOrderId=excluded.lastOrderId
+`);
+
+function getSession(fromNumber) {
+  const row = getSessionStmt.get(fromNumber);
+  if (!row) {
+    return {
+      fromNumber,
+      state: "MENU",
+      cart: [],
+      data: { name: "", contact: "", notes: "" },
+      lastOrderId: null,
+      lastOrderItems: [],
+    };
+  }
+  const data = JSON.parse(row.dataJson || "{}");
+  const cart = JSON.parse(row.cartJson || "[]");
+  return {
+    fromNumber,
+    state: row.state,
+    cart,
+    data,
+    lastOrderId: row.lastOrderId || null,
+    lastOrderItems: [], // lo cargamos si hace falta
+  };
+}
+
+function saveSession(session) {
+  upsertSessionStmt.run({
+    fromNumber: session.fromNumber,
+    state: session.state,
+    cartJson: JSON.stringify(session.cart || []),
+    dataJson: JSON.stringify(session.data || {}),
+    lastOrderId: session.lastOrderId || null,
+  });
+}
+
+// ---- DB: orders ----
+const insertOrderStmt = db.prepare(`
+  INSERT INTO orders (id, createdAt, fromNumber, name, contact, notes, itemsJson, itemsDetailedJson, total, paymentStatus, paymentMethod)
+  VALUES (@id, @createdAt, @fromNumber, @name, @contact, @notes, @itemsJson, @itemsDetailedJson, @total, @paymentStatus, @paymentMethod)
+`);
+
+const getOrderByIdStmt = db.prepare("SELECT * FROM orders WHERE id = ?");
+const setPaidStmt = db.prepare(`
+  UPDATE orders SET paymentStatus='paid', paymentMethod=@paymentMethod WHERE id=@id
+`);
+
+function loadLastOrderItems(session) {
+  if (!session.lastOrderId) return;
+  const row = getOrderByIdStmt.get(session.lastOrderId);
+  if (!row) return;
+  session.lastOrderItems = JSON.parse(row.itemsJson || "[]");
+}
+
+// Health endpoint
+app.get("/", (req, res) => res.send("OK - server running"));
+app.get("/health", (req, res) => res.json({ ok: true }));
+
 app.post("/whatsapp", (req, res) => {
   const from = req.body.From || "unknown";
   const body = (req.body.Body || "").trim();
@@ -186,7 +233,7 @@ app.post("/whatsapp", (req, res) => {
     session.state = "MENU";
     session.cart = [];
     session.data = { name: "", contact: "", notes: "" };
-    session.lastOrder = null;
+    session.lastOrderId = null;
     reply = "🧹 Listo, reinicié todo.\n\n" + menuText();
   }
 
@@ -236,7 +283,7 @@ app.post("/whatsapp", (req, res) => {
       `Para confirmar: confirmar\nPara cancelar: cancelar`;
   }
 
-  // Confirmar (guarda a archivo)
+  // Confirmar (guarda en SQLite)
   if (text === "confirmar") {
     if (session.cart.length === 0) {
       reply = "No hay carrito activo. Escribí catalogo.";
@@ -244,22 +291,26 @@ app.post("/whatsapp", (req, res) => {
       reply = "Todavía falta completar el checkout. Escribí: checkout";
     } else {
       const orderId = newOrderId();
+      const createdAt = new Date().toISOString();
+      const items = [...session.cart];
+      const itemsDetailed = formatItems(items);
+      const total = calcTotal(items);
 
-      session.lastOrder = {
+      insertOrderStmt.run({
         id: orderId,
-        items: [...session.cart],
-        data: { ...session.data },
-        createdAt: new Date().toISOString(),
-      };
+        createdAt,
+        fromNumber: from,
+        name: session.data.name || "",
+        contact: session.data.contact || "",
+        notes: session.data.notes || "",
+        itemsJson: JSON.stringify(items),
+        itemsDetailedJson: JSON.stringify(itemsDetailed),
+        total,
+        paymentStatus: "pending",
+        paymentMethod: "",
+      });
 
-      const enriched = {
-        ...session.lastOrder,
-        from,
-        itemsDetailed: formatItems(session.lastOrder.items),
-        total: calcTotal(session.lastOrder.items),
-      };
-
-      saveOrderToFile(enriched);
+      session.lastOrderId = orderId;
 
       session.state = "MENU";
       session.cart = [];
@@ -269,54 +320,66 @@ app.post("/whatsapp", (req, res) => {
     }
   }
 
-  // Pago
+  // Pago (cargamos items del ultimo pedido)
   if (text === "pago" || text === "pagar") {
-    if (!session.lastOrder) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
-    else reply = paymentMenuText(session.lastOrder.id);
+    if (!session.lastOrderId) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
+    else reply = paymentMenuText(session.lastOrderId);
   }
 
   if (text === "pagar transferencia") {
-    if (!session.lastOrder) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
+    if (!session.lastOrderId) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
     else reply = paymentTransferText();
   }
 
   if (text === "pagar mp") {
-    if (!session.lastOrder) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
-    else reply = paymentMpText(session);
+    if (!session.lastOrderId) reply = "No tengo un pedido confirmado reciente. Hacé: checkout → confirmar";
+    else {
+      loadLastOrderItems(session);
+      reply = paymentMpText(session);
+    }
   }
 
   if (text === "pagado") {
-    if (!session.lastOrder) reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
-    else reply = `Genial ✅ Ya registré el pago del pedido *${session.lastOrder.id}*. En breve te contacto para la entrega.`;
+    if (!session.lastOrderId) reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
+    else {
+      // Por ahora lo marcamos pagado sin verificacion (MVP)
+      setPaidStmt.run({ id: session.lastOrderId, paymentMethod: "manual" });
+      reply = `Genial ✅ Ya registré el pago del pedido *${session.lastOrderId}*. En breve te contacto para la entrega.`;
+    }
   }
 
-  // Test de guardado
+  // Test (guarda un pedido de prueba)
   if (text === "testpedido") {
     const orderId = newOrderId();
-    const fake = {
+    const createdAt = new Date().toISOString();
+    const items = [1, 3];
+    const itemsDetailed = formatItems(items);
+    const total = calcTotal(items);
+
+    insertOrderStmt.run({
       id: orderId,
-      items: [1, 3],
-      data: { name: "Test", contact: "test@demo.com", notes: "pedido de prueba" },
-      createdAt: new Date().toISOString(),
-      from,
-    };
+      createdAt,
+      fromNumber: from,
+      name: "Test",
+      contact: "test@demo.com",
+      notes: "pedido de prueba",
+      itemsJson: JSON.stringify(items),
+      itemsDetailedJson: JSON.stringify(itemsDetailed),
+      total,
+      paymentStatus: "pending",
+      paymentMethod: "",
+    });
 
-    const enriched = {
-      ...fake,
-      itemsDetailed: formatItems(fake.items),
-      total: calcTotal(fake.items),
-    };
-
-    saveOrderToFile(enriched);
-    session.lastOrder = fake;
-
+    session.lastOrderId = orderId;
     reply = `✅ Guardé un pedido de prueba: ${orderId}`;
   }
+
+  // Persistimos session SIEMPRE
+  saveSession(session);
 
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(reply);
   res.type("text/xml").send(twiml.toString());
 });
 
-app.get("/", (req, res) => res.send("OK - server running"));
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
