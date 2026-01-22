@@ -111,6 +111,7 @@ Escribí:
 • agregar 1
 • carrito
 • checkout
+• humano
 • ayuda
 • cancelar`;
 }
@@ -193,12 +194,19 @@ function isReserved(text) {
     "pagar transferencia",
     "pagado",
     "testpedido",
+    "humano",
+    "asesor",
+    "hablar con humano",
     "admin",
     "admin ayuda",
     "admin pedidos",
     "admin hoy",
     "admin telegram",
   ].includes(text);
+}
+
+function isHumanTrigger(text) {
+  return text === "humano" || text === "asesor" || text === "hablar con humano";
 }
 
 // ====== DB: sessions ======
@@ -223,6 +231,7 @@ function getSession(fromNumber) {
       data: { name: "", contact: "", notes: "" },
       lastOrderId: null,
       lastOrderItems: [],
+      humanNotified: false,
     };
   }
   const data = JSON.parse(row.dataJson || "{}");
@@ -234,15 +243,20 @@ function getSession(fromNumber) {
     data,
     lastOrderId: row.lastOrderId || null,
     lastOrderItems: [],
+    humanNotified: !!data?.humanNotified,
   };
 }
 
 function saveSession(session) {
+  // guardamos humanNotified dentro de dataJson
+  const data = session.data || {};
+  data.humanNotified = !!session.humanNotified;
+
   upsertSessionStmt.run({
     fromNumber: session.fromNumber,
     state: session.state,
     cartJson: JSON.stringify(session.cart || []),
-    dataJson: JSON.stringify(session.data || {}),
+    dataJson: JSON.stringify(data),
     lastOrderId: session.lastOrderId || null,
   });
 }
@@ -293,6 +307,46 @@ app.post("/whatsapp", (req, res) => {
   const session = getSession(from);
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
+  // ===== HANDOFF A HUMANO =====
+  // Si está en modo humano, solo deja salir con "menu" (o si admin lo resetea).
+  if (session.state === "HUMAN" && text !== "menu" && text !== "hola") {
+    // respondemos 1 vez (si no notificamos aún) y luego silencio
+    if (!session.humanNotified) {
+      session.humanNotified = true;
+      reply = "✅ Listo. Un asesor te va a responder en breve.";
+      sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
+    } else {
+      // silencio (pero Twilio requiere respuesta XML)
+      reply = "✅ Un asesor ya fue notificado.";
+    }
+
+    saveSession(session);
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    res.type("text/xml").send(twiml.toString());
+    return;
+  }
+
+  // Trigger humano
+  if (isHumanTrigger(text)) {
+    session.state = "HUMAN";
+    session.humanNotified = true;
+
+    // intentamos incluir último pedido si existe
+    let extra = "";
+    if (session.lastOrderId) extra = `\nÚltimo pedido: ${session.lastOrderId}`;
+
+    sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}${extra}\nMensaje: ${body}`);
+
+    reply = "✅ Listo. Un asesor te va a responder en breve.";
+    saveSession(session);
+
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    res.type("text/xml").send(twiml.toString());
+    return;
+  }
+
   // -------- ADMIN COMMANDS (solo tu numero) --------
   if (text.startsWith("admin")) {
     if (!isAdmin(from)) {
@@ -303,7 +357,8 @@ app.post("/whatsapp", (req, res) => {
 • admin pedidos
 • admin pedido PED-XXXXXX
 • admin hoy
-• admin telegram`;
+• admin telegram
+• admin auto whatsapp:+54...`;
       }
 
       if (text === "admin pedidos") {
@@ -355,6 +410,20 @@ app.post("/whatsapp", (req, res) => {
         sendTelegram("✅ Test Telegram OK (enviado desde WhatsApp bot)");
         reply = "Listo ✅ mandé un test a Telegram. Mirá tu Telegram y también los logs de Render.";
       }
+
+      // admin auto whatsapp:+549...
+      const a = text.match(/^admin\s+auto\s+(whatsapp:\+\d+)$/i);
+      if (a) {
+        const target = a[1];
+        // reseteamos sesión del cliente a modo automático
+        const s = getSession(target);
+        s.state = "MENU";
+        s.humanNotified = false;
+        s.data = s.data || {};
+        s.data.humanNotified = false;
+        saveSession(s);
+        reply = `✅ Volví a modo automático a: ${target}`;
+      }
     }
 
     saveSession(session);
@@ -367,6 +436,7 @@ app.post("/whatsapp", (req, res) => {
   // Menu / Hola
   if (text === "hola" || text === "menu") {
     session.state = "MENU";
+    session.humanNotified = false;
     reply = menuText();
   }
 
@@ -376,6 +446,7 @@ app.post("/whatsapp", (req, res) => {
     session.cart = [];
     session.data = { name: "", contact: "", notes: "" };
     session.lastOrderId = null;
+    session.humanNotified = false;
     reply = "🧹 Listo, reinicié todo.\n\n" + menuText();
   }
 
