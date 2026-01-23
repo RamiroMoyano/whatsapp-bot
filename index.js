@@ -289,6 +289,22 @@ const setPaidStmt = db.prepare(`
   WHERE id=@id
 `);
 
+const setPaidByAdminStmt = db.prepare(`
+  UPDATE orders
+  SET paymentStatus='paid',
+      paymentMethod='admin',
+      orderStatus='paid'
+  WHERE id=@id
+`);
+
+const setConfirmedByAdminStmt = db.prepare(`
+  UPDATE orders
+  SET paymentStatus='pending',
+      paymentMethod='',
+      orderStatus='confirmed'
+  WHERE id=@id
+`);
+
 const setDeliveredStmt = db.prepare(`
   UPDATE orders
   SET orderStatus='delivered',
@@ -516,22 +532,34 @@ app.post("/whatsapp", (req, res) => {
             contactedBy: from,
           });
           reply = `✅ Marcado como CONTACTADO: ${orderId}`;
+          sendTelegram(`📞 Pedido CONTACTADO\n${orderId}\nCliente: ${row.fromNumber}\nTotal: USD $${row.total}`);
         }
       }
 
-      // admin status PED-XXXXXX confirmed|paid|delivered
+      // admin status PED-XXXXXX confirmed|paid|delivered  (FIX + telegram)
       const s = text.match(/^admin\s+status\s+(ped-[a-z0-9]+)\s+(confirmed|paid|delivered)$/i);
       if (s) {
         const orderId = s[1].toUpperCase();
         const status = s[2].toLowerCase();
 
         const row = getOrderByIdStmt.get(orderId);
-        if (!row) reply = `No encontré el pedido ${orderId}`;
-        else {
+        if (!row) {
+          reply = `No encontré el pedido ${orderId}`;
+        } else {
           if (status === "delivered") {
             setDeliveredStmt.run({ id: orderId, deliveredAt: new Date().toISOString() });
             reply = `✅ Marcado como ENTREGADO: ${orderId}`;
+            sendTelegram(`📦 Pedido ENTREGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
+          } else if (status === "paid") {
+            setPaidByAdminStmt.run({ id: orderId });
+            reply = `✅ Marcado como PAGADO: ${orderId}`;
+            sendTelegram(`💰 Pedido PAGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
+          } else if (status === "confirmed") {
+            setConfirmedByAdminStmt.run({ id: orderId });
+            reply = `✅ Marcado como CONFIRMADO: ${orderId}`;
+            sendTelegram(`🧾 Pedido CONFIRMADO (admin)\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
           } else {
+            // fallback (no debería entrar)
             setOrderStatusStmt.run({ orderStatus: status, id: orderId });
             reply = `✅ Status actualizado (${status}): ${orderId}`;
           }
@@ -739,4 +767,3 @@ app.post("/whatsapp", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000"));
-
