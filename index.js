@@ -76,6 +76,40 @@ async function sendTelegram(text) {
   }
 }
 
+// ====== Enviar WhatsApp saliente (notificar al cliente) ======
+const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "").trim();
+const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+const TWILIO_WHATSAPP_FROM = (process.env.TWILIO_WHATSAPP_FROM || "").trim(); // ej: "whatsapp:+14155238886"
+
+let twilioClient = null;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+  twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+}
+
+async function sendWhatsApp(to, body) {
+  if (!twilioClient || !TWILIO_WHATSAPP_FROM) {
+    console.log("WhatsApp notify: faltan env vars Twilio", {
+      hasSid: !!TWILIO_ACCOUNT_SID,
+      hasToken: !!TWILIO_AUTH_TOKEN,
+      hasFrom: !!TWILIO_WHATSAPP_FROM,
+      to,
+    });
+    return false;
+  }
+  try {
+    await twilioClient.messages.create({
+      from: TWILIO_WHATSAPP_FROM,
+      to,
+      body,
+    });
+    console.log("WhatsApp notify OK:", { to });
+    return true;
+  } catch (e) {
+    console.error("Twilio sendWhatsApp failed:", e?.message || e);
+    return false;
+  }
+}
+
 // ====== HELPERS ======
 function calcTotal(items) {
   let total = 0;
@@ -536,7 +570,7 @@ app.post("/whatsapp", (req, res) => {
         }
       }
 
-      // admin status PED-XXXXXX confirmed|paid|delivered  (FIX + telegram)
+      // admin status PED-XXXXXX confirmed|paid|delivered  (FIX + telegram + notify customer)
       const s = text.match(/^admin\s+status\s+(ped-[a-z0-9]+)\s+(confirmed|paid|delivered)$/i);
       if (s) {
         const orderId = s[1].toUpperCase();
@@ -550,10 +584,16 @@ app.post("/whatsapp", (req, res) => {
             setDeliveredStmt.run({ id: orderId, deliveredAt: new Date().toISOString() });
             reply = `✅ Marcado como ENTREGADO: ${orderId}`;
             sendTelegram(`📦 Pedido ENTREGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
+
+            // Notificar cliente por WhatsApp (saliente)
+            sendWhatsApp(row.fromNumber, `📦 ¡Listo! Tu pedido ${orderId} fue marcado como ENTREGADO. Gracias 🙌`);
           } else if (status === "paid") {
             setPaidByAdminStmt.run({ id: orderId });
             reply = `✅ Marcado como PAGADO: ${orderId}`;
             sendTelegram(`💰 Pedido PAGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
+
+            // Notificar cliente por WhatsApp (saliente)
+            sendWhatsApp(row.fromNumber, `✅ Pago registrado para tu pedido ${orderId}. En breve coordinamos la entrega.`);
           } else if (status === "confirmed") {
             setConfirmedByAdminStmt.run({ id: orderId });
             reply = `✅ Marcado como CONFIRMADO: ${orderId}`;
