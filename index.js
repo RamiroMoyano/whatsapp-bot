@@ -207,6 +207,9 @@ function isReserved(text) {
     "admin pedidos",
     "admin hoy",
     "admin telegram",
+    "admin pendientes",
+    "admin pagados",
+    "admin entregados",
   ].includes(text);
 }
 
@@ -262,14 +265,41 @@ function saveSession(session) {
 
 // ====== DB: orders ======
 const insertOrderStmt = db.prepare(`
-  INSERT INTO orders (id, createdAt, fromNumber, name, contact, notes, itemsJson, itemsDetailedJson, total, paymentStatus, paymentMethod)
-  VALUES (@id, @createdAt, @fromNumber, @name, @contact, @notes, @itemsJson, @itemsDetailedJson, @total, @paymentStatus, @paymentMethod)
+  INSERT INTO orders (
+    id, createdAt, fromNumber, name, contact, notes,
+    itemsJson, itemsDetailedJson, total,
+    paymentStatus, paymentMethod,
+    orderStatus, deliveredAt
+  )
+  VALUES (
+    @id, @createdAt, @fromNumber, @name, @contact, @notes,
+    @itemsJson, @itemsDetailedJson, @total,
+    @paymentStatus, @paymentMethod,
+    @orderStatus, @deliveredAt
+  )
 `);
 
 const getOrderByIdStmt = db.prepare("SELECT * FROM orders WHERE id = ?");
 
 const setPaidStmt = db.prepare(`
-  UPDATE orders SET paymentStatus='paid', paymentMethod=@paymentMethod WHERE id=@id
+  UPDATE orders
+  SET paymentStatus='paid',
+      paymentMethod=@paymentMethod,
+      orderStatus='paid'
+  WHERE id=@id
+`);
+
+const setDeliveredStmt = db.prepare(`
+  UPDATE orders
+  SET orderStatus='delivered',
+      deliveredAt=@deliveredAt
+  WHERE id=@id
+`);
+
+const setOrderStatusStmt = db.prepare(`
+  UPDATE orders
+  SET orderStatus=@orderStatus
+  WHERE id=@id
 `);
 
 const setContactedStmt = db.prepare(`
@@ -290,6 +320,30 @@ const listTodayOrdersStmt = db.prepare(`
   FROM orders
   WHERE datetime(createdAt) >= datetime(@start) AND datetime(createdAt) <= datetime(@end)
   ORDER BY datetime(createdAt) DESC
+`);
+
+const listPendingOrdersStmt = db.prepare(`
+  SELECT id, createdAt, fromNumber, total, paymentStatus, orderStatus
+  FROM orders
+  WHERE paymentStatus='pending'
+  ORDER BY datetime(createdAt) DESC
+  LIMIT ?
+`);
+
+const listPaidNotDeliveredStmt = db.prepare(`
+  SELECT id, createdAt, fromNumber, total, paymentStatus, orderStatus
+  FROM orders
+  WHERE paymentStatus='paid' AND (orderStatus IS NULL OR orderStatus != 'delivered')
+  ORDER BY datetime(createdAt) DESC
+  LIMIT ?
+`);
+
+const listDeliveredOrdersStmt = db.prepare(`
+  SELECT id, createdAt, fromNumber, total, paymentStatus, orderStatus
+  FROM orders
+  WHERE orderStatus='delivered'
+  ORDER BY datetime(createdAt) DESC
+  LIMIT ?
 `);
 
 function loadLastOrderItems(session) {
@@ -360,6 +414,10 @@ app.post("/whatsapp", (req, res) => {
 • admin hoy
 • admin telegram
 • admin contacted PED-XXXXXX
+• admin pendientes
+• admin pagados
+• admin entregados
+• admin status PED-XXXXXX confirmed|paid|delivered
 • admin auto whatsapp:+54...`;
       }
 
@@ -371,6 +429,33 @@ app.post("/whatsapp", (req, res) => {
             (r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber} — ${r.createdAt}`
           );
           reply = `📦 Últimos pedidos:\n${lines.join("\n")}\n\nUsá: admin pedido PED-XXXXXX`;
+        }
+      }
+
+      if (text === "admin pendientes") {
+        const rows = listPendingOrdersStmt.all(10);
+        if (!rows.length) reply = "✅ No hay pendientes de pago.";
+        else {
+          const lines = rows.map((r) => `• ${r.id} — pending — USD $${r.total} — ${r.fromNumber}`);
+          reply = `⏳ Pendientes de pago:\n${lines.join("\n")}`;
+        }
+      }
+
+      if (text === "admin pagados") {
+        const rows = listPaidNotDeliveredStmt.all(10);
+        if (!rows.length) reply = "✅ No hay pagados pendientes de entrega.";
+        else {
+          const lines = rows.map((r) => `• ${r.id} — paid — USD $${r.total} — ${r.fromNumber}`);
+          reply = `💰 Pagados (sin entregar):\n${lines.join("\n")}`;
+        }
+      }
+
+      if (text === "admin entregados") {
+        const rows = listDeliveredOrdersStmt.all(10);
+        if (!rows.length) reply = "📭 No hay entregados todavía.";
+        else {
+          const lines = rows.map((r) => `• ${r.id} — delivered — USD $${r.total} — ${r.fromNumber}`);
+          reply = `📦 Entregados:\n${lines.join("\n")}`;
         }
       }
 
@@ -389,7 +474,9 @@ app.post("/whatsapp", (req, res) => {
             `Nombre: ${row.name || "—"}\n` +
             `Contacto: ${row.contact || "—"}\n` +
             `Notas: ${row.notes || "—"}\n` +
-            `Estado: ${row.paymentStatus}\n` +
+            `Estado pago: ${row.paymentStatus}\n` +
+            `Status: ${row.orderStatus || "confirmed"}\n` +
+            `Entregado: ${row.deliveredAt ? "✅ " + row.deliveredAt : "❌ no"}\n` +
             `Contactado: ${row.contactedAt ? "✅ " + row.contactedAt : "❌ no"}\n` +
             `Contactado por: ${row.contactedBy || "—"}\n` +
             `Total: USD $${row.total}\n\n` +
@@ -432,15 +519,34 @@ app.post("/whatsapp", (req, res) => {
         }
       }
 
+      // admin status PED-XXXXXX confirmed|paid|delivered
+      const s = text.match(/^admin\s+status\s+(ped-[a-z0-9]+)\s+(confirmed|paid|delivered)$/i);
+      if (s) {
+        const orderId = s[1].toUpperCase();
+        const status = s[2].toLowerCase();
+
+        const row = getOrderByIdStmt.get(orderId);
+        if (!row) reply = `No encontré el pedido ${orderId}`;
+        else {
+          if (status === "delivered") {
+            setDeliveredStmt.run({ id: orderId, deliveredAt: new Date().toISOString() });
+            reply = `✅ Marcado como ENTREGADO: ${orderId}`;
+          } else {
+            setOrderStatusStmt.run({ orderStatus: status, id: orderId });
+            reply = `✅ Status actualizado (${status}): ${orderId}`;
+          }
+        }
+      }
+
       // admin auto whatsapp:+549...
       const a = text.match(/^admin\s+auto\s+(whatsapp:\+\d+)$/i);
       if (a) {
         const target = a[1];
-        const s = getSession(target);
-        s.state = "MENU";
-        s.data = s.data || {};
-        s.data.humanNotified = false;
-        saveSession(s);
+        const s2 = getSession(target);
+        s2.state = "MENU";
+        s2.data = s2.data || {};
+        s2.data.humanNotified = false;
+        saveSession(s2);
         reply = `✅ Volví a modo automático a: ${target}`;
       }
     }
@@ -544,6 +650,8 @@ app.post("/whatsapp", (req, res) => {
         total,
         paymentStatus: "pending",
         paymentMethod: "",
+        orderStatus: "confirmed",
+        deliveredAt: null,
       });
 
       const adminMsg =
@@ -615,6 +723,8 @@ app.post("/whatsapp", (req, res) => {
       total,
       paymentStatus: "pending",
       paymentMethod: "",
+      orderStatus: "confirmed",
+      deliveredAt: null,
     });
 
     session.lastOrderId = orderId;

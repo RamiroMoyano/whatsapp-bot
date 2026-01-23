@@ -37,3 +37,5 @@ CREATE TABLE IF NOT EXISTS sessions (
 // Migraciones (NO rompen si ya existe)
 try { db.exec("ALTER TABLE orders ADD COLUMN contactedAt TEXT"); } catch {}
 try { db.exec("ALTER TABLE orders ADD COLUMN contactedBy TEXT"); } catch {}
+try { db.exec("ALTER TABLE orders ADD COLUMN orderStatus TEXT"); } catch {}
+try { db.exec("ALTER TABLE orders ADD COLUMN deliveredAt TEXT"); } catch {}
