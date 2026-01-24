@@ -2,29 +2,99 @@ import express from "express";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import { db } from "./db.js";
+import OpenAI from "openai";
 
 dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
+/**
+ * =========================
+ * ENV VARS (Render -> Environment)
+ * =========================
+ * OPENAI_API_KEY=...
+ * ADMIN_NUMBER=whatsapp:+549...
+ *
+ * (Twilio notify opcional)
+ * TWILIO_ACCOUNT_SID=...
+ * TWILIO_AUTH_TOKEN=...
+ * TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+ *
+ * (Telegram opcional)
+ * TELEGRAM_BOT_TOKEN=...
+ * TELEGRAM_CHAT_ID=...
+ *
+ * (Transfer opcional)
+ * TRANSFER_ALIAS=ramamj.macro
+ * TRANSFER_TITULAR=...
+ * TRANSFER_BANCO=...
+ *
+ * (MercadoPago links por producto)
+ * MP_LINK_1=...
+ * MP_LINK_2=...
+ * MP_LINK_3=...
+ * MP_LINK_4=...
+ * MP_LINK_5=...
+ * MP_LINK_6=...
+ */
+
+// ====== OPENAI ======
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+console.log("OpenAI configured:", { hasKey: !!OPENAI_API_KEY });
+
+const BABYSTEPSBOTS_INSTRUCTIONS = `
+Sos el asistente comercial de Babystepsbots para WhatsApp e Instagram.
+Hablás en vos (Argentina), claro y directo, mensajes cortos.
+Objetivo: resolver dudas y cerrar ventas.
+
+CATÁLOGO (precios fijos):
+1) Bot base para WhatsApp — USD $100
+2) Bot base para Instagram — USD $100
+3) Bot unificado base (WhatsApp + Instagram) — USD $175
+4) Combo base con dashboard — USD $250
+5) Bot WhatsApp con IA — USD $200
+6) Bot Instagram con IA — USD $200
+
+INCLUYE:
+- Base: menú, opciones, respuestas prearmadas, derivación
+- IA: respuestas flexibles + toma de datos + califica leads
+- Dashboard: métricas / panel / pedidos / etc.
+
+ENTREGA: a coordinar con el cliente.
+PAGOS: link MercadoPago (preferido), transferencia alias ramamj.macro, contraentrega (Tucumán capital, Yerba Buena, Tafí Viejo, Banda del Río Salí).
+
+Reglas:
+- No inventes cosas. Si falta info, preguntá.
+- Ofrecé 2–3 opciones relevantes.
+- Si el cliente elige, cerrá con pago + datos mínimos.
+- Si hay enojo/reclamo o caso raro, derivá a humano.
+`;
+
 // ====== CONFIG ======
 const CATALOG = [
-  { id: 1, name: "Bot para WhatsApp", price: 100 },
-  { id: 2, name: "Bot para Instagram", price: 80 },
-  { id: 3, name: "Bot combinado (WhatsApp + Instagram)", price: 160 },
+  { id: 1, name: "Bot base para WhatsApp", price: 100 },
+  { id: 2, name: "Bot base para Instagram", price: 100 },
+  { id: 3, name: "Bot unificado base (WhatsApp + Instagram)", price: 175 },
+  { id: 4, name: "Combo base con dashboard", price: 250 },
+  { id: 5, name: "Bot WhatsApp con IA", price: 200 },
+  { id: 6, name: "Bot Instagram con IA", price: 200 },
 ];
 
 const PAYMENT = {
   transfer: {
-    alias: process.env.TRANSFER_ALIAS || "",
+    alias: (process.env.TRANSFER_ALIAS || "ramamj.macro").trim(),
     titular: process.env.TRANSFER_TITULAR || "",
     banco: process.env.TRANSFER_BANCO || "",
   },
   mpLinks: {
-    1: process.env.MP_LINK_WHATSAPP || "",
-    2: process.env.MP_LINK_INSTAGRAM || "",
-    3: process.env.MP_LINK_COMBINADO || "",
+    1: process.env.MP_LINK_1 || "",
+    2: process.env.MP_LINK_2 || "",
+    3: process.env.MP_LINK_3 || "",
+    4: process.env.MP_LINK_4 || "",
+    5: process.env.MP_LINK_5 || "",
+    6: process.env.MP_LINK_6 || "",
   },
 };
 
@@ -143,7 +213,7 @@ function waLink(fromNumber) {
 }
 
 function menuText() {
-  return `👋 Hola! Soy tu asistente de compras.
+  return `👋 Hola! Soy tu asistente de Babystepsbots.
 
 Escribí:
 • catalogo
@@ -156,10 +226,13 @@ Escribí:
 }
 
 function catalogText() {
-  return `🛒 Catálogo:
-1) Bot para WhatsApp USD $100
-2) Bot para Instagram USD $80
-3) Bot combinado USD $160
+  return `🛒 Catálogo Babystepsbots:
+1) Bot base para WhatsApp — USD $100
+2) Bot base para Instagram — USD $100
+3) Bot unificado base (WhatsApp + Instagram) — USD $175
+4) Combo base con dashboard — USD $250
+5) Bot WhatsApp con IA — USD $200
+6) Bot Instagram con IA — USD $200
 
 Para agregar: agregar 1`;
 }
@@ -236,8 +309,10 @@ function isReserved(text) {
     "humano",
     "asesor",
     "hablar con humano",
+    // admin + variantes (para que NO entren a IA)
     "admin",
     "admin ayuda",
+    "admin whoami",
     "admin pedidos",
     "admin hoy",
     "admin telegram",
@@ -249,6 +324,43 @@ function isReserved(text) {
 
 function isHumanTrigger(text) {
   return text === "humano" || text === "asesor" || text === "hablar con humano";
+}
+
+// ====== IA (híbrido) ======
+async function aiReply({ session, from, userText }) {
+  if (!openai) {
+    return "⚠️ La IA no está configurada (falta OPENAI_API_KEY). Por ahora usá: menu / catalogo / ayuda.";
+  }
+
+  const context = {
+    lastOrderId: session.lastOrderId || null,
+    aiEnabled: !!session.data?.aiEnabled,
+    state: session.state,
+  };
+
+  try {
+    const resp = await openai.responses.create({
+      model: "gpt-5",
+      reasoning: { effort: "low" },
+      instructions: BABYSTEPSBOTS_INSTRUCTIONS,
+      input: [
+        {
+          role: "user",
+          content:
+            `Cliente: ${from}\n` +
+            `Contexto: ${JSON.stringify(context)}\n` +
+            `Mensaje del cliente: ${userText}\n\n` +
+            `Respondé como Babystepsbots y cerrá con una pregunta.`,
+        },
+      ],
+    });
+
+    const text = (resp.output_text || "").trim();
+    return text || "Dale, ¿me contás si lo querés para WhatsApp, Instagram o ambos?";
+  } catch (e) {
+    console.error("AI error:", e?.message || e);
+    return "⚠️ Tuve un problema con la IA. Probá de nuevo o escribí: menu";
+  }
 }
 
 // ====== DB: sessions ======
@@ -270,18 +382,29 @@ function getSession(fromNumber) {
       fromNumber,
       state: "MENU",
       cart: [],
-      data: { name: "", contact: "", notes: "", humanNotified: false },
+      data: { name: "", contact: "", notes: "", humanNotified: false, aiEnabled: false },
       lastOrderId: null,
       lastOrderItems: [],
     };
   }
+
   const data = JSON.parse(row.dataJson || "{}");
   const cart = JSON.parse(row.cartJson || "[]");
+
+  // defaults safe
+  const safeData = {
+    name: data?.name || "",
+    contact: data?.contact || "",
+    notes: data?.notes || "",
+    humanNotified: !!data?.humanNotified,
+    aiEnabled: !!data?.aiEnabled,
+  };
+
   return {
     fromNumber,
     state: row.state,
     cart,
-    data,
+    data: safeData,
     lastOrderId: row.lastOrderId || null,
     lastOrderItems: [],
   };
@@ -314,14 +437,6 @@ const insertOrderStmt = db.prepare(`
 `);
 
 const getOrderByIdStmt = db.prepare("SELECT * FROM orders WHERE id = ?");
-
-const setPaidStmt = db.prepare(`
-  UPDATE orders
-  SET paymentStatus='paid',
-      paymentMethod=@paymentMethod,
-      orderStatus='paid'
-  WHERE id=@id
-`);
 
 const setPaidByAdminStmt = db.prepare(`
   UPDATE orders
@@ -358,7 +473,7 @@ const setContactedStmt = db.prepare(`
   WHERE id=@id
 `);
 
-// ✅ NUEVO: cliente reporta pago (pero NO confirma)
+// cliente reporta pago (pero NO confirma)
 const setPaymentReportedStmt = db.prepare(`
   UPDATE orders
   SET orderStatus='payment_reported',
@@ -416,7 +531,7 @@ app.get("/", (req, res) => res.send("OK - server running"));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // ====== WEBHOOK ======
-app.post("/whatsapp", (req, res) => {
+app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";
   const body = (req.body.Body || "").trim();
   const text = body.toLowerCase();
@@ -425,7 +540,6 @@ app.post("/whatsapp", (req, res) => {
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
   // ===== HANDOFF A HUMANO =====
-  // Permite admin aun si está HUMAN
   if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !text.startsWith("admin")) {
     if (!session.data?.humanNotified) {
       session.data = session.data || {};
@@ -465,8 +579,47 @@ app.post("/whatsapp", (req, res) => {
     if (!isAdmin(from)) {
       reply = "⛔ Comando restringido.";
     } else {
+      // admin whoami (para setear ADMIN_NUMBER correcto)
+      if (text === "admin whoami") {
+        reply = `ADMIN From detectado: ${from}`;
+      }
+
+      // ✅ Admin IA flexible:
+      // admin ia on whatsapp:+549...
+      // admin ia on +549...
+      // admin ia status whatsapp:+549...
+      // admin ia off +549...
+      const ia = text.match(/^admin\s+ia\s+(on|off|status)\s+(.+)$/i);
+      if (ia) {
+        const action = ia[1].toLowerCase();
+        let target = (ia[2] || "").trim();
+
+        // normaliza target a "whatsapp:+..."
+        if (!target.startsWith("whatsapp:")) {
+          if (target.startsWith("+")) target = `whatsapp:${target}`;
+          else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+        }
+
+        const targetSession = getSession(target);
+        targetSession.data = targetSession.data || {};
+        const current = !!targetSession.data.aiEnabled;
+
+        if (action === "status") {
+          reply = `🤖 IA para ${target}: ${current ? "ON ✅" : "OFF ⛔"}`;
+        } else if (action === "on") {
+          targetSession.data.aiEnabled = true;
+          saveSession(targetSession);
+          reply = `✅ IA activada para ${target}`;
+        } else if (action === "off") {
+          targetSession.data.aiEnabled = false;
+          saveSession(targetSession);
+          reply = `✅ IA desactivada para ${target}`;
+        }
+      }
+
       if (text === "admin" || text === "admin ayuda") {
         reply = `🛠 Admin:
+• admin whoami
 • admin pedidos
 • admin pedido PED-XXXXXX
 • admin hoy
@@ -476,7 +629,10 @@ app.post("/whatsapp", (req, res) => {
 • admin pagados
 • admin entregados
 • admin status PED-XXXXXX confirmed|paid|delivered
-• admin auto whatsapp:+54...`;
+• admin auto whatsapp:+54...
+• admin ia on whatsapp:+54...
+• admin ia off whatsapp:+54...
+• admin ia status whatsapp:+54...`;
       }
 
       if (text === "admin pedidos") {
@@ -578,7 +734,7 @@ app.post("/whatsapp", (req, res) => {
         }
       }
 
-      // admin status PED-XXXXXX confirmed|paid|delivered (telegram + notify customer)
+      // admin status PED-XXXXXX confirmed|paid|delivered
       const s = text.match(/^admin\s+status\s+(ped-[a-z0-9]+)\s+(confirmed|paid|delivered)$/i);
       if (s) {
         const orderId = s[1].toUpperCase();
@@ -592,13 +748,11 @@ app.post("/whatsapp", (req, res) => {
             setDeliveredStmt.run({ id: orderId, deliveredAt: new Date().toISOString() });
             reply = `✅ Marcado como ENTREGADO: ${orderId}`;
             sendTelegram(`📦 Pedido ENTREGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
-
             sendWhatsApp(row.fromNumber, `📦 ¡Listo! Tu pedido ${orderId} fue marcado como ENTREGADO. Gracias 🙌`);
           } else if (status === "paid") {
             setPaidByAdminStmt.run({ id: orderId });
             reply = `✅ Marcado como PAGADO: ${orderId}`;
             sendTelegram(`💰 Pedido PAGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
-
             sendWhatsApp(row.fromNumber, `✅ Pago verificado para tu pedido ${orderId}. En breve coordinamos la entrega.`);
           } else if (status === "confirmed") {
             setConfirmedByAdminStmt.run({ id: orderId });
@@ -631,6 +785,17 @@ app.post("/whatsapp", (req, res) => {
     return;
   }
 
+  // ✅ MODO HÍBRIDO IA (solo cuando está en MENU y no es comando)
+  if (session.data?.aiEnabled && session.state === "MENU" && !isReserved(text)) {
+    reply = await aiReply({ session, from, userText: body });
+    saveSession(session);
+
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    res.type("text/xml").send(twiml.toString());
+    return;
+  }
+
   // Menu / Hola
   if (text === "hola" || text === "menu") {
     session.state = "MENU";
@@ -643,7 +808,7 @@ app.post("/whatsapp", (req, res) => {
   if (text === "cancelar") {
     session.state = "MENU";
     session.cart = [];
-    session.data = { name: "", contact: "", notes: "", humanNotified: false };
+    session.data = { name: "", contact: "", notes: "", humanNotified: false, aiEnabled: !!session.data?.aiEnabled };
     session.lastOrderId = null;
     reply = "🧹 Listo, reinicié todo.\n\n" + menuText();
   }
@@ -658,10 +823,19 @@ app.post("/whatsapp", (req, res) => {
   if (addMatch) {
     const id = Number(addMatch[1]);
     const p = CATALOG.find((x) => x.id === id);
-    if (!p) reply = "Ese producto no existe. Escribí catalogo y elegí 1, 2 o 3.";
+    if (!p) reply = "Ese producto no existe. Escribí catalogo y elegí 1, 2, 3, 4, 5 o 6.";
     else {
       session.cart.push(id);
-      reply = `✅ Agregado: ${p.name}\n\n${cartText(session)}\n\nPara finalizar: checkout`;
+
+      // ✅ Si agregan un producto IA (5 o 6), sugerimos activar IA luego (venta)
+      if (id === 5 || id === 6) {
+        reply =
+          `✅ Agregado: ${p.name}\n\n${cartText(session)}\n\n` +
+          `Tip: este plan es “con IA”. Cuando confirmes, te lo dejo activo.\n` +
+          `Para finalizar: checkout`;
+      } else {
+        reply = `✅ Agregado: ${p.name}\n\n${cartText(session)}\n\nPara finalizar: checkout`;
+      }
     }
   }
 
@@ -727,6 +901,11 @@ app.post("/whatsapp", (req, res) => {
         deliveredAt: null,
       });
 
+      // ✅ Auto-activar IA si el pedido incluye productos IA (5 o 6)
+      const hasIA = items.includes(5) || items.includes(6);
+      session.data = session.data || {};
+      if (hasIA) session.data.aiEnabled = true;
+
       const adminMsg =
         `🛎️ Nuevo pedido ${orderId}\n` +
         `Total: USD $${total}\n` +
@@ -735,6 +914,7 @@ app.post("/whatsapp", (req, res) => {
         `Nombre: ${session.data.name || "—"}\n` +
         `Contacto: ${session.data.contact || "—"}\n` +
         `Notas: ${session.data.notes || "—"}\n` +
+        `Plan IA: ${hasIA ? "SI ✅ (aiEnabled=true)" : "NO"}\n` +
         `Items:\n` +
         itemsDetailed.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
 
@@ -743,7 +923,8 @@ app.post("/whatsapp", (req, res) => {
       session.lastOrderId = orderId;
       session.state = "MENU";
       session.cart = [];
-      session.data = { name: "", contact: "", notes: "", humanNotified: false };
+      // preservo aiEnabled ya seteado arriba si corresponde
+      session.data = { name: "", contact: "", notes: "", humanNotified: false, aiEnabled: !!session.data?.aiEnabled };
 
       reply = `🎉 Pedido confirmado: *${orderId}*\n\nPara pagar escribí: pago`;
     }
@@ -768,12 +949,11 @@ app.post("/whatsapp", (req, res) => {
     }
   }
 
-  // ====== MEJORA A: "pagado" NO confirma pago; solo reporta + avisa ======
+  // "pagado" reporta pago (sin confirmar)
   if (text === "pagado") {
     if (!session.lastOrderId) {
       reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
     } else {
-      // No tocamos paymentStatus. Solo marcamos reporte.
       setPaymentReportedStmt.run({ id: session.lastOrderId });
 
       const row = getOrderByIdStmt.get(session.lastOrderId);
