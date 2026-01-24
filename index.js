@@ -358,6 +358,14 @@ const setContactedStmt = db.prepare(`
   WHERE id=@id
 `);
 
+// ✅ NUEVO: cliente reporta pago (pero NO confirma)
+const setPaymentReportedStmt = db.prepare(`
+  UPDATE orders
+  SET orderStatus='payment_reported',
+      paymentMethod='reported'
+  WHERE id=@id
+`);
+
 const listLastOrdersStmt = db.prepare(`
   SELECT id, createdAt, fromNumber, total, paymentStatus
   FROM orders
@@ -585,21 +593,18 @@ app.post("/whatsapp", (req, res) => {
             reply = `✅ Marcado como ENTREGADO: ${orderId}`;
             sendTelegram(`📦 Pedido ENTREGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
 
-            // Notificar cliente por WhatsApp (saliente)
             sendWhatsApp(row.fromNumber, `📦 ¡Listo! Tu pedido ${orderId} fue marcado como ENTREGADO. Gracias 🙌`);
           } else if (status === "paid") {
             setPaidByAdminStmt.run({ id: orderId });
             reply = `✅ Marcado como PAGADO: ${orderId}`;
             sendTelegram(`💰 Pedido PAGADO\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
 
-            // Notificar cliente por WhatsApp (saliente)
-            sendWhatsApp(row.fromNumber, `✅ Pago registrado para tu pedido ${orderId}. En breve coordinamos la entrega.`);
+            sendWhatsApp(row.fromNumber, `✅ Pago verificado para tu pedido ${orderId}. En breve coordinamos la entrega.`);
           } else if (status === "confirmed") {
             setConfirmedByAdminStmt.run({ id: orderId });
             reply = `✅ Marcado como CONFIRMADO: ${orderId}`;
             sendTelegram(`🧾 Pedido CONFIRMADO (admin)\n${orderId}\nTotal: USD $${row.total}\nCliente: ${row.fromNumber}`);
           } else {
-            // fallback (no debería entrar)
             setOrderStatusStmt.run({ orderStatus: status, id: orderId });
             reply = `✅ Status actualizado (${status}): ${orderId}`;
           }
@@ -763,19 +768,23 @@ app.post("/whatsapp", (req, res) => {
     }
   }
 
-  // ====== MEJORA: Telegram cuando el cliente dice "pagado" ======
+  // ====== MEJORA A: "pagado" NO confirma pago; solo reporta + avisa ======
   if (text === "pagado") {
     if (!session.lastOrderId) {
       reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
     } else {
-      setPaidStmt.run({ id: session.lastOrderId, paymentMethod: "manual" });
+      // No tocamos paymentStatus. Solo marcamos reporte.
+      setPaymentReportedStmt.run({ id: session.lastOrderId });
 
       const row = getOrderByIdStmt.get(session.lastOrderId);
       sendTelegram(
-        `🧾 Cliente dijo "PAGADO"\nPedido: ${session.lastOrderId}\nCliente: ${from}\nTotal: USD $${row?.total ?? "?"}\nContactar: ${waLink(from)}`
+        `🧾 Cliente REPORTÓ PAGO (sin verificar)\nPedido: ${session.lastOrderId}\nCliente: ${from}\nTotal: USD $${row?.total ?? "?"}\nContactar: ${waLink(from)}`
       );
 
-      reply = `Genial ✅ Registré que pagaste el pedido *${session.lastOrderId}*.\nEn breve te contacto para la entrega.`;
+      reply =
+        `✅ Recibido. Tomé tu aviso de pago del pedido *${session.lastOrderId}*.\n` +
+        `Ahora verificamos el pago y te confirmamos.\n\n` +
+        `Si querés, mandá el comprobante por acá.`;
     }
   }
 
