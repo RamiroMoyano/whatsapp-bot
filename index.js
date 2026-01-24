@@ -570,7 +570,7 @@ app.post("/whatsapp", (req, res) => {
         }
       }
 
-      // admin status PED-XXXXXX confirmed|paid|delivered  (FIX + telegram + notify customer)
+      // admin status PED-XXXXXX confirmed|paid|delivered (telegram + notify customer)
       const s = text.match(/^admin\s+status\s+(ped-[a-z0-9]+)\s+(confirmed|paid|delivered)$/i);
       if (s) {
         const orderId = s[1].toUpperCase();
@@ -763,11 +763,19 @@ app.post("/whatsapp", (req, res) => {
     }
   }
 
+  // ====== MEJORA: Telegram cuando el cliente dice "pagado" ======
   if (text === "pagado") {
-    if (!session.lastOrderId) reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
-    else {
+    if (!session.lastOrderId) {
+      reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
+    } else {
       setPaidStmt.run({ id: session.lastOrderId, paymentMethod: "manual" });
-      reply = `Genial ✅ Ya registré el pago del pedido *${session.lastOrderId}*. En breve te contacto para la entrega.`;
+
+      const row = getOrderByIdStmt.get(session.lastOrderId);
+      sendTelegram(
+        `🧾 Cliente dijo "PAGADO"\nPedido: ${session.lastOrderId}\nCliente: ${from}\nTotal: USD $${row?.total ?? "?"}\nContactar: ${waLink(from)}`
+      );
+
+      reply = `Genial ✅ Registré que pagaste el pedido *${session.lastOrderId}*.\nEn breve te contacto para la entrega.`;
     }
   }
 
