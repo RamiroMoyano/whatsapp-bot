@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS ai_messages (
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_from ON ai_messages(fromNumber);
 CREATE INDEX IF NOT EXISTS idx_ai_messages_createdAt ON ai_messages(createdAt);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `);
 
 
