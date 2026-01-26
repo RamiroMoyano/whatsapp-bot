@@ -316,6 +316,25 @@ const upsertSessionStmt = db.prepare(`
     lastOrderId=excluded.lastOrderId
 `);
 
+// ====== DB: settings (último cliente) ======
+const setSettingStmt = db.prepare(`
+  INSERT INTO settings (key, value)
+  VALUES (@key, @value)
+  ON CONFLICT(key) DO UPDATE SET value=excluded.value
+`);
+
+const getSettingStmt = db.prepare(`
+  SELECT value FROM settings WHERE key = ?
+`);
+
+function setSetting(key, value) {
+  setSettingStmt.run({ key, value: String(value ?? "") });
+}
+function getSetting(key) {
+  const row = getSettingStmt.get(key);
+  return row?.value || "";
+}
+
 function getSession(fromNumber) {
   const row = getSessionStmt.get(fromNumber);
   if (!row) {
@@ -335,6 +354,8 @@ function getSession(fromNumber) {
       },
       lastOrderId: null,
       lastOrderItems: [],
+aiCountDate: "",
+aiCount: 0,
     };
   }
 
@@ -353,6 +374,8 @@ function getSession(fromNumber) {
       aiMode: (data?.aiMode || "off").toLowerCase(),          // off|lite|pro
       requestedAiMode: (data?.requestedAiMode || "off").toLowerCase(),
       lastAiAt: Number(data?.lastAiAt || 0),
+aiCountDate: data?.aiCountDate || "",
+aiCount: Number(data?.aiCount || 0),
     },
     lastOrderId: row.lastOrderId || null,
     lastOrderItems: [],
@@ -514,6 +537,20 @@ async function aiReply({ session, from, userText }) {
   const mode = (session.data?.aiMode || "off").toLowerCase();
   if (mode !== "lite" && mode !== "pro") return "⚠️ IA apagada para este chat. Escribí: humano";
 
+// ===== Cupo diario por usuario =====
+const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+if (session.data.aiCountDate !== today) {
+  session.data.aiCountDate = today;
+  session.data.aiCount = 0;
+}
+
+const dailyLimit = mode === "pro" ? 120 : 40; // ajustable
+if (session.data.aiCount >= dailyLimit) {
+  saveSession(session);
+  return `Hoy ya se alcanzó el cupo de IA (${dailyLimit}) para este chat. Si querés, pedí un asesor escribiendo: humano`;
+}
+
   // Anti spam: 1 llamada cada 6s por usuario
   const now = Date.now();
   if (now - (session.data?.lastAiAt || 0) < 6000) {
@@ -537,6 +574,10 @@ async function aiReply({ session, from, userText }) {
 
     const answer = (resp.output_text || "").trim() || "Dale, ¿lo querés para WhatsApp, Instagram o ambos?";
     saveAiMessage(from, "assistant", answer);
+
+session.data.aiCount = (session.data.aiCount || 0) + 1;
+saveSession(session);
+
     return answer;
   } catch (e) {
     const status = e?.status || e?.response?.status;
@@ -562,6 +603,11 @@ app.post("/whatsapp", async (req, res) => {
 
   const session = getSession(from);
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
+
+// Guardar último cliente que escribió (para que admin pueda usar "sin número")
+if (from !== ADMIN_NUMBER) {
+  setSetting("last_customer", from);
+}
 
   // ===== HANDOFF A HUMANO =====
   if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !text.startsWith("admin")) {
@@ -619,25 +665,39 @@ app.post("/whatsapp", async (req, res) => {
      * También acepta:
      * admin ai set pro +549...
      */
-    const aiSet = cmd.match(/^admin ai set (off|lite|pro) (.+)$/i);
-    if (aiSet) {
-      const mode = aiSet[1].toLowerCase();
-      let target = (aiSet[2] || "").trim();
 
-      if (!target.startsWith("whatsapp:")) {
-        if (target.startsWith("+")) target = `whatsapp:${target}`;
-        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
-      }
+    // admin ai set off|lite|pro [whatsapp:+54...]
+// si no pasás número, usa el último cliente que escribió
+const aiSet = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
+if (aiSet) {
+  const mode = aiSet[1].toLowerCase();
+  let target = (aiSet[2] || "").trim();
 
-      const s2 = getSession(target);
-      s2.data.aiMode = mode;
-      saveSession(s2);
+  if (!target) target = getSetting("last_customer");
 
-      reply = `🤖 IA para ${target}: ${mode.toUpperCase()} ✅`;
-      const twiml = new twilio.twiml.MessagingResponse();
-      twiml.message(reply);
-      return res.type("text/xml").send(twiml.toString());
-    }
+  if (!target) {
+    reply = "No tengo un 'último cliente' todavía. Pedile a un cliente que mande un mensaje primero.";
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+    return res.type("text/xml").send(twiml.toString());
+  }
+
+  // normalizar target a whatsapp:+...
+  if (!target.startsWith("whatsapp:")) {
+    if (target.startsWith("+")) target = `whatsapp:${target}`;
+    else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+  }
+
+  const s2 = getSession(target);
+  s2.data.aiMode = mode;
+  saveSession(s2);
+
+  reply = `🤖 IA para ${target}: ${mode.toUpperCase()} ✅`;
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+  return res.type("text/xml").send(twiml.toString());
+}
+
 
     const aiStatus = cmd.match(/^admin ai status (.+)$/i);
     if (aiStatus) {
