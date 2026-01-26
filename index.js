@@ -9,6 +9,21 @@ dotenv.config();
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
+// ===== MIGRATIONS (asegura tablas nuevas) =====
+db.exec(`
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fromNumber TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_from ON ai_messages(fromNumber);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_createdAt ON ai_messages(createdAt);
+`);
+
+
 // ====== OPENAI ======
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
