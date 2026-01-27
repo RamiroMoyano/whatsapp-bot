@@ -687,6 +687,38 @@ app.post("/whatsapp", async (req, res) => {
       return res.type("text/xml").send(twiml.toString());
     }
 
+// admin company set <companyId>
+const companySet = cmd.match(/^admin company set ([a-z0-9_-]+)$/i);
+if (companySet) {
+  const companyId = companySet[1].toLowerCase();
+
+  // validar que exista
+  const row = db.prepare("SELECT id, name FROM companies WHERE id = ?").get(companyId);
+  if (!row) {
+    reply = `No existe la empresa '${companyId}'.`;
+  } else {
+    session.data.companyId = companyId;
+    saveSession(session);
+    reply = `🏢 Empresa activa para este chat: ${row.id} (${row.name}) ✅`;
+  }
+
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+  return res.type("text/xml").send(twiml.toString());
+}
+
+// admin company list
+if (cmd === "admin company list") {
+  const rows = db.prepare("SELECT id, name FROM companies ORDER BY id").all();
+  reply = rows.length
+    ? "📋 Empresas:\n" + rows.map(r => `• ${r.id} — ${r.name}`).join("\n")
+    : "No hay empresas cargadas.";
+
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+  return res.type("text/xml").send(twiml.toString());
+}
+
     // admin ai set off|lite|pro [whatsapp:+...]
     const aiSet = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
     if (aiSet) {
