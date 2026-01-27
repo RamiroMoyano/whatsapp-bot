@@ -6,6 +6,10 @@ import { db } from "./db.js";
 
 dotenv.config();
 
+console.log("BOOT VERSION:", "2026-01-27-INDEX-V4");
+console.log("BOOT FILE:", import.meta.url);
+console.log("PWD:", process.cwd());
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
@@ -68,7 +72,7 @@ INSERT OR IGNORE INTO companies VALUES
   'Sos el asistente comercial de Babystepsbots. Español Argentina, claro, directo, vendedor.',
   '[{"id":1,"name":"Bot WhatsApp","price":120},{"id":2,"name":"Bot Instagram","price":100},{"id":3,"name":"Bot Unificado","price":200}]',
   '{"tone":"comercial","allowHuman":true}',
-  datetime("now")
+  CURRENT_TIMESTAMP
 ),
 (
   'veterinaria_sm',
@@ -76,7 +80,7 @@ INSERT OR IGNORE INTO companies VALUES
   'Sos asistente de una veterinaria. Empático, calmado, priorizás urgencias.',
   '[{"id":1,"name":"Consulta","price":5000},{"id":2,"name":"Vacunación","price":8000}]',
   '{"tone":"empatico","emergencyKeywords":["urgente","accidente"]}',
-  datetime("now")
+  CURRENT_TIMESTAMP
 );
 `);
 
