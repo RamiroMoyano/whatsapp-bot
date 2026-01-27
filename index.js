@@ -535,49 +535,31 @@ async function aiReply({ session, from, userText }) {
   const mode = String(session.data?.aiMode || "off").toLowerCase();
   if (mode !== "lite" && mode !== "pro") return "⚠️ IA apagada para este chat. Escribí: humano";
 
-const company = getCompany(session.data.companyId);
+// ===== Cupo diario (primero) =====
+const today = new Date().toISOString().slice(0, 10);
+if (session.data.aiCountDate !== today) {
+  session.data.aiCountDate = today;
+  session.data.aiCount = 0;
+}
 
-const instructions = `
-${company.prompt}
+const AI_LIMIT_LITE = Number(process.env.AI_LIMIT_LITE || 40);
+const AI_LIMIT_PRO = Number(process.env.AI_LIMIT_PRO || 120);
+const dailyLimit = mode === "pro" ? AI_LIMIT_PRO : AI_LIMIT_LITE;
 
-CATÁLOGO:
-${company.catalog.map(p => `- ${p.name}: $${p.price}`).join("\n")}
-
-REGLAS:
-- Tono: ${company.rules.tone || "neutral"}
-- Nunca inventes precios
-- Si no sabés algo, preguntá
-`;
-
-instructions: instructions,
-
-
-  // ===== Cupo diario (PRIMERO) =====
-  const today = new Date().toISOString().slice(0, 10);
-  if (session.data.aiCountDate !== today) {
-    session.data.aiCountDate = today;
-    session.data.aiCount = 0;
-  }
-
-  const AI_LIMIT_LITE = Number(process.env.AI_LIMIT_LITE || 40);
-  const AI_LIMIT_PRO = Number(process.env.AI_LIMIT_PRO || 120);
-  const dailyLimit = mode === "pro" ? AI_LIMIT_PRO : AI_LIMIT_LITE;
-
-  if (Number(session.data.aiCount || 0) >= dailyLimit) {
-    saveSession(session);
-    return `Hoy ya se alcanzó el cupo de IA (${dailyLimit}) para este chat. Si querés, pedí un asesor escribiendo: humano`;
-  }
-
-  // Anti spam (1 cada 6s) — y CUENTA para el cupo si querés cortar “de verdad”
-  const now = Date.now();
-  if (now - Number(session.data?.lastAiAt || 0) < 6000) {
-    session.data.aiCount = Number(session.data.aiCount || 0) + 1; // ✅ cuenta anti-spam
-    saveSession(session);
-    return "Dale 🙂 mandame 1 mensaje más completo y te respondo bien: ¿lo querés para WhatsApp, Instagram o ambos?";
-  }
-
-  session.data.lastAiAt = now;
+if (Number(session.data.aiCount || 0) >= dailyLimit) {
   saveSession(session);
+  return `Hoy ya se alcanzó el cupo de IA (${dailyLimit}) para este chat. Si querés, pedí un asesor escribiendo: humano`;
+}
+
+// Anti spam (1 cada 6s) — CUENTA para el cupo
+const now = Date.now();
+if (now - Number(session.data?.lastAiAt || 0) < 6000) {
+  session.data.aiCount = Number(session.data.aiCount || 0) + 1;
+  saveSession(session);
+  return "Dale 🙂 mandame 1 mensaje más completo y te respondo bien: ¿lo querés para WhatsApp, Instagram o ambos?";
+}
+session.data.lastAiAt = now;
+saveSession(session);
 
   const historyLimit = mode === "pro" ? 14 : 4;
 
@@ -856,6 +838,14 @@ app.post("/whatsapp", async (req, res) => {
     twiml.message(reply);
     return res.type("text/xml").send(twiml.toString());
   }
+
+// admin company set <empresaId>
+const c = cmd.match(/^admin company set (.+)$/i);
+if (c) {
+  session.data.companyId = c[1];
+  saveSession(session);
+  reply = `🏢 Empresa activa: ${c[1]}`;
+}
 
   // ===== IA (solo MENU y no reservado) =====
   if ((session.data.aiMode === "lite" || session.data.aiMode === "pro") && session.state === "MENU" && !isReserved(text)) {
