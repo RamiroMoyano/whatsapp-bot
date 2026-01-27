@@ -26,6 +26,36 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS companies (
+  id TEXT PRIMARY KEY,
+  name TEXT,
+  prompt TEXT,
+  catalogJson TEXT,
+  rulesJson TEXT,
+  createdAt TEXT
+);
+`);
+
+db.exec(`
+INSERT OR IGNORE INTO companies (id, name, prompt, catalogJson, rulesJson, createdAt)
+VALUES
+(
+  'babystepsbots',
+  'Babystepsbots',
+  'Sos el asistente comercial de Babystepsbots. Hablás en español Argentina (vos). Claro, directo y orientado a cerrar ventas.',
+  '[{"id":1,"name":"Bot WhatsApp","price":120},{"id":2,"name":"Bot Instagram","price":100},{"id":3,"name":"Bot Unificado","price":200}]',
+  '{"maxMessagesPerDay":40,"allowHuman":true,"tone":"comercial"}',
+  datetime('now')
+),
+(
+  'veterinaria_sm',
+  'Veterinaria San Miguel',
+  'Sos el asistente de una veterinaria. Sos empático, cálido y tranquilizador. Priorizás urgencias, turnos y confianza.',
+  '[{"id":1,"name":"Consulta","price":5000},{"id":2,"name":"Vacunación","price":8000},{"id":3,"name":"Castración","price":0}]',
+  '{"maxMessagesPerDay":25,"allowHuman":true,"tone":"empatico","emergencyKeywords":["urgente","emergencia","accidente"]}',
+  datetime('now')
+);
 `);
 
 // ====== OPENAI ======
