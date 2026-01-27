@@ -1,15 +1,15 @@
 import express from "express";
 import twilio from "twilio";
 import dotenv from "dotenv";
-import { db } from "./db.js";
 import OpenAI from "openai";
+import { db } from "./db.js";
 
 dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
-// ===== MIGRATIONS (asegura tablas nuevas) =====
+// ====== MIGRATIONS (evita "no such table" en DB vieja) ======
 db.exec(`
 CREATE TABLE IF NOT EXISTS ai_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 `);
-
 
 // ====== OPENAI ======
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
@@ -58,12 +57,13 @@ const PAYMENT = {
   },
 };
 
+// ====== ADMIN ======
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || "").trim();
 function isAdmin(from) {
   return ADMIN_NUMBER && from === ADMIN_NUMBER;
 }
 
-// ====== PROMPT / ESTILO ======
+// ====== PROMPT ======
 const BABYSTEPSBOTS_INSTRUCTIONS = `
 IDENTIDAD
 Sos el asistente comercial de Babystepsbots (Tucumán, Argentina). Tu trabajo es ayudar a elegir el producto correcto y cerrar la compra.
@@ -71,7 +71,7 @@ Sos el asistente comercial de Babystepsbots (Tucumán, Argentina). Tu trabajo es
 ESTILO
 - Español Argentina (vos).
 - Mensajes cortos (máx 5 líneas).
-- Claro y directo, sin tecnicismos.
+- Claro y directo.
 - 0 a 2 emojis por mensaje.
 
 OBJETIVO
@@ -80,7 +80,7 @@ OBJETIVO
 3) Cerrar próximo paso (pago / datos / demo)
 4) Manejar objeciones (precio/tiempo/resultados)
 
-CATÁLOGO (precios fijos)
+CATÁLOGO
 1) Bot base para WhatsApp — USD $100
 2) Bot base para Instagram — USD $100
 3) Bot unificado base (WhatsApp + Instagram) — USD $175
@@ -96,28 +96,15 @@ Se coordina con el cliente.
 REGLAS DURAS
 - No inventes precios ni funcionalidades.
 - Si falta info, preguntá 1 cosa puntual.
-- Si hay enojo/reclamo o algo sensible: derivá a HUMANO (decí “humano”).
-- Siempre terminá con una pregunta o un siguiente paso.
+- Si hay enojo/reclamo: derivá a HUMANO.
+- Siempre terminá con una pregunta o siguiente paso.
 
-MANEJO DE OBJECIONES (estructura)
-1) Validar (1 línea)
-2) Valor concreto (1–2 líneas)
-3) Bajar riesgo (1 línea)
-4) Cerrar con pregunta (1 línea)
-No prometas resultados garantizados.
-
-PREGUNTAS CLAVE
-- ¿Lo querés para WhatsApp, Instagram o ambos?
-- ¿Objetivo: ventas, turnos, FAQs, soporte?
-- ¿Querés IA? (no / lite / pro)
-- Nombre y contacto.
-
-IA (qué significa)
+IA
 - Lite: responde flexible + objeciones + toma datos básicos.
-- Pro: además recuerda contexto de conversación y califica leads mejor.
+- Pro: además recuerda mejor el contexto y sigue el hilo.
 `;
 
-// ====== Telegram (opcional) ======
+// ====== TELEGRAM (opcional) ======
 const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 
@@ -210,11 +197,11 @@ Escribí:
 }
 
 function catalogText() {
-  return `🛒 Catálogo Babystepsbots:
+  return `🛒 Catálogo:
 1) Bot base para WhatsApp — USD $100
 2) Bot base para Instagram — USD $100
-3) Bot unificado base (WhatsApp + Instagram) — USD $175
-4) Combo base con dashboard — USD $250
+3) Bot unificado base — USD $175
+4) Combo con dashboard — USD $250
 
 Para agregar: agregar 1`;
 }
@@ -257,7 +244,7 @@ function paymentMpText(session) {
     const id = unique[0];
     const link = PAYMENT.mpLinks[id];
     if (link) return `✅ Link MercadoPago:\n${link}\n\nCuando pagues, mandá: pagado`;
-    return `Todavía no tengo cargado el link de MP para ese producto.\nCargalo en variables de entorno (Render) y redeploy.`;
+    return `No tengo cargado el link de MP para ese producto.\nCargalo en Render y redeploy.`;
   }
   return `Para múltiples ítems, por ahora te paso el link de MP manual.`;
 }
@@ -269,10 +256,9 @@ function paymentTransferText() {
 • Titular: ${titular || "—"}
 • Banco: ${banco || "—"}
 
-Cuando transfieras, mandá: pagado (y si querés el comprobante).`;
+Cuando transfieras, mandá: pagado (si querés con comprobante).`;
 }
 
-// Comandos reservados (no entran a IA)
 function isReserved(text) {
   return [
     "checkout",
@@ -292,21 +278,43 @@ function isReserved(text) {
     "humano",
     "asesor",
     "hablar con humano",
-    // admin
-    "admin",
-    "admin ayuda",
-    "admin whoami",
-    "admin pedidos",
-    "admin hoy",
-    "admin telegram",
-    "admin pendientes",
-    "admin pagados",
-    "admin entregados",
   ].includes(text);
 }
 
 function isHumanTrigger(text) {
   return text === "humano" || text === "asesor" || text === "hablar con humano";
+}
+
+// ====== DB: settings (último cliente) ======
+const setSettingStmt = db.prepare(`
+  INSERT INTO settings (key, value)
+  VALUES (@key, @value)
+  ON CONFLICT(key) DO UPDATE SET value=excluded.value
+`);
+const getSettingStmt = db.prepare(`SELECT value FROM settings WHERE key = ?`);
+
+function setSetting(key, value) {
+  setSettingStmt.run({ key, value: String(value ?? "") });
+}
+function getSetting(key) {
+  const row = getSettingStmt.get(key);
+  return row?.value || "";
+}
+const getCompanyStmt = db.prepare(`
+  SELECT * FROM companies WHERE id = ?
+`);
+
+function getCompany(companyId) {
+  const row = getCompanyStmt.get(companyId);
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    prompt: row.prompt,
+    catalog: JSON.parse(row.catalogJson || "[]"),
+    rules: JSON.parse(row.rulesJson || "{}"),
+  };
 }
 
 // ====== DB: sessions ======
@@ -321,67 +329,53 @@ const upsertSessionStmt = db.prepare(`
     lastOrderId=excluded.lastOrderId
 `);
 
-// ====== DB: settings (último cliente) ======
-const setSettingStmt = db.prepare(`
-  INSERT INTO settings (key, value)
-  VALUES (@key, @value)
-  ON CONFLICT(key) DO UPDATE SET value=excluded.value
-`);
-
-const getSettingStmt = db.prepare(`
-  SELECT value FROM settings WHERE key = ?
-`);
-
-function setSetting(key, value) {
-  setSettingStmt.run({ key, value: String(value ?? "") });
-}
-function getSetting(key) {
-  const row = getSettingStmt.get(key);
-  return row?.value || "";
-}
-
 function getSession(fromNumber) {
   const row = getSessionStmt.get(fromNumber);
+
+  // Defaults (IMPORTANTE: acá viven aiCount/aiCountDate)
+  const defaults = {
+    name: "",
+    contact: "",
+    notes: "",
+    humanNotified: false,
+
+companyId: "babystepsbots",
+
+    aiMode: "off",            // off|lite|pro
+    requestedAiMode: "off",
+    lastAiAt: 0,
+
+    aiCountDate: "",
+    aiCount: 0,
+  };
+
   if (!row) {
     return {
       fromNumber,
       state: "MENU",
       cart: [],
-      data: {
-        name: "",
-        contact: "",
-        notes: "",
-        humanNotified: false,
-        // IA por usuario: off|lite|pro
-        aiMode: "off",
-        requestedAiMode: "off",
-        lastAiAt: 0,
-      },
+      data: { ...defaults },
       lastOrderId: null,
       lastOrderItems: [],
-aiCountDate: "",
-aiCount: 0,
     };
   }
 
-  const data = JSON.parse(row.dataJson || "{}");
-  const cart = JSON.parse(row.cartJson || "[]");
+  const raw = JSON.parse(row.dataJson || "{}");
+  const merged = { ...defaults, ...raw };
+
+  // Normalizar tipos
+  merged.humanNotified = !!merged.humanNotified;
+  merged.aiMode = String(merged.aiMode || "off").toLowerCase();
+  merged.requestedAiMode = String(merged.requestedAiMode || "off").toLowerCase();
+  merged.lastAiAt = Number(merged.lastAiAt || 0);
+  merged.aiCount = Number(merged.aiCount || 0);
+  merged.aiCountDate = String(merged.aiCountDate || "");
 
   return {
     fromNumber,
     state: row.state || "MENU",
-    cart,
-    data: {
-      name: data?.name || "",
-      contact: data?.contact || "",
-      notes: data?.notes || "",
-      humanNotified: !!data?.humanNotified,
-      aiMode: (data?.aiMode || "off").toLowerCase(),          // off|lite|pro
-      requestedAiMode: (data?.requestedAiMode || "off").toLowerCase(),
-      lastAiAt: Number(data?.lastAiAt || 0),
-aiCountDate: data?.aiCountDate || "",
-aiCount: Number(data?.aiCount || 0),
-    },
+    cart: JSON.parse(row.cartJson || "[]"),
+    data: merged,
     lastOrderId: row.lastOrderId || null,
     lastOrderItems: [],
   };
@@ -502,7 +496,7 @@ function loadLastOrderItems(session) {
   session.lastOrderItems = JSON.parse(row.itemsJson || "[]");
 }
 
-// ====== MEMORIA IA (SQLite) ======
+// ====== MEMORIA IA ======
 const insertAiMsgStmt = db.prepare(`
   INSERT INTO ai_messages (fromNumber, role, content, createdAt)
   VALUES (@fromNumber, @role, @content, @createdAt)
@@ -520,7 +514,7 @@ function saveAiMessage(fromNumber, role, content) {
   insertAiMsgStmt.run({
     fromNumber,
     role,
-    content: String(content || "").slice(0, 1200), // recorte = costo controlado
+    content: String(content || "").slice(0, 1200),
     createdAt: new Date().toISOString(),
   });
 }
@@ -533,46 +527,66 @@ function loadAiHistory(fromNumber, limit) {
   }));
 }
 
-// ====== IA Reply (lite/pro) ======
+// ====== IA Reply ======
 async function aiReply({ session, from, userText }) {
-  if (AI_GLOBAL === "off") return "⚠️ La IA está pausada por el administrador. Escribí: humano si necesitás ayuda.";
-
+  if (AI_GLOBAL === "off") return "⚠️ La IA está pausada por el administrador. Escribí: humano";
   if (!openai) return "⚠️ Falta OPENAI_API_KEY. Por ahora usá: menu / catalogo / ayuda.";
 
-  const mode = (session.data?.aiMode || "off").toLowerCase();
+  const mode = String(session.data?.aiMode || "off").toLowerCase();
   if (mode !== "lite" && mode !== "pro") return "⚠️ IA apagada para este chat. Escribí: humano";
 
-// ===== Cupo diario por usuario =====
-const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+const company = getCompany(session.data.companyId);
 
-if (session.data.aiCountDate !== today) {
-  session.data.aiCountDate = today;
-  session.data.aiCount = 0;
-}
+const instructions = `
+${company.prompt}
 
-const dailyLimit = mode === "pro" ? 120 : 40; // ajustable
-if (session.data.aiCount >= dailyLimit) {
-  saveSession(session);
-  return `Hoy ya se alcanzó el cupo de IA (${dailyLimit}) para este chat. Si querés, pedí un asesor escribiendo: humano`;
-}
+CATÁLOGO:
+${company.catalog.map(p => `- ${p.name}: $${p.price}`).join("\n")}
 
-  // Anti spam: 1 llamada cada 6s por usuario
-  const now = Date.now();
-  if (now - (session.data?.lastAiAt || 0) < 6000) {
-    return "Dale 🙂 Decime un toque más y te respondo bien: ¿lo querés para WhatsApp, Instagram o ambos?";
+REGLAS:
+- Tono: ${company.rules.tone || "neutral"}
+- Nunca inventes precios
+- Si no sabés algo, preguntá
+`;
+
+instructions: instructions,
+
+
+  // ===== Cupo diario (PRIMERO) =====
+  const today = new Date().toISOString().slice(0, 10);
+  if (session.data.aiCountDate !== today) {
+    session.data.aiCountDate = today;
+    session.data.aiCount = 0;
   }
+
+  const AI_LIMIT_LITE = Number(process.env.AI_LIMIT_LITE || 40);
+  const AI_LIMIT_PRO = Number(process.env.AI_LIMIT_PRO || 120);
+  const dailyLimit = mode === "pro" ? AI_LIMIT_PRO : AI_LIMIT_LITE;
+
+  if (Number(session.data.aiCount || 0) >= dailyLimit) {
+    saveSession(session);
+    return `Hoy ya se alcanzó el cupo de IA (${dailyLimit}) para este chat. Si querés, pedí un asesor escribiendo: humano`;
+  }
+
+  // Anti spam (1 cada 6s) — y CUENTA para el cupo si querés cortar “de verdad”
+  const now = Date.now();
+  if (now - Number(session.data?.lastAiAt || 0) < 6000) {
+    session.data.aiCount = Number(session.data.aiCount || 0) + 1; // ✅ cuenta anti-spam
+    saveSession(session);
+    return "Dale 🙂 mandame 1 mensaje más completo y te respondo bien: ¿lo querés para WhatsApp, Instagram o ambos?";
+  }
+
   session.data.lastAiAt = now;
   saveSession(session);
 
   const historyLimit = mode === "pro" ? 14 : 4;
 
-  // Guardar mensaje user y cargar historia
   saveAiMessage(from, "user", userText);
   const history = loadAiHistory(from, historyLimit);
 
   try {
     const resp = await openai.responses.create({
-      model: "gpt-4o-mini", // barato/estable para producción
+      model: "gpt-4o-mini",
       instructions: BABYSTEPSBOTS_INSTRUCTIONS,
       input: history,
     });
@@ -580,8 +594,9 @@ if (session.data.aiCount >= dailyLimit) {
     const answer = (resp.output_text || "").trim() || "Dale, ¿lo querés para WhatsApp, Instagram o ambos?";
     saveAiMessage(from, "assistant", answer);
 
-session.data.aiCount = (session.data.aiCount || 0) + 1;
-saveSession(session);
+    // ✅ Suma 1 por respuesta real de IA
+    session.data.aiCount = Number(session.data.aiCount || 0) + 1;
+    saveSession(session);
 
     return answer;
   } catch (e) {
@@ -604,26 +619,25 @@ app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";
   const body = (req.body.Body || "").trim();
   const text = body.toLowerCase();
-  const cmd = body.trim().replace(/\s+/g, " ").toLowerCase(); // normaliza espacios
+  const cmd = body.trim().replace(/\s+/g, " ").toLowerCase();
+
+  // Guardar último cliente (para admin ai set sin número)
+  if (from && from !== ADMIN_NUMBER && !cmd.startsWith("admin")) {
+    setSetting("last_customer", from);
+  }
 
   const session = getSession(from);
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
-// Guardar último cliente que escribió (para que admin pueda usar "sin número")
-if (from !== ADMIN_NUMBER) {
-  setSetting("last_customer", from);
-}
-
-  // ===== HANDOFF A HUMANO =====
-  if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !text.startsWith("admin")) {
-    if (!session.data?.humanNotified) {
+  // ===== HANDOFF HUMANO =====
+  if (session.state === "HUMAN" && text !== "menu" && text !== "hola" && !cmd.startsWith("admin")) {
+    if (!session.data.humanNotified) {
       session.data.humanNotified = true;
       reply = "✅ Listo. Un asesor te va a responder en breve.";
       sendTelegram(`🙋‍♂️ Solicitud de HUMANO\nCliente: ${from}\nMensaje: ${body}`);
     } else {
       reply = "✅ Un asesor ya fue notificado.";
     }
-
     saveSession(session);
     const twiml = new twilio.twiml.MessagingResponse();
     twiml.message(reply);
@@ -654,7 +668,6 @@ if (from !== ADMIN_NUMBER) {
       return res.type("text/xml").send(twiml.toString());
     }
 
-    // admin whoami
     if (cmd === "admin whoami") {
       reply = `ADMIN From detectado: ${from}`;
       const twiml = new twilio.twiml.MessagingResponse();
@@ -662,51 +675,19 @@ if (from !== ADMIN_NUMBER) {
       return res.type("text/xml").send(twiml.toString());
     }
 
-    /**
-     * IA por usuario (último paso, como pediste)
-     * admin ai set off|lite|pro whatsapp:+549...
-     * admin ai status whatsapp:+549...
-     *
-     * También acepta:
-     * admin ai set pro +549...
-     */
+    // admin ai set off|lite|pro [whatsapp:+...]
+    const aiSet = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
+    if (aiSet) {
+      const mode = aiSet[1].toLowerCase();
+      let target = (aiSet[2] || "").trim();
 
-    // admin ai set off|lite|pro [whatsapp:+54...]
-// si no pasás número, usa el último cliente que escribió
-const aiSet = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
-if (aiSet) {
-  const mode = aiSet[1].toLowerCase();
-  let target = (aiSet[2] || "").trim();
-
-  if (!target) target = getSetting("last_customer");
-
-  if (!target) {
-    reply = "No tengo un 'último cliente' todavía. Pedile a un cliente que mande un mensaje primero.";
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-    return res.type("text/xml").send(twiml.toString());
-  }
-
-  // normalizar target a whatsapp:+...
-  if (!target.startsWith("whatsapp:")) {
-    if (target.startsWith("+")) target = `whatsapp:${target}`;
-    else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
-  }
-
-  const s2 = getSession(target);
-  s2.data.aiMode = mode;
-  saveSession(s2);
-
-  reply = `🤖 IA para ${target}: ${mode.toUpperCase()} ✅`;
-  const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(reply);
-  return res.type("text/xml").send(twiml.toString());
-}
-
-
-    const aiStatus = cmd.match(/^admin ai status (.+)$/i);
-    if (aiStatus) {
-      let target = (aiStatus[1] || "").trim();
+      if (!target) target = getSetting("last_customer");
+      if (!target) {
+        reply = "No tengo 'último cliente' todavía. Hacé que un cliente mande un mensaje primero.";
+        const twiml = new twilio.twiml.MessagingResponse();
+        twiml.message(reply);
+        return res.type("text/xml").send(twiml.toString());
+      }
 
       if (!target.startsWith("whatsapp:")) {
         if (target.startsWith("+")) target = `whatsapp:${target}`;
@@ -714,28 +695,51 @@ if (aiSet) {
       }
 
       const s2 = getSession(target);
-      reply = `🤖 IA para ${target}: ${(s2.data.aiMode || "off").toUpperCase()}`;
+      s2.data.aiMode = mode;
+      saveSession(s2);
+
+      reply = `🤖 IA para ${target}: ${mode.toUpperCase()} ✅`;
       const twiml = new twilio.twiml.MessagingResponse();
       twiml.message(reply);
       return res.type("text/xml").send(twiml.toString());
     }
 
-    // admin ayuda
+    // admin ai status [whatsapp:+...]
+    const aiStatus = cmd.match(/^admin ai status(?:\s+(.+))?$/i);
+    if (aiStatus) {
+      let target = (aiStatus[1] || "").trim();
+      if (!target) target = getSetting("last_customer");
+
+      if (!target) {
+        reply = "No tengo 'último cliente' todavía. Hacé que un cliente mande un mensaje primero.";
+      } else {
+        if (!target.startsWith("whatsapp:")) {
+          if (target.startsWith("+")) target = `whatsapp:${target}`;
+          else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+        }
+        const s2 = getSession(target);
+        reply = `🤖 IA para ${target}: ${(s2.data.aiMode || "off").toUpperCase()}`;
+      }
+
+      const twiml = new twilio.twiml.MessagingResponse();
+      twiml.message(reply);
+      return res.type("text/xml").send(twiml.toString());
+    }
+
     if (cmd === "admin" || cmd === "admin ayuda") {
       reply = `🛠 Admin:
 • admin whoami
+• admin ai set off|lite|pro [whatsapp:+54...]
+• admin ai status [whatsapp:+54...]
 • admin pedidos
 • admin pedido PED-XXXXXX
 • admin hoy
 • admin telegram
-• admin contacted PED-XXXXXX
 • admin pendientes
 • admin pagados
 • admin entregados
 • admin status PED-XXXXXX confirmed|paid|delivered
-• admin auto whatsapp:+54...
-• admin ai set off|lite|pro whatsapp:+54...
-• admin ai status whatsapp:+54...`;
+• admin auto whatsapp:+54...`;
     }
 
     if (cmd === "admin pedidos") {
@@ -746,6 +750,29 @@ if (aiSet) {
           (r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber} — ${r.createdAt}`
         );
         reply = `📦 Últimos pedidos:\n${lines.join("\n")}\n\nUsá: admin pedido PED-XXXXXX`;
+      }
+    }
+
+    const m = cmd.match(/^admin pedido (ped-[a-z0-9]+)$/i);
+    if (m) {
+      const orderId = m[1].toUpperCase();
+      const row = getOrderByIdStmt.get(orderId);
+      if (!row) reply = `No encontré el pedido ${orderId}`;
+      else {
+        const items = JSON.parse(row.itemsDetailedJson || "[]");
+        const itemsText = items.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
+        reply =
+          `🧾 Pedido ${row.id}\n` +
+          `Fecha: ${row.createdAt}\n` +
+          `Cliente: ${row.fromNumber}\n` +
+          `Nombre: ${row.name || "—"}\n` +
+          `Contacto: ${row.contact || "—"}\n` +
+          `Notas: ${row.notes || "—"}\n` +
+          `Estado pago: ${row.paymentStatus}\n` +
+          `Status: ${row.orderStatus || "confirmed"}\n` +
+          `Entregado: ${row.deliveredAt ? "✅ " + row.deliveredAt : "❌ no"}\n` +
+          `Total: USD $${row.total}\n\n` +
+          `Items:\n${itemsText || "—"}`;
       }
     }
 
@@ -770,36 +797,12 @@ if (aiSet) {
         : `📦 Entregados:\n${rows.map((r) => `• ${r.id} — USD $${r.total} — ${r.fromNumber}`).join("\n")}`;
     }
 
-    const m = cmd.match(/^admin pedido (ped-[a-z0-9]+)$/i);
-    if (m) {
-      const orderId = m[1].toUpperCase();
-      const row = getOrderByIdStmt.get(orderId);
-      if (!row) reply = `No encontré el pedido ${orderId}`;
-      else {
-        const items = JSON.parse(row.itemsDetailedJson || "[]");
-        const itemsText = items.map((i) => `- ${i.name} x${i.qty} (USD $${i.subtotal})`).join("\n");
-        reply =
-          `🧾 Pedido ${row.id}\n` +
-          `Fecha: ${row.createdAt}\n` +
-          `Cliente: ${row.fromNumber}\n` +
-          `Nombre: ${row.name || "—"}\n` +
-          `Contacto: ${row.contact || "—"}\n` +
-          `Notas: ${row.notes || "—"}\n` +
-          `Estado pago: ${row.paymentStatus}\n` +
-          `Status: ${row.orderStatus || "confirmed"}\n` +
-          `Entregado: ${row.deliveredAt ? "✅ " + row.deliveredAt : "❌ no"}\n` +
-          `Contactado: ${row.contactedAt ? "✅ " + row.contactedAt : "❌ no"}\n` +
-          `Contactado por: ${row.contactedBy || "—"}\n` +
-          `Total: USD $${row.total}\n\n` +
-          `Items:\n${itemsText || "—"}`;
-      }
-    }
-
     if (cmd === "admin hoy") {
       const now = new Date();
       const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)).toISOString();
       const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59)).toISOString();
       const rows = listTodayOrdersStmt.all({ start, end });
+
       reply = !rows.length
         ? "📭 No hay pedidos hoy."
         : `📅 Pedidos de hoy:\n${rows.map((r) => `• ${r.id} — ${r.paymentStatus} — USD $${r.total} — ${r.fromNumber}`).join("\n")}`;
@@ -808,18 +811,6 @@ if (aiSet) {
     if (cmd === "admin telegram") {
       sendTelegram("✅ Test Telegram OK (enviado desde WhatsApp bot)");
       reply = "Listo ✅ mandé un test a Telegram.";
-    }
-
-    const c = cmd.match(/^admin contacted (ped-[a-z0-9]+)$/i);
-    if (c) {
-      const orderId = c[1].toUpperCase();
-      const row = getOrderByIdStmt.get(orderId);
-      if (!row) reply = `No encontré el pedido ${orderId}`;
-      else {
-        setContactedStmt.run({ id: orderId, contactedAt: new Date().toISOString(), contactedBy: from });
-        reply = `✅ Marcado como CONTACTADO: ${orderId}`;
-        sendTelegram(`📞 Pedido CONTACTADO\n${orderId}\nCliente: ${row.fromNumber}\nTotal: USD $${row.total}`);
-      }
     }
 
     const s = cmd.match(/^admin status (ped-[a-z0-9]+) (confirmed|paid|delivered)$/i);
@@ -866,11 +857,10 @@ if (aiSet) {
     return res.type("text/xml").send(twiml.toString());
   }
 
-  // ===== IA (solo si aiMode lite/pro + MENU + no reservado) =====
+  // ===== IA (solo MENU y no reservado) =====
   if ((session.data.aiMode === "lite" || session.data.aiMode === "pro") && session.state === "MENU" && !isReserved(text)) {
     reply = await aiReply({ session, from, userText: body });
     saveSession(session);
-
     const twiml = new twilio.twiml.MessagingResponse();
     twiml.message(reply);
     return res.type("text/xml").send(twiml.toString());
@@ -887,15 +877,14 @@ if (aiSet) {
   if (text === "cancelar") {
     session.state = "MENU";
     session.cart = [];
-    // preservo aiMode
+    // IMPORTANTE: no borrar aiCount/aiMode
     session.data = {
+      ...session.data,
       name: "",
       contact: "",
       notes: "",
       humanNotified: false,
-      aiMode: session.data.aiMode || "off",
       requestedAiMode: "off",
-      lastAiAt: session.data.lastAiAt || 0,
     };
     session.lastOrderId = null;
     reply = "🧹 Listo, reinicié todo.\n\n" + menuText();
@@ -939,11 +928,7 @@ if (aiSet) {
   } else if (session.state === "ASK_NOTES" && !isReserved(text)) {
     session.data.notes = text === "no" ? "" : body;
     session.state = "ASK_AI_MODE";
-    reply =
-      "Perfecto.\n¿Querés IA? Respondé una opción:\n" +
-      "• no\n" +
-      "• lite\n" +
-      "• pro";
+    reply = "¿Querés IA? Respondé una opción: no / lite / pro";
   } else if (session.state === "ASK_AI_MODE" && !isReserved(text)) {
     const v = text.trim();
     if (v !== "no" && v !== "lite" && v !== "pro") {
@@ -951,7 +936,6 @@ if (aiSet) {
     } else {
       session.data.requestedAiMode = v;
       session.state = "READY";
-
       reply =
         `✅ Resumen del pedido\n\n${cartText(session)}\n\n` +
         `👤 Nombre: ${session.data.name}\n` +
@@ -992,7 +976,6 @@ if (aiSet) {
         deliveredAt: null,
       });
 
-      // Aviso admin con IA solicitada (pero NO activamos nada acá)
       sendTelegram(
         `🛎️ Nuevo pedido ${orderId}\n` +
           `Total: USD $${total}\n` +
@@ -1009,15 +992,14 @@ if (aiSet) {
       session.lastOrderId = orderId;
       session.state = "MENU";
       session.cart = [];
-      // preservo aiMode actual (admin decide luego)
+      // NO BORRAR aiCount/aiMode
       session.data = {
+        ...session.data,
         name: "",
         contact: "",
         notes: "",
         humanNotified: false,
-        aiMode: session.data.aiMode || "off",
         requestedAiMode: "off",
-        lastAiAt: session.data.lastAiAt || 0,
       };
 
       reply = `🎉 Pedido confirmado: *${orderId}*\n\nPara pagar escribí: pago`;
@@ -1043,14 +1025,14 @@ if (aiSet) {
     }
   }
 
-  // ===== "pagado" reporta pago =====
+  // ===== PAGADO (reporta) =====
   if (text === "pagado") {
     if (!session.lastOrderId) {
       reply = "Perfecto ✅ ¿De qué pedido? (no veo uno reciente).";
     } else {
       setPaymentReportedStmt.run({ id: session.lastOrderId });
-
       const row = getOrderByIdStmt.get(session.lastOrderId);
+
       sendTelegram(
         `🧾 Cliente REPORTÓ PAGO (sin verificar)\nPedido: ${session.lastOrderId}\nCliente: ${from}\nTotal: USD $${row?.total ?? "?"}\nContactar: ${waLink(from)}`
       );
@@ -1060,34 +1042,6 @@ if (aiSet) {
         `Ahora verificamos el pago y te confirmamos.\n\n` +
         `Si querés, mandá el comprobante por acá.`;
     }
-  }
-
-  // ===== TEST =====
-  if (text === "testpedido") {
-    const orderId = newOrderId();
-    const createdAt = new Date().toISOString();
-    const items = [1, 3];
-    const itemsDetailed = formatItems(items);
-    const total = calcTotal(items);
-
-    insertOrderStmt.run({
-      id: orderId,
-      createdAt,
-      fromNumber: from,
-      name: "Test",
-      contact: "test@demo.com",
-      notes: "pedido de prueba",
-      itemsJson: JSON.stringify(items),
-      itemsDetailedJson: JSON.stringify(itemsDetailed),
-      total,
-      paymentStatus: "pending",
-      paymentMethod: "",
-      orderStatus: "confirmed",
-      deliveredAt: null,
-    });
-
-    session.lastOrderId = orderId;
-    reply = `✅ Guardé un pedido de prueba: ${orderId}`;
   }
 
   saveSession(session);
