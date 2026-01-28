@@ -289,11 +289,20 @@ app.post("/whatsapp", async (req, res) => {
   );
 }
 
+// ===== SALIR DE HUMANO CON MENU / HOLA =====
+if (
+  session.state === "HUMAN" &&
+  (text === "menu" || text === "hola")
+) {
+  session.state = "MENU";
+  session.data.humanNotified = false;
+  saveSession(session);
+  return respond(res, menuText(getCompanySafe(session)));
+}
+
+// ===== BLOQUEO HUMANO (solo si NO pidió menu/hola) =====
 if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-  return respond(
-    res,
-    "⏳ Ya hay un asesor asignado. En breve te responde.\n\nEscribí *menu* para volver al bot."
-  );
+  return respond(res, "⏳ Un asesor ya fue notificado. Escribí *menu* para volver.");
 }
 
   // ================= ADMIN =================
