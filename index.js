@@ -251,38 +251,31 @@ app.post("/whatsapp", async (req, res) => {
 
   // ================= HUMANO =================
  if (isHumanTrigger(text)) {
+  const company = getCompanySafe(session);
+
   session.state = "HUMAN";
   session.data.humanNotified = true;
   saveSession(session);
 
-  const c = getCompanySafe(session);
+  // ✅ ALERTA TELEGRAM
   await sendTelegram(
-    `🙋 HUMANO solicitado\nEmpresa: ${c.name} (${c.id})\nCliente: ${from}\nMensaje: ${body}`
+    `🙋 HUMANO solicitado\nEmpresa: ${company.name} (${company.id})\nCliente: ${from}\nMensaje: ${body}`
   );
 
-  return respond(res, "✅ Listo. Un asesor te va a responder en breve.");
+  reply = "✅ Listo. Un asesor te va a responder en breve.\nSi querés volver al menú: escribí menu";
+  return respond(res, reply);
 }
 
+// Si está en HUMAN, PERO deja volver al bot con "menu"
 if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-  if (!session.data.humanNotified) {
-    session.data.humanNotified = true;
+  if (text === "menu" || text === "hola") {
+    session.state = "MENU";
+    session.data.humanNotified = false;
     saveSession(session);
-
-    const c = getCompanySafe(session);
-    await sendTelegram(
-      `🙋 HUMANO (re-intento)\nEmpresa: ${c.name} (${c.id})\nCliente: ${from}\nMensaje: ${body}`
-    );
-
-    return respond(res, "✅ Listo. Un asesor te va a responder en breve.");
+    return respond(res, menuText(getCompanySafe(session)));
   }
-
-  return respond(res, "⏳ Un asesor ya fue notificado.");
+  return respond(res, "⏳ Un asesor ya fue notificado.\nPara volver al menú: escribí menu");
 }
-
-  if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-    reply = "⏳ Un asesor ya fue notificado.";
-    return respond(res, reply);
-  }
 
   // ================= ADMIN =================
   if (cmd.startsWith("admin")) {
@@ -367,6 +360,40 @@ if (companySet) {
 
     return respond(res, "Admin OK");
   }
+// ================= TELEGRAM ALERTS =================
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log("Telegram not configured: missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID");
+    return;
+  }
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      console.error("Telegram API error:", r.status, data);
+    } else {
+      console.log("Telegram sent OK");
+    }
+  } catch (e) {
+    console.error("Telegram send failed:", e?.message || e);
+  }
+}
+
 // ================= MENU / CATALOGO / CARRITO / AGREGAR (UNICO) =================
 if (text === "menu" || text === "hola") {
   session.state = "MENU";
