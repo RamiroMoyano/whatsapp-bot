@@ -3,8 +3,29 @@ import twilio from "twilio";
 import dotenv from "dotenv";
 import OpenAI from "openai";
 import { db } from "./db.js";
+import fetch from "node-fetch";
 
 dotenv.config();
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+      }),
+    });
+  } catch (e) {
+    console.error("Telegram error:", e.message);
+  }
+}
 
 console.log("BOOT VERSION:", "2026-01-27-INDEX-V4");
 console.log("BOOT FILE:", import.meta.url);
@@ -251,30 +272,28 @@ app.post("/whatsapp", async (req, res) => {
 
   // ================= HUMANO =================
  if (isHumanTrigger(text)) {
-  const company = getCompanySafe(session);
-
   session.state = "HUMAN";
   session.data.humanNotified = true;
   saveSession(session);
 
-  // ✅ ALERTA TELEGRAM
-  await sendTelegram(
-    `🙋 HUMANO solicitado\nEmpresa: ${company.name} (${company.id})\nCliente: ${from}\nMensaje: ${body}`
+  sendTelegram(
+    `🙋‍♂️ HUMANO SOLICITADO\n` +
+    `Empresa: ${getCompanySafe(session).name}\n` +
+    `Cliente: ${from}\n` +
+    `Mensaje: ${body}`
   );
 
-  reply = "✅ Listo. Un asesor te va a responder en breve.\nSi querés volver al menú: escribí menu";
-  return respond(res, reply);
+  return respond(
+    res,
+    "✅ Listo. Un asesor fue notificado y te va a responder en breve.\n\nMientras tanto podés escribir *menu* para volver al bot."
+  );
 }
 
-// Si está en HUMAN, PERO deja volver al bot con "menu"
 if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-  if (text === "menu" || text === "hola") {
-    session.state = "MENU";
-    session.data.humanNotified = false;
-    saveSession(session);
-    return respond(res, menuText(getCompanySafe(session)));
-  }
-  return respond(res, "⏳ Un asesor ya fue notificado.\nPara volver al menú: escribí menu");
+  return respond(
+    res,
+    "⏳ Ya hay un asesor asignado. En breve te responde.\n\nEscribí *menu* para volver al bot."
+  );
 }
 
   // ================= ADMIN =================
@@ -365,16 +384,21 @@ const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 
 async function sendTelegram(text) {
+  const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log("Telegram not configured: missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID");
-    return;
+    console.log("Telegram not configured (missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)");
+    return false;
   }
 
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
   try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+
     const r = await fetch(url, {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
@@ -383,14 +407,18 @@ async function sendTelegram(text) {
       }),
     });
 
+    clearTimeout(t);
+
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.ok === false) {
       console.error("Telegram API error:", r.status, data);
-    } else {
-      console.log("Telegram sent OK");
+      return false;
     }
+
+    return true;
   } catch (e) {
-    console.error("Telegram send failed:", e?.message || e);
+    console.error("Telegram notify failed:", e?.message || e);
+    return false;
   }
 }
 
