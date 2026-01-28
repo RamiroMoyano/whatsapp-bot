@@ -250,13 +250,34 @@ app.post("/whatsapp", async (req, res) => {
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
   // ================= HUMANO =================
-  if (isHumanTrigger(text)) {
-    session.state = "HUMAN";
+ if (isHumanTrigger(text)) {
+  session.state = "HUMAN";
+  session.data.humanNotified = true;
+  saveSession(session);
+
+  const c = getCompanySafe(session);
+  await sendTelegram(
+    `🙋 HUMANO solicitado\nEmpresa: ${c.name} (${c.id})\nCliente: ${from}\nMensaje: ${body}`
+  );
+
+  return respond(res, "✅ Listo. Un asesor te va a responder en breve.");
+}
+
+if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
+  if (!session.data.humanNotified) {
     session.data.humanNotified = true;
     saveSession(session);
-    reply = "✅ Listo. Un asesor te va a responder en breve.";
-    return respond(res, reply);
+
+    const c = getCompanySafe(session);
+    await sendTelegram(
+      `🙋 HUMANO (re-intento)\nEmpresa: ${c.name} (${c.id})\nCliente: ${from}\nMensaje: ${body}`
+    );
+
+    return respond(res, "✅ Listo. Un asesor te va a responder en breve.");
   }
+
+  return respond(res, "⏳ Un asesor ya fue notificado.");
+}
 
   if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
     reply = "⏳ Un asesor ya fue notificado.";
