@@ -4,38 +4,71 @@ import dotenv from "dotenv";
 import OpenAI from "openai";
 import { db } from "./db.js";
 import fetch from "node-fetch";
+import crypto from "crypto";
 
 dotenv.config();
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-
-async function sendTelegram(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
-
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-      }),
-    });
-  } catch (e) {
-    console.error("Telegram error:", e.message);
-  }
-}
-
-console.log("BOOT VERSION:", "2026-01-27-INDEX-V4");
+console.log("BOOT VERSION:", "2026-02-03-INDEX-DASH-V1");
 console.log("BOOT FILE:", import.meta.url);
 console.log("PWD:", process.cwd());
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 
+// ================= TELEGRAM (UNICO, ARRIBA) =================
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
+
+async function sendTelegram(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log("Telegram not configured (missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)");
+    return false;
+  }
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+
+    const r = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+        disable_web_page_preview: true,
+      }),
+    });
+
+    clearTimeout(t);
+
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      console.error("Telegram API error:", r.status, data);
+      return false;
+    }
+
+    return true;
+  } catch (e) {
+    console.error("Telegram notify failed:", e?.message || e);
+    return false;
+  }
+}
+
 // ================= MIGRATIONS =================
 db.exec(`
+CREATE TABLE IF NOT EXISTS customer_company (
+  fromNumber TEXT PRIMARY KEY,
+  companyId TEXT NOT NULL,
+  updatedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token TEXT PRIMARY KEY,
+  createdAt TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ai_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   fromNumber TEXT,
@@ -100,27 +133,27 @@ INSERT OR IGNORE INTO companies VALUES
   'Veterinaria San Miguel',
   'Sos asistente de una veterinaria. Empático, calmado, priorizás urgencias.',
   '[{"id":1,"name":"Consulta","price":5000},{"id":2,"name":"Vacunación","price":8000}]',
-  '{"tone":"empatico","emergencyKeywords":["urgente","accidente"]}',
+  '{"tone":"empatico","emergencyKeywords":["urgente","accidente"],"allowHuman":true}',
   CURRENT_TIMESTAMP
 );
 `);
 
 // ================= OPENAI =================
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
-const AI_GLOBAL = (process.env.AI_GLOBAL || "on").toLowerCase();
+const AI_GLOBAL = (process.env.AI_GLOBAL || "on").trim().toLowerCase();
 
 // ================= ADMIN =================
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || "").trim();
-const isAdmin = (from) => from === ADMIN_NUMBER;
+const isAdmin = (from) => ADMIN_NUMBER && from === ADMIN_NUMBER;
 
 // ================= DB HELPERS =================
-const getSetting = (k) => db.prepare(`SELECT value FROM settings WHERE key=?`).get(k)?.value;
+const getSetting = (k) => db.prepare(`SELECT value FROM settings WHERE key=?`).get(k)?.value || "";
 const setSetting = (k, v) =>
   db.prepare(`
     INSERT INTO settings(key,value) VALUES (?,?)
     ON CONFLICT(key) DO UPDATE SET value=excluded.value
-  `).run(k, String(v));
+  `).run(k, String(v ?? ""));
 
 const getCompany = (id) => {
   const r = db.prepare(`SELECT * FROM companies WHERE id=?`).get(id);
@@ -134,12 +167,16 @@ const getCompany = (id) => {
   };
 };
 
-const getCompanySafe = (session) =>
-  getCompany(session.data.companyId || "babystepsbots") || getCompany("babystepsbots");
+function getCompanySafe(session) {
+  const fallback = getCompany("babystepsbots");
+  const id = String(session?.data?.companyId || "babystepsbots").toLowerCase();
+  return getCompany(id) || fallback;
+}
 
 // ================= SESSION =================
 function getSession(from) {
   const r = db.prepare(`SELECT * FROM sessions WHERE fromNumber=?`).get(from);
+
   const base = {
     companyId: "babystepsbots",
     aiMode: "off",
@@ -149,21 +186,21 @@ function getSession(from) {
     humanNotified: false,
   };
 
-  if (!r)
-    return { fromNumber: from, state: "MENU", cart: [], data: base, lastOrderId: null };
+  if (!r) return { fromNumber: from, state: "MENU", cart: [], data: base, lastOrderId: null };
 
   return {
     fromNumber: from,
-    state: r.state,
+    state: r.state || "MENU",
     cart: JSON.parse(r.cartJson || "[]"),
-    data: { ...base, ...JSON.parse(r.dataJson || "{}") },
-    lastOrderId: r.lastOrderId,
+    data: { ...base, ...(JSON.parse(r.dataJson || "{}") || {}) },
+    lastOrderId: r.lastOrderId || null,
   };
 }
 
 function saveSession(s) {
   db.prepare(`
-    INSERT INTO sessions VALUES (?,?,?,?,?)
+    INSERT INTO sessions(fromNumber,state,cartJson,dataJson,lastOrderId)
+    VALUES (?,?,?,?,?)
     ON CONFLICT(fromNumber) DO UPDATE SET
       state=excluded.state,
       cartJson=excluded.cartJson,
@@ -172,9 +209,9 @@ function saveSession(s) {
   `).run(
     s.fromNumber,
     s.state,
-    JSON.stringify(s.cart),
-    JSON.stringify(s.data),
-    s.lastOrderId
+    JSON.stringify(s.cart || []),
+    JSON.stringify(s.data || {}),
+    s.lastOrderId || null
   );
 }
 
@@ -187,7 +224,7 @@ const menuText = (c) => `👋 Hola! Soy el asistente de ${c.name}
 
 const catalogText = (c) =>
   `🛒 ${c.name}\n` +
-  c.catalog.map((p) => `${p.id}) ${p.name} — $${p.price}`).join("\n");
+  (c.catalog || []).map((p) => `${p.id}) ${p.name} — $${p.price}`).join("\n");
 
 const cartText = (s) => {
   const c = getCompanySafe(s);
@@ -196,18 +233,19 @@ const cartText = (s) => {
   const out = {};
   s.cart.forEach((id) => (out[id] = (out[id] || 0) + 1));
   const lines = Object.entries(out).map(([id, q]) => {
-    const p = c.catalog.find((x) => x.id == id);
-    const sub = p.price * q;
+    const p = (c.catalog || []).find((x) => Number(x.id) === Number(id));
+    const unit = Number(p?.price || 0);
+    const sub = unit * q;
     total += sub;
-    return `• ${p.name} x${q} — $${sub}`;
+    return `• ${p?.name || "Producto"} x${q} — $${sub}`;
   });
   return `🧾 ${c.name}\n${lines.join("\n")}\nTotal: $${total}`;
-}
+};
 
 // ================= AI =================
 async function aiReply(session, from, text) {
   if (!openai || AI_GLOBAL === "off") return "IA no disponible.";
-  if (!["lite", "pro"].includes(session.data.aiMode)) return null;
+  if (!["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase())) return null;
 
   const today = new Date().toISOString().slice(0, 10);
   if (session.data.aiCountDate !== today) {
@@ -215,20 +253,18 @@ async function aiReply(session, from, text) {
     session.data.aiCount = 0;
   }
 
-  const limit = session.data.aiMode === "pro" ? 120 : 40;
-  if (session.data.aiCount >= limit)
-    return "⚠️ Límite diario de IA alcanzado. Escribí humano.";
+  const limit = String(session.data.aiMode).toLowerCase() === "pro" ? 120 : 40;
+  if (Number(session.data.aiCount || 0) >= limit) return "⚠️ Límite diario de IA alcanzado. Escribí humano.";
 
   const c = getCompanySafe(session);
-
   const prompt = `
-${c.prompt}
+${c.prompt || ""}
 
 CATÁLOGO:
-${c.catalog.map((p) => `${p.id}) ${p.name}: $${p.price}`).join("\n")}
+${(c.catalog || []).map((p) => `${p.id}) ${p.name}: $${p.price}`).join("\n")}
 
 Reglas:
-- Tono: ${c.rules.tone || "neutral"}
+- Tono: ${(c.rules || {}).tone || "neutral"}
 - No inventar datos
 - Siempre cerrar con pregunta
 `;
@@ -239,24 +275,402 @@ Reglas:
     instructions: prompt,
   });
 
-  session.data.aiCount++;
+  session.data.aiCount = Number(session.data.aiCount || 0) + 1;
   saveSession(session);
 
-  return resp.output_text;
+  return (resp.output_text || "").trim();
 }
+
 // ================= UTILIDADES =================
 const newOrderId = () => "PED-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 
 const isReserved = (t) =>
   [
-    "menu","hola","catalogo","carrito","checkout","agregar",
+    "menu","hola","catalogo","carrito","checkout",
     "pago","pagar","pagado","confirmar","cancelar","ayuda",
     "humano","asesor","hablar con humano"
   ].includes(t);
 
-const isHumanTrigger = (t) =>
-  ["humano","asesor","hablar con humano"].includes(t);
+const isHumanTrigger = (t) => ["humano","asesor","hablar con humano"].includes(t);
 
+// ================= DASHBOARD (ADMIN WEB) =================
+const DASH_USER = (process.env.DASH_USER || "").trim();
+const DASH_PASS = (process.env.DASH_PASS || "").trim();
+const DASH_COOKIE_SECRET = (process.env.DASH_COOKIE_SECRET || "").trim();
+
+function signToken(token) {
+  const h = crypto.createHmac("sha256", DASH_COOKIE_SECRET || "dev");
+  h.update(token);
+  return h.digest("hex");
+}
+function parseCookies(req) {
+  const raw = req.headers.cookie || "";
+  const out = {};
+  raw.split(";").forEach((p) => {
+    const [k, ...rest] = p.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(rest.join("=") || "");
+  });
+  return out;
+}
+function setCookie(res, name, value) {
+  res.setHeader("Set-Cookie", `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax`);
+}
+function clearCookie(res, name) {
+  res.setHeader("Set-Cookie", `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+}
+function requireDashboardAuth(req, res, next) {
+  if (!DASH_USER || !DASH_PASS || !DASH_COOKIE_SECRET) {
+    return res.status(500).send("Dashboard no configurado. Seteá DASH_USER, DASH_PASS y DASH_COOKIE_SECRET.");
+  }
+  const cookies = parseCookies(req);
+  const cookie = cookies["dash"];
+  if (!cookie) return res.redirect("/admin/login");
+
+  const [token, sig] = cookie.split(".");
+  if (!token || !sig) return res.redirect("/admin/login");
+  if (signToken(token) !== sig) return res.redirect("/admin/login");
+
+  const row = db.prepare(`SELECT token FROM admin_sessions WHERE token=?`).get(token);
+  if (!row) return res.redirect("/admin/login");
+  next();
+}
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+function prettyJson(s) {
+  try { return JSON.stringify(JSON.parse(s || "{}"), null, 2); } catch { return String(s || ""); }
+}
+function layout(title, body) {
+  return `<!doctype html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${escapeHtml(title)}</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Arial;margin:20px;background:#0b0f1a;color:#e7e9ee}
+  a{color:#8ab4ff;text-decoration:none}
+  .top{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .card{background:#111a2e;border:1px solid #22325a;border-radius:12px;padding:14px;margin:12px 0}
+  input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a3b66;background:#0b1224;color:#e7e9ee}
+  textarea{min-height:160px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
+  button{padding:10px 12px;border-radius:10px;border:0;background:#2d6cdf;color:white;cursor:pointer}
+  button.secondary{background:#29324a}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .muted{color:#a7b0c2;font-size:13px}
+  .danger{background:#d94141}
+  code{background:#0b1224;border:1px solid #2a3b66;padding:2px 6px;border-radius:8px}
+  table{width:100%;border-collapse:collapse}
+  td,th{border-bottom:1px solid #22325a;padding:10px;text-align:left}
+  .pill{display:inline-block;padding:4px 8px;border:1px solid #22325a;border-radius:999px;font-size:12px;color:#a7b0c2}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div style="font-size:20px;font-weight:700">${escapeHtml(title)}</div>
+      <div class="muted">Dashboard de empresas (catálogo + manual + reglas)</div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <a href="/admin">Empresas</a>
+      <a href="/admin/assign">Asignar clientes</a>
+      <a href="/admin/logout" class="pill">Logout</a>
+    </div>
+  </div>
+  ${body}
+</body></html>`;
+}
+
+// Login
+app.get("/admin/login", (req, res) => {
+  const body = `
+  <div class="card">
+    <form method="POST" action="/admin/login">
+      <div class="row">
+        <div>
+          <label class="muted">Usuario</label>
+          <input name="user" autocomplete="username"/>
+        </div>
+        <div>
+          <label class="muted">Contraseña</label>
+          <input name="pass" type="password" autocomplete="current-password"/>
+        </div>
+      </div>
+      <div style="margin-top:12px"><button>Entrar</button></div>
+    </form>
+  </div>`;
+  res.type("text/html").send(layout("Login", body));
+});
+
+app.post("/admin/login", (req, res) => {
+  const user = (req.body.user || "").trim();
+  const pass = (req.body.pass || "").trim();
+  if (user !== DASH_USER || pass !== DASH_PASS) {
+    return res.status(401).type("text/html").send(layout("Login", `<div class="card">❌ Credenciales incorrectas</div>`));
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  db.prepare(`INSERT OR REPLACE INTO admin_sessions(token, createdAt) VALUES(?,?)`).run(token, new Date().toISOString());
+  setCookie(res, "dash", `${token}.${signToken(token)}`);
+  res.redirect("/admin");
+});
+
+app.get("/admin/logout", (req, res) => {
+  const cookies = parseCookies(req);
+  const cookie = cookies["dash"];
+  if (cookie) {
+    const [token] = cookie.split(".");
+    if (token) db.prepare(`DELETE FROM admin_sessions WHERE token=?`).run(token);
+  }
+  clearCookie(res, "dash");
+  res.redirect("/admin/login");
+});
+
+// List companies
+app.get("/admin", requireDashboardAuth, (req, res) => {
+  const rows = db.prepare(`SELECT id,name,createdAt FROM companies ORDER BY id`).all();
+  const list = rows.length
+    ? `<div class="card">
+        <table>
+          <thead><tr><th>ID</th><th>Nombre</th><th>Acción</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td><code>${escapeHtml(r.id)}</code></td>
+                <td>${escapeHtml(r.name || "")}</td>
+                <td><a href="/admin/company/${encodeURIComponent(r.id)}">Editar</a></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>`
+    : `<div class="card">No hay empresas.</div>`;
+
+  const create = `
+  <div class="card">
+    <form method="POST" action="/admin/company/create">
+      <div class="row">
+        <div>
+          <label class="muted">Company ID (ej: veterinaria_sm)</label>
+          <input name="id" placeholder="empresa_id"/>
+        </div>
+        <div>
+          <label class="muted">Nombre visible</label>
+          <input name="name" placeholder="Nombre Empresa"/>
+        </div>
+      </div>
+      <div style="margin-top:12px"><button>Crear empresa</button></div>
+    </form>
+  </div>`;
+
+  res.type("text/html").send(layout("Empresas", create + list));
+});
+
+app.post("/admin/company/create", requireDashboardAuth, (req, res) => {
+  const id = String(req.body.id || "").trim().toLowerCase();
+  const name = String(req.body.name || "").trim();
+
+  if (!id.match(/^[a-z0-9_-]{3,40}$/)) {
+    return res.status(400).type("text/html").send(layout("Error", `<div class="card">ID inválido.</div>`));
+  }
+
+  db.prepare(`
+    INSERT OR IGNORE INTO companies(id,name,prompt,catalogJson,rulesJson,createdAt)
+    VALUES(?,?,?,?,?,?)
+  `).run(
+    id,
+    name || id,
+    "Sos el asistente de la empresa. Respondés acorde al manual de marca.",
+    "[]",
+    JSON.stringify({ tone: "neutral", allowHuman: true }),
+    new Date().toISOString()
+  );
+
+  res.redirect(`/admin/company/${encodeURIComponent(id)}`);
+});
+
+app.get("/admin/company/:id", requireDashboardAuth, (req, res) => {
+  const id = req.params.id;
+  const row = db.prepare(`SELECT * FROM companies WHERE id=?`).get(id);
+  if (!row) return res.status(404).type("text/html").send(layout("No existe", `<div class="card">Empresa no encontrada.</div>`));
+
+  const body = `
+  <div class="card">
+    <div class="muted">ID: <code>${escapeHtml(row.id)}</code></div>
+    <form method="POST" action="/admin/company/${encodeURIComponent(row.id)}/save">
+      <div class="row">
+        <div>
+          <label class="muted">Nombre</label>
+          <input name="name" value="${escapeHtml(row.name || "")}"/>
+        </div>
+        <div>
+          <label class="muted">Tip</label>
+          <input value="Editá catalogJson / rulesJson" disabled/>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label class="muted">Manual de marca / Prompt</label>
+        <textarea name="prompt">${escapeHtml(row.prompt || "")}</textarea>
+      </div>
+
+      <div style="margin-top:12px" class="row">
+        <div>
+          <label class="muted">Catalog JSON (array)</label>
+          <textarea name="catalogJson">${escapeHtml(prettyJson(row.catalogJson))}</textarea>
+        </div>
+        <div>
+          <label class="muted">Rules JSON (objeto)</label>
+          <textarea name="rulesJson">${escapeHtml(prettyJson(row.rulesJson))}</textarea>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button>Guardar</button>
+        <a href="/admin" class="pill">Volver</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <form method="POST" action="/admin/company/${encodeURIComponent(row.id)}/delete" onsubmit="return confirm('¿Borrar empresa?');">
+      <button class="danger">Borrar empresa</button>
+      <div class="muted" style="margin-top:8px">⚠️ Solo borra el registro de companies.</div>
+    </form>
+  </div>`;
+
+  res.type("text/html").send(layout(`Editar empresa: ${row.name}`, body));
+});
+
+app.post("/admin/company/:id/save", requireDashboardAuth, (req, res) => {
+  const id = req.params.id;
+  const name = String(req.body.name || "").trim();
+  const prompt = String(req.body.prompt || "");
+  const catalogJson = String(req.body.catalogJson || "[]");
+  const rulesJson = String(req.body.rulesJson || "{}");
+
+  try {
+    const c = JSON.parse(catalogJson);
+    if (!Array.isArray(c)) throw new Error("catalogJson debe ser un array");
+  } catch (e) {
+    return res.status(400).type("text/html").send(layout("Error JSON", `<div class="card">❌ Catalog JSON inválido: ${escapeHtml(e.message)}</div>`));
+  }
+
+  try {
+    const r = JSON.parse(rulesJson);
+    if (r === null || Array.isArray(r) || typeof r !== "object") throw new Error("rulesJson debe ser un objeto");
+  } catch (e) {
+    return res.status(400).type("text/html").send(layout("Error JSON", `<div class="card">❌ Rules JSON inválido: ${escapeHtml(e.message)}</div>`));
+  }
+
+  db.prepare(`UPDATE companies SET name=?, prompt=?, catalogJson=?, rulesJson=? WHERE id=?`).run(
+    name || id, prompt, catalogJson, rulesJson, id
+  );
+
+  res.redirect(`/admin/company/${encodeURIComponent(id)}`);
+});
+
+app.post("/admin/company/:id/delete", requireDashboardAuth, (req, res) => {
+  const id = req.params.id;
+  db.prepare(`DELETE FROM companies WHERE id=?`).run(id);
+  res.redirect("/admin");
+});
+
+app.get("/admin/assign", requireDashboardAuth, (req, res) => {
+  const companies = db.prepare(`SELECT id,name FROM companies ORDER BY id`).all();
+  const mappings = db.prepare(`
+    SELECT fromNumber, companyId, updatedAt
+    FROM customer_company
+    ORDER BY datetime(updatedAt) DESC
+    LIMIT 50
+  `).all();
+
+  const form = `
+  <div class="card">
+    <form method="POST" action="/admin/assign">
+      <div class="row">
+        <div>
+          <label class="muted">Cliente (whatsapp:+54...)</label>
+          <input name="fromNumber" placeholder="whatsapp:+549381..." />
+        </div>
+        <div>
+          <label class="muted">Empresa</label>
+          <select name="companyId">
+            ${companies.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} — ${escapeHtml(c.name || "")}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:12px"><button>Asignar</button></div>
+    </form>
+  </div>`;
+
+  const list = `
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">Últimas asignaciones</div>
+    <table>
+      <thead><tr><th>Cliente</th><th>Empresa</th><th>Acción</th></tr></thead>
+      <tbody>
+        ${mappings.map(m => `
+          <tr>
+            <td><code>${escapeHtml(m.fromNumber)}</code></td>
+            <td><code>${escapeHtml(m.companyId)}</code></td>
+            <td>
+              <form method="POST" action="/admin/assign/delete" style="margin:0">
+                <input type="hidden" name="fromNumber" value="${escapeHtml(m.fromNumber)}"/>
+                <button class="secondary" type="submit">Quitar</button>
+              </form>
+            </td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  </div>`;
+
+  res.type("text/html").send(layout("Asignar empresa a cliente", form + list));
+});
+
+app.post("/admin/assign", requireDashboardAuth, (req, res) => {
+  let fromNumber = String(req.body.fromNumber || "").trim();
+  const companyId = String(req.body.companyId || "").trim();
+
+  if (!fromNumber.startsWith("whatsapp:")) {
+    if (fromNumber.startsWith("+")) fromNumber = `whatsapp:${fromNumber}`;
+    else if (fromNumber.match(/^\d+$/)) fromNumber = `whatsapp:+${fromNumber}`;
+  }
+
+  const exists = db.prepare(`SELECT id FROM companies WHERE id=?`).get(companyId);
+  if (!exists) return res.status(400).type("text/html").send(layout("Error", `<div class="card">Empresa no existe.</div>`));
+
+  db.prepare(`
+    INSERT INTO customer_company(fromNumber, companyId, updatedAt)
+    VALUES(?,?,?)
+    ON CONFLICT(fromNumber) DO UPDATE SET
+      companyId=excluded.companyId,
+      updatedAt=excluded.updatedAt
+  `).run(fromNumber, companyId, new Date().toISOString());
+
+  // también actualizo session si existe
+  const s = db.prepare(`SELECT dataJson FROM sessions WHERE fromNumber=?`).get(fromNumber);
+  if (s) {
+    const data = JSON.parse(s.dataJson || "{}");
+    data.companyId = companyId;
+    db.prepare(`UPDATE sessions SET dataJson=? WHERE fromNumber=?`).run(JSON.stringify(data), fromNumber);
+  }
+
+  res.redirect("/admin/assign");
+});
+
+app.post("/admin/assign/delete", requireDashboardAuth, (req, res) => {
+  const fromNumber = String(req.body.fromNumber || "").trim();
+  db.prepare(`DELETE FROM customer_company WHERE fromNumber=?`).run(fromNumber);
+  res.redirect("/admin/assign");
+});
+
+// ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÍ ==================
 // ================= WEBHOOK =================
 app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";
@@ -268,110 +682,109 @@ app.post("/whatsapp", async (req, res) => {
   if (from && !cmd.startsWith("admin")) setSetting("last_customer", from);
 
   const session = getSession(from);
+
+  // ✅ imponer empresa asignada por dashboard (customer_company)
+  const map = db.prepare(`SELECT companyId FROM customer_company WHERE fromNumber=?`).get(from);
+  if (map?.companyId) {
+    session.data.companyId = map.companyId;
+    saveSession(session);
+  }
+
   let reply = "No entendí 😅. Escribí: menu / catalogo / ayuda";
 
   // ================= HUMANO =================
- if (isHumanTrigger(text)) {
-  session.state = "HUMAN";
-  session.data.humanNotified = true;
-  saveSession(session);
+  if (isHumanTrigger(text)) {
+    session.state = "HUMAN";
+    session.data.humanNotified = true;
+    saveSession(session);
 
-  sendTelegram(
-    `🙋‍♂️ HUMANO SOLICITADO\n` +
-    `Empresa: ${getCompanySafe(session).name}\n` +
-    `Cliente: ${from}\n` +
-    `Mensaje: ${body}`
-  );
+    await sendTelegram(
+      `🙋‍♂️ HUMANO SOLICITADO\n` +
+      `Empresa: ${getCompanySafe(session).name}\n` +
+      `Cliente: ${from}\n` +
+      `Mensaje: ${body}`
+    );
 
-  return respond(
-    res,
-    "✅ Listo. Un asesor fue notificado y te va a responder en breve.\n\nMientras tanto podés escribir *menu* para volver al bot."
-  );
-}
+    return respond(
+      res,
+      "✅ Listo. Un asesor fue notificado y te va a responder en breve.\n\nMientras tanto podés escribir *menu* para volver al bot."
+    );
+  }
 
-// ===== SALIR DE HUMANO CON MENU / HOLA =====
-if (
-  session.state === "HUMAN" &&
-  (text === "menu" || text === "hola")
-) {
-  session.state = "MENU";
-  session.data.humanNotified = false;
-  saveSession(session);
-  return respond(res, menuText(getCompanySafe(session)));
-}
+  // ===== SALIR DE HUMANO CON MENU / HOLA =====
+  if (session.state === "HUMAN" && (text === "menu" || text === "hola")) {
+    session.state = "MENU";
+    session.data.humanNotified = false;
+    saveSession(session);
+    return respond(res, menuText(getCompanySafe(session)));
+  }
 
-// ===== BLOQUEO HUMANO (solo si NO pidió menu/hola) =====
-if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-  return respond(res, "⏳ Un asesor ya fue notificado. Escribí *menu* para volver.");
-}
+  // ===== BLOQUEO HUMANO (solo si NO pidió menu/hola) =====
+  if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
+    return respond(res, "⏳ Un asesor ya fue notificado. Escribí *menu* para volver.");
+  }
 
   // ================= ADMIN =================
   if (cmd.startsWith("admin")) {
     if (!isAdmin(from)) return respond(res, "⛔ Comando restringido.");
 
-    // admin whoami
     if (cmd === "admin whoami") return respond(res, `ADMIN OK: ${from}`);
 
-    // admin company list
     if (cmd === "admin company list") {
-      const rows = db.prepare(`SELECT id,name FROM companies`).all();
+      const rows = db.prepare(`SELECT id,name FROM companies ORDER BY id`).all();
       return respond(
         res,
-        rows.length
-          ? "📋 Empresas:\n" + rows.map(r => `• ${r.id} — ${r.name}`).join("\n")
-          : "No hay empresas."
+        rows.length ? "📋 Empresas:\n" + rows.map(r => `• ${r.id} — ${r.name}`).join("\n") : "No hay empresas."
       );
     }
 
-// admin company set <companyId> [whatsapp:+...]
-const companySet = cmd.match(/^admin company set ([a-z0-9_-]+)(?:\s+(.+))?$/i);
-if (companySet) {
-  const companyId = companySet[1].toLowerCase();
-  let target = (companySet[2] || "").trim();
+    // admin company set <companyId> [whatsapp:+...]
+    const companySet = cmd.match(/^admin company set ([a-z0-9_-]+)(?:\s+(.+))?$/i);
+    if (companySet) {
+      const companyId = companySet[1].toLowerCase();
+      let target = (companySet[2] || "").trim();
 
-  // validar empresa
-  const row = db.prepare("SELECT id, name FROM companies WHERE id = ?").get(companyId);
-  if (!row) {
-    reply = `No existe la empresa '${companyId}'.`;
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-    return res.type("text/xml").send(twiml.toString());
-  }
+      const row = db.prepare("SELECT id, name FROM companies WHERE id = ?").get(companyId);
+      if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
-  // target = último cliente si no se pasa número
-  if (!target) target = getSetting("last_customer");
-  if (!target) {
-    reply = "No tengo 'último cliente' todavía. Hacé que un cliente mande un mensaje primero.";
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-    return res.type("text/xml").send(twiml.toString());
-  }
+      if (!target) target = getSetting("last_customer");
+      if (!target) return respond(res, "No tengo 'último cliente' todavía. Hacé que un cliente mande un mensaje primero.");
 
-  // normalizar formato whatsapp:
-  if (!target.startsWith("whatsapp:")) {
-    if (target.startsWith("+")) target = `whatsapp:${target}`;
-    else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
-  }
+      if (!target.startsWith("whatsapp:")) {
+        if (target.startsWith("+")) target = `whatsapp:${target}`;
+        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+      }
 
-  // setear en la sesión del cliente
-  const s2 = getSession(target);
-  s2.data.companyId = companyId;
-  saveSession(s2);
+      // ✅ guardar asignación persistente
+      db.prepare(`
+        INSERT INTO customer_company(fromNumber, companyId, updatedAt)
+        VALUES(?,?,?)
+        ON CONFLICT(fromNumber) DO UPDATE SET
+          companyId=excluded.companyId,
+          updatedAt=excluded.updatedAt
+      `).run(target, companyId, new Date().toISOString());
 
-  reply = `🏢 Empresa para ${target}: ${row.id} (${row.name}) ✅`;
-  const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(reply);
-  return res.type("text/xml").send(twiml.toString());
-}
+      // opcional: también session
+      const s2 = getSession(target);
+      s2.data.companyId = companyId;
+      saveSession(s2);
+
+      return respond(res, `🏢 Empresa para ${target}: ${row.id} (${row.name}) ✅`);
+    }
 
     // admin ai set off|lite|pro [numero]
     const mAi = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
     if (mAi) {
-      let target = mAi[2] || getSetting("last_customer");
+      let target = (mAi[2] || "").trim() || getSetting("last_customer");
       if (!target) return respond(res, "No hay cliente activo.");
-      if (!target.startsWith("whatsapp:")) target = `whatsapp:${target.replace("+","")}`;
+
+      if (!target.startsWith("whatsapp:")) {
+        if (target.startsWith("+")) target = `whatsapp:${target}`;
+        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+      }
+
       const s2 = getSession(target);
-      s2.data.aiMode = mAi[1];
+      s2.data.aiMode = mAi[1].toLowerCase();
       saveSession(s2);
       return respond(res, `🤖 IA ${mAi[1].toUpperCase()} para ${target}`);
     }
@@ -379,91 +792,45 @@ if (companySet) {
     // admin ai status
     const mStatus = cmd.match(/^admin ai status(?:\s+(.+))?$/i);
     if (mStatus) {
-      let target = mStatus[1] || getSetting("last_customer");
+      let target = (mStatus[1] || "").trim() || getSetting("last_customer");
       if (!target) return respond(res, "No hay cliente activo.");
-      if (!target.startsWith("whatsapp:")) target = `whatsapp:${target.replace("+","")}`;
+
+      if (!target.startsWith("whatsapp:")) {
+        if (target.startsWith("+")) target = `whatsapp:${target}`;
+        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+      }
+
       const s2 = getSession(target);
       return respond(res, `🤖 IA: ${(s2.data.aiMode || "off").toUpperCase()}`);
     }
 
     return respond(res, "Admin OK");
   }
-// ================= TELEGRAM ALERTS =================
-const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
-const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
 
-async function sendTelegram(text) {
-  const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
-  const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log("Telegram not configured (missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)");
-    return false;
+  // ================= MENU / CATALOGO / CARRITO / AGREGAR =================
+  if (text === "menu" || text === "hola") {
+    session.state = "MENU";
+    session.data.humanNotified = false;
+    saveSession(session);
+    return respond(res, menuText(getCompanySafe(session)));
   }
 
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  try {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 8000);
+  if (text === "catalogo") return respond(res, catalogText(getCompanySafe(session)));
+  if (text === "carrito") return respond(res, cartText(session));
 
-    const r = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-        disable_web_page_preview: true,
-      }),
-    });
-
-    clearTimeout(t);
-
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || data.ok === false) {
-      console.error("Telegram API error:", r.status, data);
-      return false;
-    }
-
-    return true;
-  } catch (e) {
-    console.error("Telegram notify failed:", e?.message || e);
-    return false;
+  const mAdd = text.match(/^agregar\s+(\d+)$/);
+  if (mAdd) {
+    const id = Number(mAdd[1]);
+    const company = getCompanySafe(session);
+    const p = (company.catalog || []).find((x) => Number(x.id) === id);
+    if (!p) return respond(res, "Ese producto no existe. Escribí catalogo y elegí una opción válida.");
+    session.cart.push(id);
+    saveSession(session);
+    return respond(res, `✅ Agregado ${p.name}\n\n${cartText(session)}\n\nPara finalizar: checkout`);
   }
-}
-
-// ================= MENU / CATALOGO / CARRITO / AGREGAR (UNICO) =================
-if (text === "menu" || text === "hola") {
-  session.state = "MENU";
-  session.data.humanNotified = false;
-  saveSession(session);
-  return respond(res, menuText(getCompanySafe(session)));
-}
-
-if (text === "catalogo") {
-  return respond(res, catalogText(getCompanySafe(session)));
-}
-
-if (text === "carrito") {
-  return respond(res, cartText(session));
-}
-
-const mAdd = text.match(/^agregar\s+(\d+)$/);
-if (mAdd) {
-  const id = Number(mAdd[1]);
-  const company = getCompanySafe(session);
-  const p = company.catalog.find((x) => Number(x.id) === id);
-  if (!p) return respond(res, "Ese producto no existe. Escribí catalogo y elegí una opción válida.");
-  session.cart.push(id);
-  saveSession(session);
-  return respond(res, `✅ Agregado ${p.name}\n\n${cartText(session)}\n\nPara finalizar: checkout`);
-}
 
   // ================= IA =================
-  if (
-    ["lite","pro"].includes(session.data.aiMode) &&
-    session.state === "MENU" &&
-    !isReserved(text)
-  ) {
+  if (["lite","pro"].includes(String(session.data.aiMode || "").toLowerCase()) && session.state === "MENU" && !isReserved(text)) {
     const ai = await aiReply(session, from, body);
     if (ai) return respond(res, ai);
   }
@@ -476,14 +843,14 @@ if (mAdd) {
     return respond(res, "¿A nombre de quién va el pedido?");
   }
 
-  if (session.state === "ASK_NAME") {
+  if (session.state === "ASK_NAME" && !isReserved(text)) {
     session.data.name = body;
     session.state = "ASK_CONTACT";
     saveSession(session);
     return respond(res, "Pasame un contacto.");
   }
 
-  if (session.state === "ASK_CONTACT") {
+  if (session.state === "ASK_CONTACT" && !isReserved(text)) {
     session.data.contact = body;
     session.state = "READY";
     saveSession(session);
@@ -494,25 +861,27 @@ if (mAdd) {
   if (text === "confirmar" && session.state === "READY") {
     const company = getCompanySafe(session);
     const items = [...session.cart];
+
     let total = 0;
     const detailed = {};
-    items.forEach(id => detailed[id] = (detailed[id] || 0) + 1);
-    const itemsDetailed = Object.entries(detailed).map(([id,q])=>{
-      const p = company.catalog.find(x=>x.id==id);
-      const sub = p.price*q; total+=sub;
-      return { id:Number(id), name:p.name, qty:q, unit:p.price, subtotal:sub };
+    items.forEach((id) => (detailed[id] = (detailed[id] || 0) + 1));
+
+    const itemsDetailed = Object.entries(detailed).map(([id, q]) => {
+      const p = (company.catalog || []).find((x) => Number(x.id) === Number(id));
+      const unit = Number(p?.price || 0);
+      const sub = unit * q;
+      total += sub;
+      return { id: Number(id), name: p?.name || "Producto", qty: q, unit, subtotal: sub };
     });
 
     const orderId = newOrderId();
-    db.prepare(`
-      INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
+    db.prepare(`INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       orderId,
       new Date().toISOString(),
       from,
       company.id,
-      session.data.name,
-      session.data.contact,
+      session.data.name || "",
+      session.data.contact || "",
       "",
       JSON.stringify(items),
       JSON.stringify(itemsDetailed),
@@ -545,6 +914,6 @@ function respond(res, text) {
 
 // ================= HEALTH =================
 app.get("/", (_, res) => res.send("OK"));
-app.listen(process.env.PORT || 3000, () =>
-  console.log("🚀 Bot corriendo")
-);
+app.get("/health", (_, res) => res.json({ ok: true }));
+
+app.listen(process.env.PORT || 3000, () => console.log("🚀 Bot corriendo"));
