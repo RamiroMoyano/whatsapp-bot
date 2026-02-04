@@ -352,22 +352,133 @@ function layout(title, body) {
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${escapeHtml(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  body{font-family:system-ui,Segoe UI,Arial;margin:20px;background:#0b0f1a;color:#e7e9ee}
-  a{color:#8ab4ff;text-decoration:none}
-  .top{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
-  .card{background:#111a2e;border:1px solid #22325a;border-radius:12px;padding:14px;margin:12px 0}
-  input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a3b66;background:#0b1224;color:#e7e9ee}
-  textarea{min-height:160px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace}
-  button{padding:10px 12px;border-radius:10px;border:0;background:#2d6cdf;color:white;cursor:pointer}
-  button.secondary{background:#29324a}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .muted{color:#a7b0c2;font-size:13px}
-  .danger{background:#d94141}
-  code{background:#0b1224;border:1px solid #2a3b66;padding:2px 6px;border-radius:8px}
+  :root{
+    --bg:#0b1220;
+    --panel:#0f1a30;
+    --panel2:#0c162a;
+    --border:#203255;
+    --text:#e8eefc;
+    --muted:#a8b3cc;
+    --brand:#2d6cdf;     /* azul principal */
+    --brand2:#1f57c6;
+    --danger:#ef4444;
+    --ok:#22c55e;
+    --shadow: 0 12px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:20px;
+    background: radial-gradient(1200px 600px at 20% 0%, rgba(45,108,223,.16), transparent 60%),
+                radial-gradient(900px 500px at 90% 20%, rgba(45,108,223,.10), transparent 55%),
+                var(--bg);
+    color:var(--text);
+    font-family: Inter, system-ui, Segoe UI, Arial;
+    line-height:1.35;
+  }
+
+  a{color:#9fc2ff;text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  .top{
+    display:flex;gap:12px;align-items:center;justify-content:space-between;
+    margin-bottom:16px;
+  }
+
+  .card{
+    background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:16px;
+    margin:14px 0;
+    box-shadow: var(--shadow);
+  }
+
+  input,textarea,select{
+    width:100%;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background: rgba(5,10,20,.55);
+    color:var(--text);
+    outline:none;
+  }
+  input:focus,textarea:focus,select:focus{
+    border-color: rgba(45,108,223,.65);
+    box-shadow: 0 0 0 4px rgba(45,108,223,.18);
+  }
+
+  textarea{
+    min-height:170px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+    resize:vertical;
+  }
+
+  button{
+    padding:10px 14px;
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background: linear-gradient(180deg, var(--brand), var(--brand2));
+    color:white;
+    cursor:pointer;
+    font-weight:600;
+    transition: transform .05s ease, filter .15s ease;
+  }
+  button:hover{filter:brightness(1.05)}
+  button:active{transform:translateY(1px)}
+  button.secondary{
+    background: rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);
+  }
+  button.danger{
+    background: linear-gradient(180deg, var(--danger), #c81e1e);
+  }
+
+  .row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+  }
+  @media (max-width: 900px){
+    .row{grid-template-columns:1fr}
+    .top{flex-direction:column;align-items:flex-start}
+  }
+
+  .muted{color:var(--muted);font-size:13px}
+  code{
+    background: rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);
+    padding:3px 8px;
+    border-radius:999px;
+    color:#dbe7ff;
+  }
+
   table{width:100%;border-collapse:collapse}
-  td,th{border-bottom:1px solid #22325a;padding:10px;text-align:left}
-  .pill{display:inline-block;padding:4px 8px;border:1px solid #22325a;border-radius:999px;font-size:12px;color:#a7b0c2}
+  td,th{
+    border-bottom:1px solid rgba(255,255,255,.10);
+    padding:10px;
+    text-align:left;
+  }
+  th{color:#dbe7ff;font-weight:700}
+
+  .pill{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 12px;
+    border-radius:999px;
+    border:1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.06);
+    color:#dbe7ff;
+    font-size:13px;
+  }
+  .pill:hover{filter:brightness(1.05);text-decoration:none}
+
+  .top a{margin-left:10px}
 </style>
 </head>
 <body>
@@ -377,7 +488,7 @@ function layout(title, body) {
       <div class="muted">Dashboard de empresas (catálogo + manual + reglas)</div>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
-      <a href="/admin">Empresas</a>
+      <a class="pill" href="/admin/company/...">Editar</a></td>
       <a href="/admin/assign">Asignar clientes</a>
       <a href="/admin/logout" class="pill">Logout</a>
     </div>
