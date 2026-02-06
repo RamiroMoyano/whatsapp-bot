@@ -332,3 +332,24 @@ input:focus, textarea:focus, select:focus{
   margin-bottom:14px;
   opacity:.95;
 }
+.login-header-col{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  margin-bottom: 10px;
+  text-align:center;
+}
+
+.logo-img-top{
+  height: 92px;     /* ajustá: 80-120 */
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.35));
+}
+
+/* opcional: achicar la barrita superior si molesta */
+.center-card::before{
+  height: 5px;
+}

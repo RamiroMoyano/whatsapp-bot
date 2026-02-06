@@ -151,9 +151,9 @@ app.get("/admin/login", (req, res) => {
       <body class="dark">
         <div class="login-wrap">
           <div class="center-card login-card">
-            <div class="login-header">
-              <div class="logo-slot">
-  <img src="/img/logo.png" class="logo-img" />
+     <div class="login-header-col">
+  <img src="/img/logo.png" class="logo-img-top" alt="Logo" />
+  <h2 style="margin:0">Entrar</h2>
 </div>
 <img src="/img/banner.png" class="login-banner" />
               <div>
