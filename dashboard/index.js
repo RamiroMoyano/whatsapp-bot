@@ -1,11 +1,16 @@
 import express from "express";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use(express.static(path.join(__dirname, "public")));
 
 const DASH_USER = (process.env.DASH_USER || "").trim();
 const DASH_PASS = (process.env.DASH_PASS || "").trim();
@@ -69,12 +74,27 @@ async function api(path, { method = "GET", body } = {}) {
 // Login
 app.get("/admin/login", (req, res) => {
   res.type("text/html").send(`
-    <h2>Login</h2>
-    <form method="POST" action="/admin/login">
-      <input name="user" placeholder="user"/><br/>
-      <input name="pass" type="password" placeholder="pass"/><br/>
-      <button>Entrar</button>
-    </form>
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link rel="stylesheet" href="/dashboard.css" />
+        <title>Login</title>
+      </head>
+      <body class="dark">
+        <div class="center-card">
+          <h2>Entrar</h2>
+          <form method="POST" action="/admin/login" class="form">
+            <input name="user" placeholder="Usuario" />
+            <input name="pass" type="password" placeholder="Contraseña" />
+            <div class="actions">
+              <button class="btn primary">Entrar</button>
+            </div>
+          </form>
+        </div>
+      </body>
+    </html>
   `);
 });
 
@@ -104,9 +124,24 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   `).join("");
 
   res.type("text/html").send(`
-    <h2>Empresas</h2>
-    <a href="/admin/logout">Logout</a>
-    <ul>${rows}</ul>
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link rel="stylesheet" href="/dashboard.css" />
+        <title>Empresas</title>
+      </head>
+      <body class="dark">
+        <div class="container">
+          <header class="top">
+            <h2>Empresas</h2>
+            <a class="btn secondary" href="/admin/logout">Logout</a>
+          </header>
+          <ul class="company-list">${rows}</ul>
+        </div>
+      </body>
+    </html>
   `);
 });
 
@@ -114,19 +149,38 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
 app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
   const c = await api(`/api/companies/${encodeURIComponent(req.params.id)}`);
   res.type("text/html").send(`
-    <h2>Editar ${c.id}</h2>
-    <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save">
-      <label>Nombre</label><br/>
-      <input name="name" value="${(c.name || "").replaceAll('"', '&quot;')}"/><br/><br/>
-      <label>Prompt</label><br/>
-      <textarea name="prompt" rows="8" cols="80">${c.prompt || ""}</textarea><br/><br/>
-      <label>Catalog JSON</label><br/>
-      <textarea name="catalogJson" rows="10" cols="80">${c.catalogJson || "[]"}</textarea><br/><br/>
-      <label>Rules JSON</label><br/>
-      <textarea name="rulesJson" rows="10" cols="80">${c.rulesJson || "{}"}</textarea><br/><br/>
-      <button>Guardar</button>
-      <a href="/admin">Volver</a>
-    </form>
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link rel="stylesheet" href="/dashboard.css" />
+        <title>Editar ${c.id}</title>
+      </head>
+      <body class="dark">
+        <div class="center-card large">
+          <h2>Editar ${c.id}</h2>
+          <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
+            <label>Nombre</label>
+            <input name="name" value="${(c.name || "").replaceAll('"', '&quot;')}" />
+
+            <label>Prompt</label>
+            <textarea name="prompt" rows="5">${c.prompt || ""}</textarea>
+
+            <label>Catalog JSON</label>
+            <textarea name="catalogJson" rows="6">${c.catalogJson || "[]"}</textarea>
+
+            <label>Rules JSON</label>
+            <textarea name="rulesJson" rows="6">${c.rulesJson || "{}"}</textarea>
+
+            <div class="actions">
+              <button class="btn primary">Guardar</button>
+              <a class="btn secondary" href="/admin">Volver</a>
+            </div>
+          </form>
+        </div>
+      </body>
+    </html>
   `);
 });
 
