@@ -153,13 +153,9 @@ app.get("/admin/login", (req, res) => {
           <div class="center-card login-card">
             <div class="login-header">
               <div class="logo-slot">
-                <!-- OPCIÓN A: imagen -->
-                <!-- <img src="/logo.png" alt="Logo" /> -->
-
-                <!-- OPCIÓN B: iniciales -->
-                <div class="logo-badge">WB</div>
-              </div>
-
+  <img src="/img/logo.png" class="logo-img" />
+</div>
+<img src="/img/banner.png" class="login-banner" />
               <div>
                 <h2 style="margin:0">Entrar</h2>
                 <div class="muted">Panel de administración</div>

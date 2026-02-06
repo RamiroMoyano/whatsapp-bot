@@ -316,3 +316,19 @@ input:focus, textarea:focus, select:focus{
   flex-wrap:wrap;
   margin-top: 10px;
 }
+/* ===== LOGIN IMAGES ===== */
+
+.logo-img{
+  height:48px;
+  width:auto;
+  object-fit:contain;
+}
+
+.login-banner{
+  width:100%;
+  max-height:120px;
+  object-fit:cover;
+  border-radius:14px;
+  margin-bottom:14px;
+  opacity:.95;
+}
