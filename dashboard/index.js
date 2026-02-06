@@ -193,6 +193,42 @@ app.get("/admin/login", (req, res) => {
 </html>`);
 });
 
+app.post("/admin/login", (req, res) => {
+  const user = (req.body.user || "").trim();
+  const pass = (req.body.pass || "").trim();
+
+  if (!DASH_USER || !DASH_PASS || !DASH_COOKIE_SECRET) {
+    return res.status(500).send("Faltan env: DASH_USER, DASH_PASS, DASH_COOKIE_SECRET");
+  }
+
+  if (user !== DASH_USER || pass !== DASH_PASS) {
+    return res.status(401).type("text/html").send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Login</title>
+  </head>
+  <body class="dark login-stage">
+    <div class="login-wrap">
+      <div class="center-card login-card">
+        <h2 class="login-title">Entrar</h2>
+        <div class="muted" style="text-align:center;margin:6px 0 14px;color:#ffb4b4">
+          Credenciales incorrectas
+        </div>
+        <a class="btn secondary" href="/admin/login" style="justify-content:center">Volver</a>
+      </div>
+    </div>
+  </body>
+</html>`);
+  }
+
+  const token = crypto.randomBytes(24).toString("hex");
+  setCookie(res, "dash", `${token}.${signToken(token)}`);
+  res.redirect("/admin");
+});
+
 // ================= EMPRESAS =================
 app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
