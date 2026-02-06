@@ -147,15 +147,17 @@ app.get("/admin/login", (req, res) => {
     <link rel="stylesheet" href="/dashboard.css" />
     <title>Login</title>
   </head>
-  <body class="dark login-page">
+  <body class="dark login-stage">
 
-    <div class="login-hero">
-      <img src="/img/banner.png" alt="Banner" />
+    <div class="login-bg-logo">
+      <img src="/img/logo.png" alt="Logo" />
     </div>
+
+    <img class="side-banner left"  src="/img/banner-izq.png" alt="Banner izquierdo" />
+    <img class="side-banner right" src="/img/banner-der.png" alt="Banner derecho" />
 
     <div class="login-wrap">
       <div class="center-card login-card">
-
         <h2 class="login-title">Entrar</h2>
 
         <form method="POST" action="/admin/login" class="form">
@@ -173,7 +175,6 @@ app.get("/admin/login", (req, res) => {
             <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
           </div>
         </form>
-
       </div>
     </div>
 

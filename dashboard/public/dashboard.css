@@ -448,3 +448,75 @@ input:focus, textarea:focus, select:focus{
   margin-top: 10px;
   justify-content:center;
 }
+/* ===== LOGIN: stage with side banners + background logo ===== */
+.login-stage{
+  min-height:100vh;
+  position:relative;
+  overflow:hidden;
+}
+
+/* logo grande detrás (marca de agua) */
+.login-bg-logo{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  z-index:0;
+}
+.login-bg-logo img{
+  width:min(520px, 70vw);
+  opacity:.10;              /* marca de agua */
+  filter: blur(0px) drop-shadow(0 18px 28px rgba(0,0,0,.35));
+}
+
+/* banners laterales */
+.side-banner{
+  position:absolute;
+  top:50%;
+  transform:translateY(-50%);
+  height:min(520px, 70vh);
+  width:auto;
+  object-fit:contain;
+  opacity:.95;
+  filter: drop-shadow(0 18px 28px rgba(0,0,0,.35));
+  z-index:1;
+  pointer-events:none;
+}
+
+.side-banner.left{ left: 40px; }
+.side-banner.right{ right: 40px; }
+
+/* card centrado */
+.login-wrap{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  position:relative;
+  z-index:2; /* arriba de banners/logo */
+}
+
+.login-card{
+  width:min(440px, calc(100% - 32px));
+}
+
+.login-title{
+  text-align:center;
+  margin:0 0 14px;
+  font-size:22px;
+  font-weight:800;
+}
+
+/* responsive: ocultar banners en pantallas chicas */
+@media (max-width: 1100px){
+  .side-banner{ opacity:.45; height: 420px; }
+  .side-banner.left{ left: 10px; }
+  .side-banner.right{ right: 10px; }
+}
+@media (max-width: 820px){
+  .side-banner{ display:none; }   /* en celular se ocultan */
+  .login-bg-logo img{ width:min(360px, 80vw); opacity:.08; }
+}
