@@ -139,78 +139,57 @@ function toCsv(rows) {
 
 // ================= LOGIN =================
 app.get("/admin/login", (req, res) => {
-  res.type("text/html").send(`
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <link rel="stylesheet" href="/dashboard.css" />
-        <title>LOGIN-V2</title>
-      </head>
-      <body class="dark login-page">
+  res.type("text/html").send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Login</title>
+  </head>
+  <body class="dark login-page">
 
-  <div class="login-hero">
-    <img src="/img/banner.png" alt="Banner" />
-  </div>
-
-  <div class="login-wrap">
-    <div class="center-card login-card">
-
-      <h2 style="text-align:center;margin-bottom:14px">Entrar</h2>
-
-      <form method="POST" action="/admin/login" class="form">
-
-        <label>Usuario</label>
-        <input name="user" placeholder="Usuario" />
-
-        <label>Contraseña</label>
-        <div class="pw-row">
-          <input id="pw" name="pass" type="password" placeholder="Contraseña" />
-          <button type="button" class="icon-btn" id="togglePw">👁️</button>
-        </div>
-
-        <div class="actions" style="justify-content:center">
-          <button class="btn primary">Entrar</button>
-          <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
-        </div>
-
-      </form>
+    <div class="login-hero">
+      <img src="/img/banner.png" alt="Banner" />
     </div>
-  </div>
 
-<script>
-const pw = document.getElementById("pw");
-document.getElementById("togglePw").onclick = () =>
-  pw.type = pw.type === "password" ? "text" : "password";
-</script>
+    <div class="login-wrap">
+      <div class="center-card login-card">
 
-</body>
+        <h2 class="login-title">Entrar</h2>
 
-app.get("/admin/forgot", (req, res) => {
-  res.type("text/html").send(`
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <link rel="stylesheet" href="/dashboard.css" />
-        <title>Recuperar</title>
-      </head>
-      <body class="dark">
-        <div class="login-wrap">
-          <div class="center-card login-card">
-            <h2 style="margin:0 0 8px">Recuperación</h2>
-            <div class="muted" style="margin-bottom:14px">
-              Por seguridad, la recuperación por email todavía no está habilitada.
-              Pedile al administrador que resetee la clave desde Render (env vars).
-            </div>
-            <a class="btn secondary" href="/admin/login">Volver al login</a>
+        <form method="POST" action="/admin/login" class="form">
+          <label>Usuario</label>
+          <input name="user" placeholder="Usuario" autocomplete="username" />
+
+          <label>Contraseña</label>
+          <div class="pw-row">
+            <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
+            <button type="button" class="icon-btn" id="togglePw" aria-label="Ver contraseña" title="Ver contraseña">👁️</button>
           </div>
-        </div>
-      </body>
-    </html>
-  `);
+
+          <div class="login-actions">
+            <button class="btn primary" style="min-width:140px">Entrar</button>
+            <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+          </div>
+        </form>
+
+      </div>
+    </div>
+
+    <script>
+      const pw = document.getElementById("pw");
+      const btn = document.getElementById("togglePw");
+      btn.addEventListener("click", () => {
+        const isHidden = pw.type === "password";
+        pw.type = isHidden ? "text" : "password";
+        btn.textContent = isHidden ? "🙈" : "👁️";
+        btn.title = isHidden ? "Ocultar contraseña" : "Ver contraseña";
+      });
+    </script>
+
+  </body>
+</html>`);
 });
 
 // ================= EMPRESAS =================

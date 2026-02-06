@@ -394,3 +394,57 @@ input:focus, textarea:focus, select:focus{
   width:420px;
   margin-top:0;
 }
+/* ===== LOGIN HERO STYLE ===== */
+.login-page{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  min-height:100vh;
+}
+
+.login-hero{
+  width:100%;
+  height:220px;
+  overflow:hidden;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  margin-bottom:-80px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+.login-hero img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  opacity:.95;
+  filter:brightness(.9);
+}
+
+.login-wrap{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  z-index:2;
+  padding: 0 24px 24px;
+}
+
+.login-card{
+  width:min(440px, calc(100% - 32px));
+  margin-top:0;
+}
+
+.login-title{
+  text-align:center;
+  margin: 0 0 14px;
+  font-size: 22px;
+  font-weight: 800;
+}
+.login-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top: 10px;
+  justify-content:center;
+}
