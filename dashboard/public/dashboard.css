@@ -250,3 +250,69 @@ input:focus, textarea:focus, select:focus{
 .table tr:hover td{
   background: rgba(255,255,255,.03);
 }
+
+.login-wrap{
+  min-height: 100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 24px;
+}
+
+.login-card{
+  width:min(560px, calc(100% - 32px));
+}
+
+.login-header{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-bottom: 4px;
+}
+
+.logo-slot{
+  width:52px;
+  height:52px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.logo-badge{
+  width:52px;
+  height:52px;
+  border-radius: 14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+  letter-spacing:-0.02em;
+  color:white;
+  background: linear-gradient(180deg, var(--brand), var(--brand2));
+  box-shadow: 0 10px 24px rgba(0,0,0,.35);
+}
+
+.pw-row{
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+
+.icon-btn{
+  width:46px;
+  height:44px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  cursor:pointer;
+  font-size: 16px;
+}
+.icon-btn:hover{ filter: brightness(1.06); }
+
+.login-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top: 10px;
+}
