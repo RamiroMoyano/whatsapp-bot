@@ -353,3 +353,44 @@ input:focus, textarea:focus, select:focus{
 .center-card::before{
   height: 5px;
 }
+/* ===== LOGIN HERO STYLE ===== */
+
+.login-page{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  min-height:100vh;
+}
+
+/* banner superior */
+.login-hero{
+  width:100%;
+  height:220px; /* altura del banner */
+  overflow:hidden;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  margin-bottom:-80px; /* superpone el card */
+}
+
+.login-hero img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  opacity:.9;
+  filter:brightness(.9);
+}
+
+/* card centrado */
+.login-wrap{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  z-index:2;
+}
+
+.login-card{
+  width:420px;
+  margin-top:0;
+}
