@@ -146,56 +146,46 @@ app.get("/admin/login", (req, res) => {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <link rel="stylesheet" href="/dashboard.css" />
-        <title>Login</title>
+        <title>LOGIN-V2</title>
       </head>
-      <body class="dark">
-        <div class="login-wrap">
-          <div class="center-card login-card">
-     <div class="login-header-col">
-  <img src="/img/logo.png" class="logo-img-top" alt="Logo" />
-  <h2 style="margin:0">Entrar</h2>
-</div>
-<img src="/img/banner.png" class="login-banner" />
-              <div>
-                <h2 style="margin:0">Entrar</h2>
-                <div class="muted">Panel de administración</div>
-              </div>
-            </div>
+      <body class="dark login-page">
 
-            <form method="POST" action="/admin/login" class="form" style="margin-top:10px">
-              <label>Usuario</label>
-              <input name="user" placeholder="Usuario" autocomplete="username" />
+  <div class="login-hero">
+    <img src="/img/banner.png" alt="Banner" />
+  </div>
 
-              <label>Contraseña</label>
-              <div class="pw-row">
-                <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-                <button type="button" class="icon-btn" id="togglePw" aria-label="Ver contraseña" title="Ver contraseña">
-                  👁️
-                </button>
-              </div>
+  <div class="login-wrap">
+    <div class="center-card login-card">
 
-              <div class="login-actions">
-                <button class="btn primary" style="min-width:140px">Entrar</button>
-                <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
-              </div>
-            </form>
-          </div>
+      <h2 style="text-align:center;margin-bottom:14px">Entrar</h2>
+
+      <form method="POST" action="/admin/login" class="form">
+
+        <label>Usuario</label>
+        <input name="user" placeholder="Usuario" />
+
+        <label>Contraseña</label>
+        <div class="pw-row">
+          <input id="pw" name="pass" type="password" placeholder="Contraseña" />
+          <button type="button" class="icon-btn" id="togglePw">👁️</button>
         </div>
 
-        <script>
-          const pw = document.getElementById("pw");
-          const btn = document.getElementById("togglePw");
-          btn.addEventListener("click", () => {
-            const isHidden = pw.type === "password";
-            pw.type = isHidden ? "text" : "password";
-            btn.textContent = isHidden ? "🙈" : "👁️";
-            btn.title = isHidden ? "Ocultar contraseña" : "Ver contraseña";
-          });
-        </script>
-      </body>
-    </html>
-  `);
-});
+        <div class="actions" style="justify-content:center">
+          <button class="btn primary">Entrar</button>
+          <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+<script>
+const pw = document.getElementById("pw");
+document.getElementById("togglePw").onclick = () =>
+  pw.type = pw.type === "password" ? "text" : "password";
+</script>
+
+</body>
 
 app.get("/admin/forgot", (req, res) => {
   res.type("text/html").send(`
