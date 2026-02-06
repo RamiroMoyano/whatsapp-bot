@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-bot-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.16.0",
+    "twilio": "^5.11.2"
+  }
+}
