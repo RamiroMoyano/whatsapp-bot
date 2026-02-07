@@ -138,58 +138,100 @@ function toCsv(rows) {
 }
 
 // ================= LOGIN =================
-app.get("/admin/login", (req, res) => {
+app.get("/admin", requireDashboardAuth, async (req, res) => {
+  const companies = await api("/api/companies");
+  const rows = companies.map(c => `
+    <div class="company-item">
+      <div>
+        <div><b>${c.id}</b> — ${c.name || ""}</div>
+        <div class="muted">Creada: ${c.createdAt || "-"}</div>
+      </div>
+      <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
+    </div>
+  `).join("");
+
   res.type("text/html").send(`
 <!doctype html>
 <html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/dashboard.css"/>
-  <title>BabySteps Login</title>
-</head>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>BabySteps • Admin</title>
+  </head>
+  <body>
+    <div class="container">
 
-<body class="bs-login">
+      <div class="admin-header">
+        <div class="brand">
+          <img src="/img/logo.png" alt="BabySteps" />
+          <div>
+            <div class="title">BabySteps</div>
+            <div class="subtitle">Admin Console</div>
+          </div>
+        </div>
 
-  <!-- Fondo full screen -->
-  <img class="bs-robot" src="/img/robot.png" alt="Robot" />
-
-  <div class="bs-card">
-    <div class="bs-brand">
-      <div class="bs-dot"></div>
-      <div>
-        <div class="bs-title">BabySteps</div>
-        <div class="bs-subtitle">Console</div>
+        <div class="nav-tabs">
+          <a class="btn ${"primary"}" href="/admin">Empresas</a>
+          <a class="btn secondary" href="/admin/orders">Pedidos</a>
+          <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
+          <a class="btn secondary" href="/admin/logout">Logout</a>
+        </div>
       </div>
+
+      <div class="kpis">
+        <div class="kpi">
+          <div class="label">Empresas</div>
+          <div class="value">${companies.length}</div>
+          <div class="hint">Total activas</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Pedidos hoy</div>
+          <div class="value">—</div>
+          <div class="hint">Lo conectamos después</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Clientes</div>
+          <div class="value">—</div>
+          <div class="hint">Lo conectamos después</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Bots online</div>
+          <div class="value">—</div>
+          <div class="hint">Lo conectamos después</div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Crear empresa</h3>
+          <form method="POST" action="/admin/company/create" class="form">
+            <div class="grid2">
+              <input name="id" placeholder="company_id (ej: veterinaria_sm)" required />
+              <input name="name" placeholder="Nombre visible" />
+            </div>
+            <div class="actions">
+              <button class="btn primary">Crear</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Tips</h3>
+          <div class="muted">
+            • ID sin espacios, en minúscula y con guiones bajos<br/>
+            • Después podés editar prompt / catálogo / reglas
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 12px;">Listado</h3>
+        <div class="company-list">${rows || `<div class="muted">Aún no hay empresas.</div>`}</div>
+      </div>
+
     </div>
-
-    <h2 class="bs-h2">Entrar</h2>
-
-    <form method="POST" action="/admin/login">
-      <input name="user" placeholder="Usuario" autocomplete="username" required />
-
-      <div class="bs-pw">
-        <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" required />
-        <button class="bs-eye" type="button" id="togglePw" aria-label="Ver contraseña">👁</button>
-      </div>
-
-      <div class="bs-actions">
-        <button class="bs-btn primary" type="submit">Entrar</button>
-        <a class="bs-btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
-      </div>
-    </form>
-  </div>
-
-  <script>
-    const btn = document.getElementById("togglePw");
-    const pw = document.getElementById("pw");
-    btn.addEventListener("click", () => {
-      pw.type = pw.type === "password" ? "text" : "password";
-      btn.textContent = pw.type === "password" ? "👁" : "🙈";
-    });
-  </script>
-
-</body>
+  </body>
 </html>
   `);
 });
