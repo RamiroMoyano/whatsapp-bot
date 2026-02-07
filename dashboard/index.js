@@ -138,100 +138,134 @@ function toCsv(rows) {
 }
 
 // ================= LOGIN =================
-app.get("/admin/login", (req, res) => {
+app.get("/admin", requireDashboardAuth, async (req, res) => {
+  const companies = await api("/api/companies");
+
+  const companiesCount = companies.length;
+
+  // KPIs simples (por ahora)
+  const kpiHtml = `
+    <div class="kpis">
+      <div class="kpi">
+        <div class="label">Empresas</div>
+        <div class="value">${companiesCount}</div>
+        <div class="hint">Creadas en el sistema</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Pedidos hoy</div>
+        <div class="value">—</div>
+        <div class="hint">Próximo: /api/stats</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Clientes</div>
+        <div class="value">—</div>
+        <div class="hint">Próximo: /api/customers</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Bots online</div>
+        <div class="value">1</div>
+        <div class="hint">Backend activo</div>
+      </div>
+    </div>
+  `;
+
+  const listOrEmpty = companiesCount
+    ? `
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nombre</th>
+            <th style="width:140px">Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${companies.map(c => `
+            <tr>
+              <td><code>${c.id}</code></td>
+              <td>${c.name || ""}</td>
+              <td><a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `
+    : `
+      <div class="empty">
+        <img src="/img/mascot.png" alt="Mascota" />
+        <div>
+          <b>Aún no hay empresas creadas</b>
+          <div class="muted">Creá tu primera empresa y empezá a vender con BabySteps.</div>
+        </div>
+      </div>
+    `;
+
   res.type("text/html").send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/dashboard.css" />
-    <title>Login</title>
+    <title>BabySteps Dashboard</title>
   </head>
-  <body class="dark login-stage">
+  <body class="dark">
+    <div class="container">
 
-    <div class="login-bg-logo">
-      <img src="/img/logo.png" alt="Logo" />
-    </div>
-
-    <img class="side-banner left"  src="/img/banner-izq.png" alt="Banner izquierdo" />
-    <img class="side-banner right" src="/img/banner-der.png" alt="Banner derecho" />
-
-    <div class="login-wrap">
-      <div class="center-card login-card">
-        <h2 class="login-title">Entrar</h2>
-
-        <form method="POST" action="/admin/login" class="form">
-          <label>Usuario</label>
-          <input name="user" placeholder="Usuario" autocomplete="username" />
-
-          <label>Contraseña</label>
-          <div class="pw-row">
-            <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-            <button type="button" class="icon-btn" id="togglePw" aria-label="Ver contraseña" title="Ver contraseña">👁️</button>
+      <div class="app-header">
+        <div class="brand">
+          <img src="/img/logo.png" alt="BabySteps" />
+          <div>
+            <div class="title">BabySteps</div>
+            <div class="subtitle">Dashboard</div>
           </div>
-
-          <div class="login-actions">
-            <button class="btn primary" style="min-width:140px">Entrar</button>
-            <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <script>
-      const pw = document.getElementById("pw");
-      const btn = document.getElementById("togglePw");
-      btn.addEventListener("click", () => {
-        const isHidden = pw.type === "password";
-        pw.type = isHidden ? "text" : "password";
-        btn.textContent = isHidden ? "🙈" : "👁️";
-        btn.title = isHidden ? "Ocultar contraseña" : "Ver contraseña";
-      });
-    </script>
-
-  </body>
-</html>`);
-});
-
-app.post("/admin/login", (req, res) => {
-  const user = (req.body.user || "").trim();
-  const pass = (req.body.pass || "").trim();
-
-  if (!DASH_USER || !DASH_PASS || !DASH_COOKIE_SECRET) {
-    return res.status(500).send("Faltan env: DASH_USER, DASH_PASS, DASH_COOKIE_SECRET");
-  }
-
-  if (user !== DASH_USER || pass !== DASH_PASS) {
-    return res.status(401).type("text/html").send(`<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="/dashboard.css" />
-    <title>Login</title>
-  </head>
-  <body class="dark login-stage">
-    <div class="login-wrap">
-      <div class="center-card login-card">
-        <h2 class="login-title">Entrar</h2>
-        <div class="muted" style="text-align:center;margin:6px 0 14px;color:#ffb4b4">
-          Credenciales incorrectas
         </div>
-        <a class="btn secondary" href="/admin/login" style="justify-content:center">Volver</a>
+
+        <div class="nav">
+          <a href="/admin">Empresas</a>
+          <a href="/admin/orders">Pedidos</a>
+          <a href="/admin/clients">Clientes</a>
+          <a class="btn secondary" href="/admin/logout">Logout</a>
+        </div>
       </div>
+
+      ${kpiHtml}
+
+      <div class="grid">
+        <div class="card">
+          <h3 style="margin:0 0 10px">Crear empresa</h3>
+          <form method="POST" action="/admin/company/create" class="form">
+            <label>Company ID</label>
+            <input name="id" placeholder="ej: veterinaria_sm" />
+
+            <label>Nombre visible</label>
+            <input name="name" placeholder="Nombre Empresa" />
+
+            <div class="actions">
+              <button class="btn primary">Crear</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0 0 10px">Tips rápidos</h3>
+          <div class="muted">
+            • Usá IDs sin espacios (a-z, 0-9, guión o guión bajo).<br/>
+            • Editá el prompt + catálogo por empresa.<br/>
+            • Próximo: métricas y export CSV.
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px">Empresas</h3>
+        ${listOrEmpty}
+      </div>
+
+      <img class="mascot-corner" src="/img/mascot.png" alt="Mascota" />
+
     </div>
   </body>
 </html>`);
-  }
-
-  const token = crypto.randomBytes(24).toString("hex");
-  setCookie(res, "dash", `${token}.${signToken(token)}`);
-  res.redirect("/admin");
-});
-
-app.get("/admin/logout", (req, res) => {
-  clearCookie(res, "dash");
-  res.redirect("/admin/login");
 });
 
 // ================= EMPRESAS =================
