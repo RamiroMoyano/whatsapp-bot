@@ -495,3 +495,87 @@ input:focus, textarea:focus, select:focus{
   filter: drop-shadow(0 18px 28px rgba(0,0,0,.35));
 }
 @media (max-width: 820px){ .mascot-corner{ display:none; } }
+/* ===== BabySteps Login Scene (SaaS + Mascota) ===== */
+.bs-login{
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  color: #e5e7eb;
+  background:
+    radial-gradient(900px 500px at 20% 10%, rgba(59,130,246,0.18), transparent 60%),
+    radial-gradient(900px 500px at 80% 20%, rgba(96,165,250,0.14), transparent 65%),
+    linear-gradient(180deg, #0f1f3d, #0b1220);
+}
+
+/* Viñeta */
+.bs-login::after{
+  content:"";
+  position:absolute; inset:-20%;
+  background: radial-gradient(circle at 50% 40%, transparent 0 40%, rgba(0,0,0,.55) 70%);
+  pointer-events:none;
+}
+
+/* Robots ambient */
+.bs-bot{
+  position: absolute;
+  width: min(520px, 38vw);
+  opacity: .92;
+  filter: drop-shadow(0 25px 50px rgba(0,0,0,.55));
+  pointer-events: none;
+  z-index: 1;
+}
+
+.bs-bot-left{
+  left: clamp(-40px, 2vw, 30px);
+  bottom: clamp(-40px, 4vh, 20px);
+  transform: rotate(-2deg);
+  opacity: .75;
+}
+
+.bs-bot-right{
+  right: clamp(-40px, 2vw, 30px);
+  bottom: clamp(-40px, 4vh, 20px);
+  transform: rotate(2deg);
+  opacity: .75;
+}
+
+/* Card glass */
+.bs-login-card{
+  position: relative;
+  z-index: 2;
+  width: min(440px, 90vw);
+  padding: 26px 26px 22px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.55);
+}
+
+/* Branding */
+.bs-brand{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.bs-dot{
+  width: 12px; height: 12px; border-radius: 999px;
+  background: linear-gradient(135deg,#60a5fa,#2563eb);
+  box-shadow: 0 0 0 6px rgba(59,130,246,.12);
+}
+.bs-title{ font-weight: 800; letter-spacing: .2px; }
+.bs-subtitle{ color: rgba(148,163,184,.9); font-size: 13px; margin-top: 2px; }
+
+.bs-h2{
+  margin: 10px 0 14px;
+  font-size: 20px;
+}
+
+/* Responsive: en pantallas chicas ocultamos robots */
+@media (max-width: 900px){
+  .bs-bot{ display:none; }
+}
