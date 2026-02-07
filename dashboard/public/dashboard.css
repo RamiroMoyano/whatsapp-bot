@@ -579,3 +579,127 @@ input:focus, textarea:focus, select:focus{
 @media (max-width: 900px){
   .bs-bot{ display:none; }
 }
+/* ====== LOGIN HERO (robot fondo + panel a la izquierda) ====== */
+
+.bs-login{
+  min-height: 100vh;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  padding: clamp(18px, 4vw, 48px);
+  position: relative;
+  overflow: hidden;
+
+  /* Fondo full-screen */
+  background: radial-gradient(900px 600px at 30% 15%, rgba(59,130,246,.18), transparent 60%),
+              radial-gradient(900px 600px at 85% 30%, rgba(96,165,250,.12), transparent 65%),
+              linear-gradient(180deg, #0f1f3d, #0b1220);
+}
+
+/* viñeta suave para “escena pro” */
+.bs-login::after{
+  content:"";
+  position:absolute; inset:-20%;
+  background: radial-gradient(circle at 45% 40%, transparent 0 40%, rgba(0,0,0,.55) 70%);
+  pointer-events:none;
+}
+
+/* Robot como fondo a la derecha */
+.bs-robot{
+  position:absolute;
+  right: clamp(-80px, -2vw, 10px);
+  bottom: 0;
+  height: min(92vh, 900px);
+  width: auto;
+  opacity: .95;
+  filter: drop-shadow(0 30px 60px rgba(0,0,0,.55));
+  pointer-events:none;
+  z-index: 0;
+}
+
+/* Panel login a la izquierda */
+.bs-card{
+  position: relative;
+  z-index: 2;
+  width: min(460px, 92vw);
+  padding: 26px 26px 22px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.55);
+}
+
+/* Logo/brand */
+.bs-brand{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.bs-dot{
+  width: 12px; height: 12px; border-radius: 999px;
+  background: linear-gradient(135deg,#60a5fa,#2563eb);
+  box-shadow: 0 0 0 6px rgba(59,130,246,.12);
+}
+
+.bs-title{ font-weight: 900; letter-spacing: -0.02em; font-size: 18px; }
+.bs-subtitle{ color: rgba(148,163,184,.9); font-size: 13px; margin-top: 2px; }
+
+.bs-h2{
+  margin: 10px 0 14px;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+/* Inputs y botón (si ya tenés estilos, esto solo mejora) */
+.bs-card input{
+  width:100%;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(5,10,20,.55);
+  color: #e8eefc;
+  outline: none;
+}
+.bs-card input:focus{
+  border-color: rgba(59,130,246,.70);
+  box-shadow: 0 0 0 4px rgba(59,130,246,.18);
+}
+
+.bs-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top: 12px;
+}
+
+.bs-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding: 11px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  cursor:pointer;
+  font-weight: 800;
+}
+
+.bs-btn.primary{
+  background: linear-gradient(135deg,#3b82f6,#2563eb);
+  color:#fff;
+}
+.bs-btn.secondary{
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  color:#e8eefc;
+}
+
+/* Responsive: en móvil el robot se oculta */
+@media (max-width: 900px){
+  .bs-login{ justify-content:center; }
+  .bs-robot{ display:none; }
+}

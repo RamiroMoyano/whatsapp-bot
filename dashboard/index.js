@@ -139,63 +139,52 @@ function toCsv(rows) {
 
 // ================= LOGIN =================
 app.get("/admin/login", (req, res) => {
-  res.type("text/html").send(`<!doctype html>
+  res.type("text/html").send(`
+<!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="/dashboard.css" />
-    <title>Login</title>
-  </head>
-  <body class="dark login-stage">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/dashboard.css"/>
+  <title>BabySteps Login</title>
+</head>
 
-    <!-- Logo marca de agua (detrás) -->
-    <div class="login-bg-logo">
-      <img src="/img/logo.png" alt="BabySteps" />
-    </div>
+<body class="bs-login">
 
-    <!-- Banners laterales -->
-    <img class="side-banner left"  src="/img/banner-izq.png" alt="Banner izquierdo" />
-    <img class="side-banner right" src="/img/banner-der.png" alt="Banner derecho" />
+  <!-- 🤖 Robot fondo derecha -->
+  <img class="bs-robot" src="/img/robot.png" />
 
-    <!-- Card centrada -->
-    <div class="login-wrap">
-      <div class="center-card login-card">
-        <h2 class="login-title">Entrar</h2>
+  <!-- 🔵 Panel login izquierda -->
+  <div class="bs-card">
 
-        <form method="POST" action="/admin/login" class="form">
-          <label>Usuario</label>
-          <input name="user" placeholder="Usuario" autocomplete="username" />
-
-          <label>Contraseña</label>
-          <div class="pw-row">
-            <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-            <button type="button" class="icon-btn" id="togglePw" aria-label="Ver contraseña" title="Ver contraseña">👁️</button>
-          </div>
-
-          <div class="login-actions">
-            <button class="btn primary" style="min-width:160px">Entrar</button>
-          </div>
-
-          <div style="margin-top:10px;text-align:center">
-            <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
-          </div>
-        </form>
+    <div class="bs-brand">
+      <div class="bs-dot"></div>
+      <div>
+        <div class="bs-title">BabySteps</div>
+        <div class="bs-subtitle">Console</div>
       </div>
     </div>
 
-    <script>
-      const pw = document.getElementById("pw");
-      const btn = document.getElementById("togglePw");
-      btn.addEventListener("click", () => {
-        const show = pw.type === "password";
-        pw.type = show ? "text" : "password";
-        btn.textContent = show ? "🙈" : "👁️";
-      });
-    </script>
+    <h2 class="bs-h2">Entrar</h2>
 
-  </body>
-</html>`);
+    <form method="POST" action="/admin/login">
+
+      <input name="user" placeholder="Usuario" required />
+
+      <input id="pw" name="pass" type="password" placeholder="Contraseña" required />
+
+      <div class="bs-actions">
+        <button class="bs-btn primary">Entrar</button>
+        <a class="bs-btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+      </div>
+
+    </form>
+
+  </div>
+
+</body>
+</html>
+  `);
 });
 
 // Login POST
