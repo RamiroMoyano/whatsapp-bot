@@ -138,9 +138,6 @@ function toCsv(rows) {
 }
 
 // ================= LOGIN =================
-// ===== AUTH ROUTES (MUST EXIST) =====
-
-// Login GET
 app.get("/admin/login", (req, res) => {
   res.type("text/html").send(`<!doctype html>
 <html>
@@ -151,6 +148,17 @@ app.get("/admin/login", (req, res) => {
     <title>Login</title>
   </head>
   <body class="dark login-stage">
+
+    <!-- Logo marca de agua (detrás) -->
+    <div class="login-bg-logo">
+      <img src="/img/logo.png" alt="BabySteps" />
+    </div>
+
+    <!-- Banners laterales -->
+    <img class="side-banner left"  src="/img/banner-izq.png" alt="Banner izquierdo" />
+    <img class="side-banner right" src="/img/banner-der.png" alt="Banner derecho" />
+
+    <!-- Card centrada -->
     <div class="login-wrap">
       <div class="center-card login-card">
         <h2 class="login-title">Entrar</h2>
@@ -162,11 +170,11 @@ app.get("/admin/login", (req, res) => {
           <label>Contraseña</label>
           <div class="pw-row">
             <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-            <button type="button" class="icon-btn" id="togglePw">👁️</button>
+            <button type="button" class="icon-btn" id="togglePw" aria-label="Ver contraseña" title="Ver contraseña">👁️</button>
           </div>
 
           <div class="login-actions">
-            <button class="btn primary" style="min-width:140px">Entrar</button>
+            <button class="btn primary" style="min-width:160px">Entrar</button>
           </div>
 
           <div style="margin-top:10px;text-align:center">
@@ -180,9 +188,12 @@ app.get("/admin/login", (req, res) => {
       const pw = document.getElementById("pw");
       const btn = document.getElementById("togglePw");
       btn.addEventListener("click", () => {
-        pw.type = (pw.type === "password") ? "text" : "password";
+        const show = pw.type === "password";
+        pw.type = show ? "text" : "password";
+        btn.textContent = show ? "🙈" : "👁️";
       });
     </script>
+
   </body>
 </html>`);
 });
