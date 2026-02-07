@@ -250,205 +250,8 @@ input:focus, textarea:focus, select:focus{
 .table tr:hover td{
   background: rgba(255,255,255,.03);
 }
+/* ===== LOGIN (LIMPIO): stage + background logo + side banners + card centered ===== */
 
-.login-wrap{
-  min-height: 100vh;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding: 24px;
-}
-
-.login-card{
-  width:min(560px, calc(100% - 32px));
-}
-
-.login-header{
-  display:flex;
-  align-items:center;
-  gap:14px;
-  margin-bottom: 4px;
-}
-
-.logo-slot{
-  width:52px;
-  height:52px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-}
-
-.logo-badge{
-  width:52px;
-  height:52px;
-  border-radius: 14px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  font-weight:800;
-  letter-spacing:-0.02em;
-  color:white;
-  background: linear-gradient(180deg, var(--brand), var(--brand2));
-  box-shadow: 0 10px 24px rgba(0,0,0,.35);
-}
-
-.pw-row{
-  display:flex;
-  gap:10px;
-  align-items:center;
-}
-
-.icon-btn{
-  width:46px;
-  height:44px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: rgba(255,255,255,.06);
-  color: var(--text);
-  cursor:pointer;
-  font-size: 16px;
-}
-.icon-btn:hover{ filter: brightness(1.06); }
-
-.login-actions{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  margin-top: 10px;
-}
-/* ===== LOGIN IMAGES ===== */
-
-.logo-img{
-  height:48px;
-  width:auto;
-  object-fit:contain;
-}
-
-.login-banner{
-  width:100%;
-  max-height:120px;
-  object-fit:cover;
-  border-radius:14px;
-  margin-bottom:14px;
-  opacity:.95;
-}
-.login-header-col{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  gap:10px;
-  margin-bottom: 10px;
-  text-align:center;
-}
-
-.logo-img-top{
-  height: 92px;     /* ajustá: 80-120 */
-  width: auto;
-  object-fit: contain;
-  filter: drop-shadow(0 10px 18px rgba(0,0,0,.35));
-}
-
-/* opcional: achicar la barrita superior si molesta */
-.center-card::before{
-  height: 5px;
-}
-/* ===== LOGIN HERO STYLE ===== */
-
-.login-page{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  min-height:100vh;
-}
-
-/* banner superior */
-.login-hero{
-  width:100%;
-  height:220px; /* altura del banner */
-  overflow:hidden;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  margin-bottom:-80px; /* superpone el card */
-}
-
-.login-hero img{
-  width:100%;
-  height:100%;
-  object-fit:cover;
-  opacity:.9;
-  filter:brightness(.9);
-}
-
-/* card centrado */
-.login-wrap{
-  width:100%;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  z-index:2;
-}
-
-.login-card{
-  width:420px;
-  margin-top:0;
-}
-/* ===== LOGIN HERO STYLE ===== */
-.login-page{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  min-height:100vh;
-}
-
-.login-hero{
-  width:100%;
-  height:220px;
-  overflow:hidden;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  margin-bottom:-80px;
-  border-bottom: 1px solid rgba(255,255,255,.06);
-}
-
-.login-hero img{
-  width:100%;
-  height:100%;
-  object-fit:cover;
-  opacity:.95;
-  filter:brightness(.9);
-}
-
-.login-wrap{
-  width:100%;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  z-index:2;
-  padding: 0 24px 24px;
-}
-
-.login-card{
-  width:min(440px, calc(100% - 32px));
-  margin-top:0;
-}
-
-.login-title{
-  text-align:center;
-  margin: 0 0 14px;
-  font-size: 22px;
-  font-weight: 800;
-}
-.login-actions{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  margin-top: 10px;
-  justify-content:center;
-}
-/* ===== LOGIN: stage with side banners + background logo ===== */
 .login-stage{
   min-height:100vh;
   position:relative;
@@ -467,8 +270,8 @@ input:focus, textarea:focus, select:focus{
 }
 .login-bg-logo img{
   width:min(520px, 70vw);
-  opacity:.10;              /* marca de agua */
-  filter: blur(0px) drop-shadow(0 18px 28px rgba(0,0,0,.35));
+  opacity:.10;
+  filter: drop-shadow(0 18px 28px rgba(0,0,0,.35));
 }
 
 /* banners laterales */
@@ -484,11 +287,10 @@ input:focus, textarea:focus, select:focus{
   z-index:1;
   pointer-events:none;
 }
-
 .side-banner.left{ left: 40px; }
 .side-banner.right{ right: 40px; }
 
-/* card centrado */
+/* wrapper centrado */
 .login-wrap{
   min-height:100vh;
   display:flex;
@@ -496,11 +298,12 @@ input:focus, textarea:focus, select:focus{
   justify-content:center;
   padding:24px;
   position:relative;
-  z-index:2; /* arriba de banners/logo */
+  z-index:2;
 }
 
+/* card */
 .login-card{
-  width:min(440px, calc(100% - 32px));
+  width:min(460px, calc(100% - 32px));
 }
 
 .login-title{
@@ -510,16 +313,42 @@ input:focus, textarea:focus, select:focus{
   font-weight:800;
 }
 
-/* responsive: ocultar banners en pantallas chicas */
+/* password row */
+.pw-row{
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+
+.icon-btn{
+  width:46px;
+  height:44px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  cursor:pointer;
+  font-size:16px;
+}
+.icon-btn:hover{ filter: brightness(1.06); }
+
+.login-actions{
+  display:flex;
+  justify-content:center;
+  margin-top:10px;
+}
+
+/* responsive */
 @media (max-width: 1100px){
   .side-banner{ opacity:.45; height: 420px; }
   .side-banner.left{ left: 10px; }
   .side-banner.right{ right: 10px; }
 }
 @media (max-width: 820px){
-  .side-banner{ display:none; }   /* en celular se ocultan */
+  .side-banner{ display:none; }
   .login-bg-logo img{ width:min(360px, 80vw); opacity:.08; }
 }
+
 /* ===== BABYSTEPS SAAS THEME ===== */
 :root{
   --bg-main:#0b1220;
