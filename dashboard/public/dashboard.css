@@ -943,3 +943,108 @@ input:focus, textarea:focus, select:focus{
   gap:12px;
 }
 @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+/* ====== LOGIN FULL BG (robot) + card a la izquierda ====== */
+
+.bs-login{
+  min-height:100vh;
+  position:relative;
+  overflow:hidden;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  padding: clamp(18px, 4vw, 56px);
+}
+
+/* fondo full */
+.bs-bg{
+  position:absolute;
+  inset:0;
+  background-size:cover;
+  background-position:center right;
+  background-repeat:no-repeat;
+  transform: scale(1.03);
+  z-index:0;
+}
+
+/* capa para oscurecer y que el card “lea” bien */
+.bs-vignette{
+  position:absolute;
+  inset:0;
+  background:
+    radial-gradient(900px 600px at 25% 35%, rgba(59,130,246,0.20), transparent 60%),
+    linear-gradient(90deg, rgba(11,18,32,0.92) 0%, rgba(11,18,32,0.72) 38%, rgba(11,18,32,0.15) 70%, rgba(11,18,32,0.05) 100%),
+    radial-gradient(circle at 60% 40%, transparent 0 45%, rgba(0,0,0,.55) 78%);
+  z-index:1;
+}
+
+/* card */
+.bs-card{
+  position:relative;
+  z-index:2;
+  width:min(460px, 92vw);
+  padding: 26px 26px 22px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.55);
+}
+
+/* branding */
+.bs-brand{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.bs-dot{
+  width: 12px; height: 12px; border-radius: 999px;
+  background: linear-gradient(135deg,#60a5fa,#2563eb);
+  box-shadow: 0 0 0 6px rgba(59,130,246,.12);
+}
+.bs-title{ font-weight: 800; letter-spacing: .2px; font-size: 18px; }
+.bs-subtitle{ color: rgba(148,163,184,.9); font-size: 13px; margin-top: 2px; }
+
+.bs-h2{
+  margin: 10px 0 14px;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+/* contraseña con ojo */
+.pw-row{
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+.icon-btn{
+  width:46px;
+  height:44px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  cursor:pointer;
+  font-size: 16px;
+}
+.icon-btn:hover{ filter: brightness(1.06); }
+
+.login-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top: 12px;
+}
+
+/* responsive: en pantallas chicas centra todo y mueve el foco del fondo */
+@media (max-width: 900px){
+  .bs-login{ justify-content:center; }
+  .bs-bg{ background-position:center; }
+  .bs-vignette{
+    background:
+      radial-gradient(700px 520px at 50% 20%, rgba(59,130,246,0.18), transparent 60%),
+      linear-gradient(180deg, rgba(11,18,32,0.88) 0%, rgba(11,18,32,0.70) 55%, rgba(11,18,32,0.25) 100%),
+      radial-gradient(circle at 50% 40%, transparent 0 45%, rgba(0,0,0,.55) 78%);
+  }
+}
