@@ -229,6 +229,11 @@ app.post("/admin/login", (req, res) => {
   res.redirect("/admin");
 });
 
+app.get("/admin/logout", (req, res) => {
+  clearCookie(res, "dash");
+  res.redirect("/admin/login");
+});
+
 // ================= EMPRESAS =================
 app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
