@@ -151,12 +151,10 @@ app.get("/admin/login", (req, res) => {
 
 <body class="bs-login">
 
-  <!-- 🤖 Robot fondo derecha -->
-  <img class="bs-robot" src="/img/robot.png" />
+  <!-- Fondo full screen -->
+  <img class="bs-robot" src="/img/robot.png" alt="Robot" />
 
-  <!-- 🔵 Panel login izquierda -->
   <div class="bs-card">
-
     <div class="bs-brand">
       <div class="bs-dot"></div>
       <div>
@@ -168,19 +166,28 @@ app.get("/admin/login", (req, res) => {
     <h2 class="bs-h2">Entrar</h2>
 
     <form method="POST" action="/admin/login">
+      <input name="user" placeholder="Usuario" autocomplete="username" required />
 
-      <input name="user" placeholder="Usuario" required />
-
-      <input id="pw" name="pass" type="password" placeholder="Contraseña" required />
-
-      <div class="bs-actions">
-        <button class="bs-btn primary">Entrar</button>
-        <a class="bs-btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+      <div class="bs-pw">
+        <input id="pw" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" required />
+        <button class="bs-eye" type="button" id="togglePw" aria-label="Ver contraseña">👁</button>
       </div>
 
+      <div class="bs-actions">
+        <button class="bs-btn primary" type="submit">Entrar</button>
+        <a class="bs-btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+      </div>
     </form>
-
   </div>
+
+  <script>
+    const btn = document.getElementById("togglePw");
+    const pw = document.getElementById("pw");
+    btn.addEventListener("click", () => {
+      pw.type = pw.type === "password" ? "text" : "password";
+      btn.textContent = pw.type === "password" ? "👁" : "🙈";
+    });
+  </script>
 
 </body>
 </html>

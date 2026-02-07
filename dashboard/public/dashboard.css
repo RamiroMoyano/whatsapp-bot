@@ -703,3 +703,173 @@ input:focus, textarea:focus, select:focus{
   .bs-login{ justify-content:center; }
   .bs-robot{ display:none; }
 }
+/* ===== BabySteps Login v2 (full background + elegant glass) ===== */
+
+.bs-login{
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: clamp(18px, 4vw, 56px);
+  position: relative;
+  overflow: hidden;
+  background: #0b1220;
+  color: #e5e7eb;
+}
+
+/* Vignette suave para look premium */
+.bs-login::after{
+  content:"";
+  position:absolute;
+  inset:-20%;
+  background: radial-gradient(circle at 45% 40%, transparent 0 42%, rgba(0,0,0,.55) 75%);
+  pointer-events:none;
+  z-index: 1;
+}
+
+/* Robot como fondo FULL SCREEN */
+.bs-robot{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;          /* <-- clave: ocupa toda la pantalla */
+  object-position: 75% 50%;   /* enfoca al robot a la derecha */
+  filter: saturate(1.05) contrast(1.02);
+  z-index: 0;
+}
+
+/* Overlay azul suave arriba de la imagen (para integrar con el tema) */
+.bs-login::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:
+    radial-gradient(900px 520px at 20% 10%, rgba(59,130,246,0.22), transparent 60%),
+    radial-gradient(900px 520px at 80% 20%, rgba(96,165,250,0.16), transparent 65%),
+    linear-gradient(180deg, rgba(11,18,32,.35), rgba(11,18,32,.55));
+  pointer-events:none;
+  z-index: 1;
+}
+
+/* Card glass elegante */
+.bs-card{
+  position: relative;
+  z-index: 2;
+  width: min(460px, 92vw);
+  padding: 26px 26px 22px;
+  border-radius: 20px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 24px 70px rgba(0,0,0,.55);
+}
+
+/* Detalle superior (barrita) */
+.bs-card::before{
+  content:"";
+  display:block;
+  height: 6px;
+  border-radius: 999px;
+  margin-bottom: 14px;
+  background: linear-gradient(90deg, #60a5fa, #2563eb);
+  opacity: .95;
+}
+
+/* Marca */
+.bs-brand{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.bs-dot{
+  width: 12px; height: 12px; border-radius: 999px;
+  background: linear-gradient(135deg,#60a5fa,#2563eb);
+  box-shadow: 0 0 0 6px rgba(59,130,246,.14);
+}
+.bs-title{ font-weight: 900; letter-spacing: -0.02em; font-size: 18px; }
+.bs-subtitle{ color: rgba(148,163,184,.95); font-size: 13px; margin-top: 2px; }
+
+.bs-h2{
+  margin: 10px 0 14px;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+/* Inputs */
+.bs-card input{
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(5,10,20,.55);
+  color: #e5e7eb;
+  outline: none;
+  margin-bottom: 10px;
+}
+
+.bs-card input:focus{
+  border-color: rgba(96,165,250,.70);
+  box-shadow: 0 0 0 4px rgba(59,130,246,.18);
+}
+
+/* Password row con ojo */
+.bs-pw{
+  display:flex;
+  gap: 10px;
+  align-items:center;
+}
+
+.bs-eye{
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.08);
+  cursor: pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  user-select:none;
+}
+.bs-eye:hover{ filter: brightness(1.06); }
+
+/* Acciones */
+.bs-actions{
+  display:flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.bs-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  font-weight: 800;
+  text-decoration:none;
+  cursor:pointer;
+}
+
+.bs-btn.primary{
+  color: white;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  box-shadow: 0 16px 40px rgba(37,99,235,.22);
+}
+.bs-btn.secondary{
+  color: #e5e7eb;
+  background: rgba(255,255,255,.08);
+}
+
+/* Responsive: en móvil enfocamos el robot al centro y centramos el card */
+@media (max-width: 780px){
+  .bs-login{ justify-content:center; }
+  .bs-robot{ object-position: 55% 35%; }
+}
