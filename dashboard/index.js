@@ -138,18 +138,7 @@ function toCsv(rows) {
 }
 
 // ================= LOGIN =================
-app.get("/admin", requireDashboardAuth, async (req, res) => {
-  const companies = await api("/api/companies");
-  const rows = companies.map(c => `
-    <div class="company-item">
-      <div>
-        <div><b>${c.id}</b> — ${c.name || ""}</div>
-        <div class="muted">Creada: ${c.createdAt || "-"}</div>
-      </div>
-      <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
-    </div>
-  `).join("");
-
+app.get("/admin/login", (req, res) => {
   res.type("text/html").send(`
 <!doctype html>
 <html>
@@ -157,101 +146,56 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/dashboard.css" />
-    <title>BabySteps • Admin</title>
+    <title>Login</title>
   </head>
+
   <body>
-    <div class="container">
+    <div class="bs-login">
+      <!-- Imagen fondo full (robot). Cambiá el nombre si tu archivo es otro -->
+      <div class="bs-bg" style="background-image:url('/img/robot.png')"></div>
+      <div class="bs-vignette"></div>
 
-      <div class="admin-header">
-        <div class="brand">
-          <img src="/img/logo.png" alt="BabySteps" />
+      <div class="bs-card">
+        <div class="bs-brand">
+          <div class="bs-dot"></div>
           <div>
-            <div class="title">BabySteps</div>
-            <div class="subtitle">Admin Console</div>
+            <div class="bs-title">BabySteps</div>
+            <div class="bs-subtitle">Console</div>
           </div>
         </div>
 
-        <div class="nav-tabs">
-          <a class="btn ${"primary"}" href="/admin">Empresas</a>
-          <a class="btn secondary" href="/admin/orders">Pedidos</a>
-          <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
-          <a class="btn secondary" href="/admin/logout">Logout</a>
-        </div>
-      </div>
+        <h2 class="bs-h2">Entrar</h2>
 
-      <div class="kpis">
-        <div class="kpi">
-          <div class="label">Empresas</div>
-          <div class="value">${companies.length}</div>
-          <div class="hint">Total activas</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Pedidos hoy</div>
-          <div class="value">—</div>
-          <div class="hint">Lo conectamos después</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Clientes</div>
-          <div class="value">—</div>
-          <div class="hint">Lo conectamos después</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Bots online</div>
-          <div class="value">—</div>
-          <div class="hint">Lo conectamos después</div>
-        </div>
-      </div>
+        <form method="POST" action="/admin/login" class="form">
+          <label>Usuario</label>
+          <input name="user" placeholder="Usuario" autocomplete="username" />
 
-      <div class="grid">
-        <div class="card">
-          <h3 style="margin:0 0 10px;">Crear empresa</h3>
-          <form method="POST" action="/admin/company/create" class="form">
-            <div class="grid2">
-              <input name="id" placeholder="company_id (ej: veterinaria_sm)" required />
-              <input name="name" placeholder="Nombre visible" />
-            </div>
-            <div class="actions">
-              <button class="btn primary">Crear</button>
-            </div>
-          </form>
-        </div>
-
-        <div class="card">
-          <h3 style="margin:0 0 10px;">Tips</h3>
-          <div class="muted">
-            • ID sin espacios, en minúscula y con guiones bajos<br/>
-            • Después podés editar prompt / catálogo / reglas
+          <label>Contraseña</label>
+          <div class="pw-row">
+            <input id="pass" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
+            <button type="button" class="icon-btn" id="togglePass" aria-label="Ver contraseña">👁</button>
           </div>
-        </div>
-      </div>
 
-      <div class="card">
-        <h3 style="margin:0 0 12px;">Listado</h3>
-        <div class="company-list">${rows || `<div class="muted">Aún no hay empresas.</div>`}</div>
+          <div class="login-actions">
+            <button class="btn primary">Entrar</button>
+            <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+          </div>
+        </form>
       </div>
-
     </div>
+
+    <script>
+      const btn = document.getElementById("togglePass");
+      const pass = document.getElementById("pass");
+      if (btn && pass) {
+        btn.addEventListener("click", () => {
+          pass.type = pass.type === "password" ? "text" : "password";
+        });
+      }
+    </script>
   </body>
 </html>
   `);
-});
-
-// Login POST
-app.post("/admin/login", (req, res) => {
-  const user = (req.body.user || "").trim();
-  const pass = (req.body.pass || "").trim();
-
-  if (!DASH_USER || !DASH_PASS || !DASH_COOKIE_SECRET) {
-    return res.status(500).send("Faltan env: DASH_USER, DASH_PASS, DASH_COOKIE_SECRET");
-  }
-
-  if (user !== DASH_USER || pass !== DASH_PASS) {
-    return res.status(401).redirect("/admin/login");
-  }
-
-  const token = crypto.randomBytes(24).toString("hex");
-  setCookie(res, "dash", `${token}.${signToken(token)}`);
-  res.redirect("/admin");
 });
 
 // Logout
