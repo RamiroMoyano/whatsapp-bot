@@ -56,6 +56,34 @@ function requireDashboardAuth(req, res, next) {
   next();
 }
 
+// ====================== CLIENT AUTH (empresas) ======================
+function signClient(companyId) {
+  return signToken(`client:${companyId}`);
+}
+
+async function requireClientAuth(req, res, next) {
+  if (!DASH_COOKIE_SECRET) {
+    return res.status(500).send("Falta env: DASH_COOKIE_SECRET");
+  }
+
+  const cookie = parseCookies(req)["client"];
+  if (!cookie) return res.redirect("/c/login");
+
+  const [companyId, sig] = cookie.split(".");
+  if (!companyId || !sig) return res.redirect("/c/login");
+
+  if (signClient(companyId) !== sig) return res.redirect("/c/login");
+
+  // Cargamos la empresa para usar en el panel cliente
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+    req.company = company;
+    next();
+  } catch (e) {
+    return res.redirect("/c/login");
+  }
+}
+
 async function api(pathname, { method = "GET", body } = {}) {
   if (!API_BASE_URL || !API_TOKEN) throw new Error("API_BASE_URL/API_TOKEN faltan en dashboard");
   const r = await fetch(`${API_BASE_URL}${pathname}`, {
@@ -319,6 +347,77 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   }
 });
 
+// ===== ADMIN: Editar empresa =====
+app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+
+  const c = await api(`/api/companies/${encodeURIComponent(id)}`);
+
+  res.type("text/html").send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Editar ${c.id}</title>
+  </head>
+  <body>
+    <div class="container">
+      <div class="app-header">
+        <div class="brand">
+          <img src="/img/logo.png" alt="BabySteps" onerror="this.style.display='none'"/>
+          <div>
+            <div class="title">Editar empresa</div>
+            <div class="subtitle">${c.id}</div>
+          </div>
+        </div>
+        <div class="nav">
+          <a href="/admin">← Volver</a>
+          <a href="/admin/logout">Logout</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
+          <label>Nombre visible</label>
+          <input name="name" value="${(c.name || "").replaceAll('"', "&quot;")}" />
+
+          <label>Prompt</label>
+          <textarea name="prompt" rows="6">${c.prompt || ""}</textarea>
+
+          <label>Catalog JSON</label>
+          <textarea name="catalogJson" rows="8">${c.catalogJson || "[]"}</textarea>
+
+          <label>Rules JSON</label>
+          <textarea name="rulesJson" rows="8">${c.rulesJson || "{}"}</textarea>
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Guardar</button>
+            <a class="btn secondary" href="/admin">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>`);
+});
+
+app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+
+  await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+    method: "POST",
+    body: {
+      name: req.body.name,
+      prompt: req.body.prompt,
+      catalogJson: req.body.catalogJson,
+      rulesJson: req.body.rulesJson,
+    },
+  });
+
+  res.redirect(`/admin/company/${encodeURIComponent(id)}`);
+});
+
 // ================= ASIGNAR CLIENTES =================
 app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
   try {
@@ -518,6 +617,124 @@ app.get("/admin/orders/export.csv", requireDashboardAuth, async (req, res) => {
   } catch (e) {
     res.status(500).send(`Error exportando CSV: ${e?.message || e}`);
   }
+});
+
+// ====================== CLIENT ROUTES (empresas) ======================
+
+// Login cliente
+app.get("/c/login", (req, res) => {
+  res.type("text/html").send(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link rel="stylesheet" href="/dashboard.css" />
+        <title>Login Cliente</title>
+      </head>
+      <body class="dark">
+        <div class="login-wrap">
+          <div class="center-card login-card">
+            <h2>Entrar</h2>
+            <p class="muted">Acceso para clientes</p>
+
+            <form method="POST" action="/c/login" class="form">
+              <label>Empresa (ID)</label>
+              <input name="companyId" placeholder="ej: babystepsbots" />
+
+              <label>Contraseña</label>
+              <div class="pw-row">
+                <input id="clientPass" name="pass" type="password" placeholder="Contraseña" />
+                <button type="button" class="icon-btn" onclick="
+                  const i=document.getElementById('clientPass');
+                  i.type = (i.type==='password'?'text':'password');
+                ">👁</button>
+              </div>
+
+              <div class="actions">
+                <button class="btn primary">Entrar</button>
+                <a class="btn secondary" href="/admin/login">Soy Admin</a>
+              </div>
+            </form>
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+app.post("/c/login", async (req, res) => {
+  try {
+    const companyId = (req.body.companyId || "").trim();
+    const pass = (req.body.pass || "").trim();
+    if (!companyId || !pass) return res.status(400).send("Faltan datos");
+
+    const c = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+
+    let rules = {};
+    try { rules = JSON.parse(c.rulesJson || "{}"); } catch {}
+
+    // ✅ La password del cliente vive en rulesJson.clientPassword
+    const expected = (rules.clientPassword || "").trim();
+
+    if (!expected || pass !== expected) {
+      return res.status(401).send("Credenciales incorrectas");
+    }
+
+    // Cookie cliente (separada de admin)
+    setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
+    return res.redirect("/c");
+  } catch (e) {
+    return res.status(401).send("Credenciales incorrectas");
+  }
+});
+
+// Panel cliente (básico por ahora)
+app.get("/c", requireClientAuth, async (req, res) => {
+  const c = req.company;
+
+  res.type("text/html").send(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link rel="stylesheet" href="/dashboard.css" />
+        <title>Panel - ${c.name || c.id}</title>
+      </head>
+      <body class="dark">
+        <div class="container">
+          <header class="top">
+            <div>
+              <h2>${c.name || c.id}</h2>
+              <div class="muted">Panel de cliente</div>
+            </div>
+            <a class="btn secondary" href="/c/logout">Salir</a>
+          </header>
+
+          <div class="card">
+            <div class="muted">Empresa</div>
+            <div style="margin-top:8px">
+              <b>ID:</b> <code>${c.id}</code><br/>
+              <b>Nombre:</b> ${c.name || ""}<br/>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="muted">Próximo</div>
+            <div style="margin-top:8px">
+              Acá vamos a mostrar métricas, pedidos, mensajes y actividad según tu empresa.
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+app.get("/c/logout", (req, res) => {
+  clearCookie(res, "client");
+  res.redirect("/c/login");
 });
 
 app.get("/", (_, res) => res.send("OK"));
