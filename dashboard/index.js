@@ -209,140 +209,100 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
     const companies = await api("/api/companies");
 
-    const rows = companies.map((c) => `
-      <li class="company-item">
+    const rows = companies.map(c => `
+      <div class="company-item">
         <div>
-          <b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name || "")}
+          <div><b>${c.id}</b> — ${c.name || ""}</div>
+          <div class="muted">Creada: ${c.createdAt || "-"}</div>
         </div>
-        <div>
-          <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
-        </div>
-      </li>
+        <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
+      </div>
     `).join("");
 
-    const body = `
-      <div class="card">
-        <form method="POST" action="/admin/company/create" class="form">
-          <label>Crear empresa</label>
-          <div class="grid2">
-            <input name="id" placeholder="company_id (ej: veterinaria_sm)" />
-            <input name="name" placeholder="Nombre visible" />
+    res.type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>BabySteps • Admin</title>
+  </head>
+  <body>
+    <div class="container">
+
+      <div class="admin-header">
+        <div class="brand">
+          <img src="/img/logo.png" alt="BabySteps" />
+          <div>
+            <div class="title">BabySteps</div>
+            <div class="subtitle">Admin Console</div>
           </div>
-          <div class="actions">
-            <button class="btn primary">Crear</button>
-          </div>
-        </form>
+        </div>
+
+        <div class="nav-tabs">
+          <a class="btn primary" href="/admin">Empresas</a>
+          <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
+          <a class="btn secondary" href="/admin/logout">Logout</a>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi">
+          <div class="label">Empresas</div>
+          <div class="value">${companies.length}</div>
+          <div class="hint">Total activas</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Pedidos hoy</div>
+          <div class="value">—</div>
+          <div class="hint">Luego conectamos</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Clientes</div>
+          <div class="value">—</div>
+          <div class="hint">Luego conectamos</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Bots online</div>
+          <div class="value">—</div>
+          <div class="hint">Luego conectamos</div>
+        </div>
       </div>
 
       <div class="card">
-        <h3 style="margin-top:0">Listado</h3>
-        <ul class="company-list">${rows || "<li class='muted'>No hay empresas.</li>"}</ul>
+        <h3 style="margin:0 0 12px;">Listado</h3>
+        <div class="company-list">${rows || `<div class="muted">Aún no hay empresas.</div>`}</div>
       </div>
-    `;
 
-    res.type("text/html").send(layout({ title: "Empresas", active: "companies", body }));
+    </div>
+  </body>
+</html>
+    `);
   } catch (e) {
-    res.status(500).type("text/html").send(layout({
-      title: "Empresas",
-      active: "companies",
-      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div>`
-    }));
-  }
-});
-
-app.post("/admin/company/create", requireDashboardAuth, async (req, res) => {
-  try {
-    await api("/api/companies", {
-      method: "POST",
-      body: { id: req.body.id, name: req.body.name }
-    });
-    res.redirect("/admin");
-  } catch (e) {
-    res.status(500).type("text/html").send(layout({
-      title: "Empresas",
-      active: "companies",
-      body: `<div class="card"><b>Error creando empresa:</b><pre>${escapeHtml(e?.message || e)}</pre></div>
-             <div class="card"><a class="btn secondary" href="/admin">Volver</a></div>`
-    }));
-  }
-});
-
-// Edit company
-app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
-  try {
-    const c = await api(`/api/companies/${encodeURIComponent(req.params.id)}`);
-
-    const body = `
-      <div class="center-card large">
-        <h2 style="margin-top:0">Editar ${escapeHtml(c.id)}</h2>
-        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
-          <label>Nombre</label>
-          <input name="name" value="${escapeHtml(c.name || "")}" />
-
-          <label>Prompt</label>
-          <textarea name="prompt" rows="5">${escapeHtml(c.prompt || "")}</textarea>
-
-          <label>Catalog JSON</label>
-          <textarea name="catalogJson" rows="8">${escapeHtml(c.catalogJson || "[]")}</textarea>
-
-          <label>Rules JSON</label>
-          <textarea name="rulesJson" rows="8">${escapeHtml(c.rulesJson || "{}")}</textarea>
-
-          <div class="actions">
-            <button class="btn primary">Guardar</button>
-            <a class="btn secondary" href="/admin">Volver</a>
-          </div>
-        </form>
-
-        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/delete" onsubmit="return confirm('¿Borrar empresa?');" style="margin-top:14px">
-          <button class="btn danger">Borrar empresa</button>
-        </form>
+    res.status(500).type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Error</title>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h3 style="margin:0 0 10px;">Error cargando /admin</h3>
+        <div class="muted">Esto es lo que está fallando:</div>
+        <pre style="white-space:pre-wrap; margin-top:10px;">${String(e?.message || e)}</pre>
+        <div style="margin-top:12px;">
+          <a class="btn secondary" href="/admin/logout">Volver al login</a>
+        </div>
       </div>
-    `;
-
-    res.type("text/html").send(layout({ title: `Editar: ${c.id}`, active: "companies", body }));
-  } catch (e) {
-    res.status(500).type("text/html").send(layout({
-      title: "Editar empresa",
-      active: "companies",
-      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div>`
-    }));
-  }
-});
-
-app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
-  try {
-    await api(`/api/companies/${encodeURIComponent(req.params.id)}/save`, {
-      method: "POST",
-      body: {
-        name: req.body.name,
-        prompt: req.body.prompt,
-        catalogJson: req.body.catalogJson,
-        rulesJson: req.body.rulesJson,
-      }
-    });
-    res.redirect(`/admin/company/${encodeURIComponent(req.params.id)}`);
-  } catch (e) {
-    res.status(500).type("text/html").send(layout({
-      title: "Guardar empresa",
-      active: "companies",
-      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div>
-             <div class="card"><a class="btn secondary" href="/admin">Volver</a></div>`
-    }));
-  }
-});
-
-app.post("/admin/company/:id/delete", requireDashboardAuth, async (req, res) => {
-  try {
-    await api(`/api/companies/${encodeURIComponent(req.params.id)}/delete`, { method: "POST" });
-    res.redirect("/admin");
-  } catch (e) {
-    res.status(500).type("text/html").send(layout({
-      title: "Borrar empresa",
-      active: "companies",
-      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div>
-             <div class="card"><a class="btn secondary" href="/admin">Volver</a></div>`
-    }));
+    </div>
+  </body>
+</html>
+    `);
   }
 });
 
