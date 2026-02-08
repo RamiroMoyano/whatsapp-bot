@@ -519,4 +519,21 @@ app.get("/__whoami", (req, res) => {
   });
 });
 
+app.get("/__routes", (req, res) => {
+  const stack = app?._router?.stack || [];
+  const routes = [];
+
+  for (const layer of stack) {
+    if (!layer.route) continue;
+    const path = layer.route.path;
+    const methods = Object.keys(layer.route.methods || {})
+      .filter((m) => layer.route.methods[m])
+      .map((m) => m.toUpperCase());
+    routes.push({ path, methods });
+  }
+
+  routes.sort((a, b) => (a.path > b.path ? 1 : -1));
+  res.json({ count: routes.length, routes });
+});
+
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
