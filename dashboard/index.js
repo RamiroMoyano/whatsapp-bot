@@ -627,44 +627,87 @@ app.get("/admin/orders/export.csv", requireDashboardAuth, async (req, res) => {
 // ====================== CLIENT ROUTES (empresas) ======================
 
 // Login cliente
-app.get("/c/login", (req, res) => {
+app.get("/c", (req, res) => {
+  const companyId = req.query.company || "babystepsbots";
+
   res.type("text/html").send(`
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <link rel="stylesheet" href="/dashboard.css" />
-        <title>Login Cliente</title>
-      </head>
-      <body class="dark">
-        <div class="login-wrap">
-          <div class="center-card login-card">
-            <h2>Entrar</h2>
-            <p class="muted">Acceso para clientes</p>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/dashboard.css" />
+  <title>Panel Cliente</title>
+</head>
 
-            <form method="POST" action="/c/login" class="form">
-              <label>Empresa (ID)</label>
-              <input name="companyId" placeholder="ej: babystepsbots" />
+<body class="dark">
 
-              <label>Contraseña</label>
-              <div class="pw-row">
-                <input id="clientPass" name="pass" type="password" placeholder="Contraseña" />
-                <button type="button" class="icon-btn" onclick="
-                  const i=document.getElementById('clientPass');
-                  i.type = (i.type==='password'?'text':'password');
-                ">👁</button>
-              </div>
+  <div class="client-shell">
 
-              <div class="actions">
-                <button class="btn primary">Entrar</button>
-                <a class="btn secondary" href="/admin/login">Soy Admin</a>
-              </div>
-            </form>
-          </div>
+    <!-- SIDEBAR -->
+    <aside class="client-sidebar">
+      <div class="client-brand">
+        <div class="dot"></div>
+        <div>
+          <div class="name">${companyId}</div>
+          <div class="sub">Panel de cliente</div>
         </div>
-      </body>
-    </html>
+      </div>
+
+      <nav class="client-nav">
+        <a class="active" href="/c?company=${companyId}">🏠 Inicio</a>
+        <a href="/c/catalog?company=${companyId}">📦 Catálogo</a>
+        <a href="/c/orders?company=${companyId}">🧾 Pedidos</a>
+        <a href="/c/subscription?company=${companyId}">💳 Suscripción</a>
+      </nav>
+    </aside>
+
+
+    <!-- CONTENIDO -->
+    <main class="client-main">
+
+      <div class="client-topbar">
+        <div>
+          <div class="client-title">${companyId}</div>
+          <div class="client-subtitle">Panel de control</div>
+        </div>
+        <a href="/c/logout" class="btn secondary">Salir</a>
+      </div>
+
+
+      <!-- DASHBOARD -->
+      <div class="grid3">
+
+        <div class="kpi">
+          <div class="label">Productos</div>
+          <div class="value">3</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Pedidos hoy</div>
+          <div class="value">0</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Estado</div>
+          <div class="value">Activo</div>
+        </div>
+
+      </div>
+
+
+      <div class="card">
+        <h3>Inicio</h3>
+        <p class="muted">
+          Acá vamos a mostrar métricas, pedidos, mensajes y actividad según tu empresa.
+        </p>
+      </div>
+
+    </main>
+  </div>
+
+</body>
+</html>
   `);
 });
 
