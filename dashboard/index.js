@@ -737,6 +737,96 @@ app.get("/c/logout", (req, res) => {
   res.redirect("/c/login");
 });
 
+// ===============================
+// LOGIN EMPRESAS (cliente panel)
+// ===============================
+
+// login empresa
+app.post("/panel/login", async (req, res) => {
+  const companyId = (req.body.company || "").trim();
+
+  if (!companyId) return res.redirect("/admin/login");
+
+  // guardamos company en cookie simple
+  res.setHeader(
+    "Set-Cookie",
+    `company=${encodeURIComponent(companyId)}; Path=/; HttpOnly; SameSite=Lax`
+  );
+
+  res.redirect("/panel");
+});
+
+// middleware empresa auth
+function requireCompany(req, res, next) {
+  const raw = req.headers.cookie || "";
+  const found = raw.split(";").find(c => c.trim().startsWith("company="));
+
+  if (!found) return res.redirect("/admin/login");
+
+  req.companyId = decodeURIComponent(found.split("=")[1]);
+  next();
+}
+
+// panel cliente
+app.get("/panel", requireCompany, async (req, res) => {
+  const id = req.companyId;
+
+  const c = await api(`/api/companies/${encodeURIComponent(id)}`);
+
+  res.type("text/html").send(`
+  <!doctype html>
+  <html>
+    <head>
+      <link rel="stylesheet" href="/dashboard.css" />
+      <title>Panel ${id}</title>
+    </head>
+    <body>
+      <div class="container">
+
+        <div class="app-header">
+          <div class="brand">
+            <b>${c.name}</b>
+          </div>
+          <div class="nav">
+            <a href="/panel/logout">Logout</a>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="label">Mensajes hoy</div>
+            <div class="value">—</div>
+          </div>
+
+          <div class="kpi">
+            <div class="label">Clientes</div>
+            <div class="value">—</div>
+          </div>
+
+          <div class="kpi">
+            <div class="label">Bots online</div>
+            <div class="value">1</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Tu asistente está activo 🚀</h3>
+          <p class="muted">
+            Este panel es exclusivo para <b>${id}</b>.
+          </p>
+        </div>
+
+      </div>
+    </body>
+  </html>
+  `);
+});
+
+app.get("/panel/logout", (req, res) => {
+  res.setHeader("Set-Cookie", "company=; Path=/; Max-Age=0");
+  res.redirect("/admin/login");
+});
+
 app.get("/", (_, res) => res.send("OK"));
 app.get("/__whoami", (req, res) => {
   res.json({
