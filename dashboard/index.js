@@ -198,6 +198,19 @@ app.get("/admin/login", (req, res) => {
   `);
 });
 
+app.post("/admin/login", (req, res) => {
+  const user = (req.body.user || "").trim();
+  const pass = (req.body.pass || "").trim();
+
+  if (user !== DASH_USER || pass !== DASH_PASS) {
+    return res.status(401).send("Credenciales incorrectas");
+  }
+
+  const token = crypto.randomBytes(24).toString("hex");
+  setCookie(res, "dash", `${token}.${signToken(token)}`);
+  return res.redirect("/admin");
+});
+
 // Logout
 app.get("/admin/logout", (req, res) => {
   clearCookie(res, "dash");
