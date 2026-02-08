@@ -939,7 +939,7 @@ app.get("/panel", requireCompany, async (req, res) => {
 
 app.get("/panel/logout", (req, res) => {
   res.setHeader("Set-Cookie", "company=; Path=/; Max-Age=0");
-  res.redirect("/admin/login");
+  res.redirect("/panel/login");
 });
 
 app.get("/", (_, res) => res.send("OK"));
