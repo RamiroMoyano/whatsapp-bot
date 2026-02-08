@@ -520,20 +520,44 @@ app.get("/__whoami", (req, res) => {
 });
 
 app.get("/__routes", (req, res) => {
-  const stack = app?._router?.stack || [];
-  const routes = [];
+  function extractRoutes(router) {
+    const stack = router?.stack || [];
+    const routes = [];
 
-  for (const layer of stack) {
-    if (!layer.route) continue;
-    const path = layer.route.path;
-    const methods = Object.keys(layer.route.methods || {})
-      .filter((m) => layer.route.methods[m])
-      .map((m) => m.toUpperCase());
-    routes.push({ path, methods });
+    for (const layer of stack) {
+      // En algunos casos hay sub-routers
+      if (layer?.handle?.stack) {
+        routes.push(...extractRoutes(layer.handle));
+      }
+
+      if (!layer.route) continue;
+      const path = layer.route.path;
+      const methods = Object.keys(layer.route.methods || {})
+        .filter((m) => layer.route.methods[m])
+        .map((m) => m.toUpperCase());
+      routes.push({ path, methods });
+    }
+
+    return routes;
   }
 
-  routes.sort((a, b) => (a.path > b.path ? 1 : -1));
-  res.json({ count: routes.length, routes });
+  const r1 = extractRoutes(app._router);
+  const r2 = extractRoutes(app.router);
+
+  const info = {
+    expressRouterKeys: {
+      has_app__router: !!app._router,
+      app__router_stack_len: app._router?.stack?.length ?? null,
+      has_app_router: !!app.router,
+      app_router_stack_len: app.router?.stack?.length ?? null,
+    },
+    routes: [...r1, ...r2]
+      .filter((x, i, a) => a.findIndex(y => y.path === x.path && y.methods.join(",") === x.methods.join(",")) === i)
+      .sort((a, b) => (a.path > b.path ? 1 : -1)),
+  };
+
+  info.count = info.routes.length;
+  res.json(info);
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
