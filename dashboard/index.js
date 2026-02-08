@@ -508,4 +508,15 @@ app.get("/admin/orders/export.csv", requireDashboardAuth, async (req, res) => {
 });
 
 app.get("/", (_, res) => res.send("OK"));
+app.get("/__whoami", (req, res) => {
+  res.json({
+    bootFile: import.meta.url,
+    pwd: process.cwd(),
+    node: process.version,
+    hasPostAdminLogin: typeof app?._router?.stack?.some?.(
+      (l) => l?.route?.path === "/admin/login" && l?.route?.methods?.post
+    ) === "boolean" ? "unknown" : "unknown"
+  });
+});
+
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
