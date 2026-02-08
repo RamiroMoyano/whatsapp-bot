@@ -838,54 +838,102 @@ function requireCompany(req, res, next) {
 app.get("/panel", requireCompany, async (req, res) => {
   const id = req.companyId;
 
+  // 1) Traigo la empresa desde el backend
   const c = await api(`/api/companies/${encodeURIComponent(id)}`);
 
-  res.type("text/html").send(`
-  <!doctype html>
-  <html>
-    <head>
-      <link rel="stylesheet" href="/dashboard.css" />
-      <title>Panel ${id}</title>
-    </head>
-    <body>
-      <div class="container">
+  // 2) KPI mínimos (por ahora: catálogo y reglas como proxy)
+  let catalog = [];
+  let rules = {};
+  try { catalog = JSON.parse(c.catalogJson || "[]"); } catch {}
+  try { rules = JSON.parse(c.rulesJson || "{}"); } catch {}
 
-        <div class="app-header">
-          <div class="brand">
-            <b>${c.name}</b>
-          </div>
-          <div class="nav">
-            <a href="/panel/logout">Logout</a>
+  const kpiCatalogItems = Array.isArray(catalog) ? catalog.length : 0;
+  const kpiAllowHuman = rules.allowHuman === true ? "Sí" : "No";
+  const kpiTone = rules.tone ? String(rules.tone) : "—";
+
+  res.type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Panel - ${c.name || id}</title>
+  </head>
+  <body class="dark">
+    <div class="container">
+
+      <div class="app-header">
+        <div class="brand">
+          <img src="/img/logo.png" alt="BabySteps" onerror="this.style.display='none'"/>
+          <div>
+            <div class="title">${c.name || id}</div>
+            <div class="subtitle">Panel de cliente</div>
           </div>
         </div>
 
-        <div class="kpis">
-          <div class="kpi">
-            <div class="label">Mensajes hoy</div>
-            <div class="value">—</div>
-          </div>
+        <div class="nav">
+          <a href="/panel/logout">Salir</a>
+        </div>
+      </div>
 
-          <div class="kpi">
-            <div class="label">Clientes</div>
-            <div class="value">—</div>
-          </div>
+      <div class="kpis">
+        <div class="kpi">
+          <div class="label">Empresa</div>
+          <div class="value" style="font-size:18px">${id}</div>
+          <div class="hint">ID</div>
+        </div>
 
-          <div class="kpi">
-            <div class="label">Bots online</div>
-            <div class="value">1</div>
-          </div>
+        <div class="kpi">
+          <div class="label">Catálogo</div>
+          <div class="value">${kpiCatalogItems}</div>
+          <div class="hint">items</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Humano</div>
+          <div class="value">${kpiAllowHuman}</div>
+          <div class="hint">derivación</div>
+        </div>
+
+        <div class="kpi">
+          <div class="label">Tono</div>
+          <div class="value" style="font-size:18px">${kpiTone}</div>
+          <div class="hint">regla</div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Tu configuración</h3>
+          <div class="muted" style="margin-bottom:8px;">Prompt</div>
+          <div style="white-space:pre-wrap; opacity:.95">${(c.prompt || "").replaceAll("<","&lt;").replaceAll(">","&gt;")}</div>
         </div>
 
         <div class="card">
-          <h3>Tu asistente está activo 🚀</h3>
-          <p class="muted">
-            Este panel es exclusivo para <b>${id}</b>.
-          </p>
+          <h3 style="margin:0 0 10px;">Catálogo</h3>
+          ${
+            (Array.isArray(catalog) && catalog.length)
+              ? `<table class="table">
+                  <thead><tr><th>ID</th><th>Producto</th><th>Precio</th></tr></thead>
+                  <tbody>
+                    ${catalog.map(p => `
+                      <tr>
+                        <td><code>${p.id}</code></td>
+                        <td>${String(p.name || "")}</td>
+                        <td>${p.price ?? ""}</td>
+                      </tr>
+                    `).join("")}
+                  </tbody>
+                </table>`
+              : `<div class="empty"><div><b>No hay items</b><div class="muted">Pedile al admin que cargue productos.</div></div></div>`
+          }
         </div>
-
       </div>
-    </body>
-  </html>
+
+    </div>
+  </body>
+</html>
   `);
 });
 
