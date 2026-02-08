@@ -741,19 +741,86 @@ app.get("/c/logout", (req, res) => {
 // LOGIN EMPRESAS (cliente panel)
 // ===============================
 
+// Pantalla login de empresas
+app.get("/panel/login", (req, res) => {
+  res.type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Login Cliente</title>
+  </head>
+  <body>
+    <div class="bs-login">
+      <div class="bs-bg" style="background-image:url('/img/robot.png')"></div>
+      <div class="bs-vignette"></div>
+
+      <div class="bs-card">
+        <div class="bs-brand">
+          <div class="bs-dot"></div>
+          <div>
+            <div class="bs-title">BabySteps</div>
+            <div class="bs-subtitle">Acceso clientes</div>
+          </div>
+        </div>
+
+        <h2 class="bs-h2">Entrar</h2>
+
+        <form method="POST" action="/panel/login" class="form">
+          <label>Empresa (ID)</label>
+          <input name="companyId" placeholder="ej: babystepsbots" autocomplete="username" />
+
+          <label>Contraseña</label>
+          <div class="pw-row">
+            <input id="panelPass" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
+            <button type="button" class="icon-btn" onclick="
+              const i=document.getElementById('panelPass');
+              i.type = (i.type==='password'?'text':'password');
+            ">👁</button>
+          </div>
+
+          <div class="login-actions">
+            <button class="btn primary">Entrar</button>
+            <a class="btn secondary" href="/admin/login">Soy Admin</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>
+  `);
+});
+
 // login empresa
 app.post("/panel/login", async (req, res) => {
-  const companyId = (req.body.company || "").trim();
+  try {
+    const companyId = (req.body.companyId || "").trim();
+    const pass = (req.body.pass || "").trim();
 
-  if (!companyId) return res.redirect("/admin/login");
+    if (!companyId || !pass) return res.status(400).send("Faltan datos");
 
-  // guardamos company en cookie simple
-  res.setHeader(
-    "Set-Cookie",
-    `company=${encodeURIComponent(companyId)}; Path=/; HttpOnly; SameSite=Lax`
-  );
+    const c = await api(`/api/companies/${encodeURIComponent(companyId)}`);
 
-  res.redirect("/panel");
+    let rules = {};
+    try { rules = JSON.parse(c.rulesJson || "{}"); } catch {}
+
+    const expected = (rules.clientPassword || "").trim();
+    if (!expected || pass !== expected) {
+      return res.status(401).send("Credenciales incorrectas");
+    }
+
+    // cookie de empresa
+    res.setHeader(
+      "Set-Cookie",
+      `company=${encodeURIComponent(companyId)}; Path=/; HttpOnly; SameSite=Lax`
+    );
+
+    return res.redirect("/panel");
+  } catch {
+    return res.status(401).send("Credenciales incorrectas");
+  }
 });
 
 // middleware empresa auth
@@ -761,7 +828,7 @@ function requireCompany(req, res, next) {
   const raw = req.headers.cookie || "";
   const found = raw.split(";").find(c => c.trim().startsWith("company="));
 
-  if (!found) return res.redirect("/admin/login");
+  if (!found) return res.redirect("/panel/login");
 
   req.companyId = decodeURIComponent(found.split("=")[1]);
   next();
