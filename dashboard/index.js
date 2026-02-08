@@ -12,6 +12,11 @@ app.use(express.urlencoded({ extended: false }));
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "public")));
 
+// ===== Compat: redirigir panel viejo (/panel) al nuevo (/c) =====
+app.get("/panel", (req, res) => res.redirect("/c"));
+app.get("/panel/login", (req, res) => res.redirect("/c/login"));
+app.get("/panel/logout", (req, res) => res.redirect("/c/logout"));
+
 const DASH_USER = (process.env.DASH_USER || "").trim();
 const DASH_PASS = (process.env.DASH_PASS || "").trim();
 const DASH_COOKIE_SECRET = (process.env.DASH_COOKIE_SECRET || "").trim();
@@ -817,7 +822,7 @@ app.post("/panel/login", async (req, res) => {
       `company=${encodeURIComponent(companyId)}; Path=/; HttpOnly; SameSite=Lax`
     );
 
-    return res.redirect("/panel");
+    return res.redirect("/c");
   } catch {
     return res.status(401).send("Credenciales incorrectas");
   }
