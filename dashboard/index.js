@@ -654,6 +654,10 @@ function renderClientLoginPage() {
       <div class="bs-vignette"></div>
 
       <div class="bs-card">
+        <div class="admin-login-avatar">
+          <img src="/img/admin-login-avatar.jpeg" alt="Admin avatar" onerror="this.style.display='none'" />
+        </div>
+
         <div class="bs-brand">
           <div class="bs-dot"></div>
           <div>

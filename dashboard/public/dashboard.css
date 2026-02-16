@@ -456,6 +456,21 @@ select:focus {
   padding: 26px 26px 22px;
 }
 
+.admin-login-avatar {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.admin-login-avatar img {
+  width: 132px;
+  height: 132px;
+  border-radius: 18px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
 .bs-card::before {
   content: "";
   display: block;
