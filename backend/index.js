@@ -344,6 +344,187 @@ function formatCatalogChoices(catalogItems) {
     .join("\n");
 }
 
+function roundMoney(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+function normalizeCatalogEntries(catalogRaw) {
+  if (!Array.isArray(catalogRaw)) return [];
+  return catalogRaw
+    .map((item, idx) => ({
+      id: String(item?.id ?? "").trim(),
+      idLower: String(item?.id ?? "").trim().toLowerCase(),
+      name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
+      nameLower: String(item?.name || item?.title || `Producto ${idx + 1}`).trim().toLowerCase(),
+      price: roundMoney(item?.price ?? item?.amount ?? 0),
+    }))
+    .filter((item) => item.name);
+}
+
+function isValidDateObj(d) {
+  return d instanceof Date && !Number.isNaN(d.getTime());
+}
+
+function parseDateSafe(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return isValidDateObj(d) ? d : null;
+}
+
+function monthRefFromShift(baseYear, baseMonth, shift) {
+  const d = new Date(Date.UTC(baseYear, baseMonth + shift, 1));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() };
+}
+
+function clampDayOfMonth(year, month, day) {
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Math.min(Math.max(1, day), last);
+}
+
+function buildUtcDate(year, month, day) {
+  return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+}
+
+function computeMonthlyCycle(anchorInput, nowInput = new Date()) {
+  const now = parseDateSafe(nowInput) || new Date();
+  const anchor = parseDateSafe(anchorInput) || now;
+  const anchorDay = anchor.getUTCDate();
+  const nowYear = now.getUTCFullYear();
+  const nowMonth = now.getUTCMonth();
+
+  const monthDay = clampDayOfMonth(nowYear, nowMonth, anchorDay);
+  let start = buildUtcDate(nowYear, nowMonth, monthDay);
+  if (now.getTime() < start.getTime()) {
+    const prevRef = monthRefFromShift(nowYear, nowMonth, -1);
+    start = buildUtcDate(prevRef.year, prevRef.month, clampDayOfMonth(prevRef.year, prevRef.month, anchorDay));
+  }
+
+  const nextRef = monthRefFromShift(start.getUTCFullYear(), start.getUTCMonth(), 1);
+  const renewal = buildUtcDate(nextRef.year, nextRef.month, clampDayOfMonth(nextRef.year, nextRef.month, anchorDay));
+  const end = new Date(renewal.getTime() - 24 * 60 * 60 * 1000);
+  const totalDays = Math.max(1, Math.ceil((renewal.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)));
+  const remainingDays = Math.max(0, Math.ceil((renewal.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+
+  return {
+    anchorIso: anchor.toISOString(),
+    cycleDay: anchorDay,
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    renewalIso: renewal.toISOString(),
+    totalDays,
+    remainingDays,
+  };
+}
+
+function findCatalogItemByBot(catalogItems, botClass, botCatalogId) {
+  const idRaw = String(botCatalogId || "").trim().toLowerCase();
+  const classRaw = String(botClass || "").trim().toLowerCase();
+  if (!catalogItems.length) return null;
+  if (idRaw) {
+    const byId = catalogItems.find((item) => item.idLower === idRaw);
+    if (byId) return byId;
+  }
+  if (classRaw) {
+    const exact = catalogItems.find((item) => item.nameLower === classRaw);
+    if (exact) return exact;
+    const partial = catalogItems.find((item) => item.nameLower.includes(classRaw));
+    if (partial) return partial;
+  }
+  return null;
+}
+
+function resolveBotPriceFromRules(rules, catalogItems) {
+  const selected = findCatalogItemByBot(catalogItems, rules?.botClass, rules?.botCatalogId);
+  if (selected) return { selected, amount: selected.price };
+
+  const fallback = roundMoney(
+    rules?.subscriptionAmount ??
+    rules?.subscriptionNextAmount ??
+    rules?.monthlyPrice ??
+    0
+  );
+  return { selected: null, amount: fallback };
+}
+
+function syncRulesSubscription({
+  rules,
+  catalogItems,
+  previousRules = null,
+  previousCatalogItems = null,
+  now = new Date(),
+  triggerUpgrade = false,
+}) {
+  const nextRules = rules && typeof rules === "object" ? { ...rules } : {};
+  const prevRulesObj = previousRules && typeof previousRules === "object" ? previousRules : {};
+  const prevCatalog = Array.isArray(previousCatalogItems) ? previousCatalogItems : catalogItems;
+
+  const currentBot = findCatalogItemByBot(catalogItems, nextRules.botClass, nextRules.botCatalogId);
+  if (currentBot) {
+    nextRules.botClass = currentBot.name;
+    if (currentBot.id) nextRules.botCatalogId = currentBot.id;
+  }
+
+  const currentBotClass = String(nextRules.botClass || "").trim();
+  if (!currentBotClass) {
+    const mode = String(nextRules.channelMode || "").toLowerCase();
+    let inferred = null;
+    if (mode === "instagram") {
+      inferred = catalogItems.find((item) => item.nameLower.includes("instagram") || item.nameLower.includes("insta"));
+    } else if (mode === "combinado") {
+      inferred = catalogItems.find((item) => item.nameLower.includes("unificado") || item.nameLower.includes("combinado"));
+    } else if (mode === "whatsapp") {
+      inferred = catalogItems.find((item) => item.nameLower.includes("whatsapp"));
+    }
+    if (!inferred && catalogItems.length === 1) inferred = catalogItems[0];
+    if (inferred) {
+      nextRules.botClass = inferred.name;
+      if (inferred.id) nextRules.botCatalogId = inferred.id;
+    }
+  }
+
+  const { selected, amount } = resolveBotPriceFromRules(nextRules, catalogItems);
+  const activeAmount = roundMoney(amount);
+  const activeName = selected?.name || String(nextRules.botClass || "").trim();
+
+  const anchorSource =
+    nextRules.subscriptionAnchorDate ||
+    nextRules.subscriptionStartDate ||
+    nextRules.botActivatedAt ||
+    now.toISOString();
+  const cycle = computeMonthlyCycle(anchorSource, now);
+
+  nextRules.subscriptionAnchorDate = cycle.anchorIso;
+  nextRules.subscriptionCycleDay = cycle.cycleDay;
+  nextRules.subscriptionCurrentStart = cycle.startIso;
+  nextRules.subscriptionCurrentEnd = cycle.endIso;
+  nextRules.subscriptionRenewal = cycle.renewalIso;
+  nextRules.subscriptionCycle = "Mensual";
+  nextRules.subscriptionStatus = String(nextRules.subscriptionStatus || "Activa");
+  nextRules.subscriptionCurrency = String(nextRules.subscriptionCurrency || "USD");
+  nextRules.subscriptionAmount = activeAmount;
+  nextRules.subscriptionNextAmount = activeAmount;
+  nextRules.monthlyPrice = activeAmount;
+  if (activeName) {
+    nextRules.subscriptionPlan = activeName;
+  }
+
+  if (triggerUpgrade) {
+    const prev = resolveBotPriceFromRules(prevRulesObj, prevCatalog);
+    const prevAmount = roundMoney(prev.amount);
+    if (activeAmount > prevAmount && cycle.totalDays > 0 && cycle.remainingDays > 0) {
+      const prorated = roundMoney((activeAmount * cycle.remainingDays) / cycle.totalDays);
+      nextRules.subscriptionProrationDueNow = prorated;
+      nextRules.subscriptionProrationAt = (parseDateSafe(now) || new Date()).toISOString();
+    } else {
+      nextRules.subscriptionProrationDueNow = 0;
+    }
+  }
+
+  return nextRules;
+}
+
 // ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÍ ==================
 // ===== API: Companies =====
 app.get("/api/companies", requireApiAuth, (req, res) => {
@@ -384,19 +565,52 @@ app.post("/api/companies/:id/save", requireApiAuth, (req, res) => {
   const catalogJson = String(req.body.catalogJson || "[]");
   const rulesJson = String(req.body.rulesJson || "{}");
 
-  try { const c = JSON.parse(catalogJson); if (!Array.isArray(c)) throw new Error("catalogJson debe ser un array"); }
-  catch (e) { return res.status(400).json({ error: `Catalog JSON inválido: ${e.message}` }); }
+  let parsedCatalog;
+  let parsedRules;
+  try {
+    parsedCatalog = JSON.parse(catalogJson);
+    if (!Array.isArray(parsedCatalog)) throw new Error("catalogJson debe ser un array");
+  } catch (e) {
+    return res.status(400).json({ error: `Catalog JSON invalido: ${e.message}` });
+  }
 
-  try { const r = JSON.parse(rulesJson); if (!r || Array.isArray(r) || typeof r !== "object") throw new Error("rulesJson debe ser un objeto"); }
-  catch (e) { return res.status(400).json({ error: `Rules JSON inválido: ${e.message}` }); }
+  try {
+    parsedRules = JSON.parse(rulesJson);
+    if (!parsedRules || Array.isArray(parsedRules) || typeof parsedRules !== "object") {
+      throw new Error("rulesJson debe ser un objeto");
+    }
+  } catch (e) {
+    return res.status(400).json({ error: `Rules JSON invalido: ${e.message}` });
+  }
+
+  const existing = db.prepare(`SELECT rulesJson,catalogJson FROM companies WHERE id=?`).get(id);
+  const previousRules = parseJsonSafe(existing?.rulesJson || "{}", {});
+  const previousCatalog = normalizeCatalogEntries(parseJsonSafe(existing?.catalogJson || "[]", []));
+  const nextCatalog = normalizeCatalogEntries(parsedCatalog);
+  const previousBotClass = String(previousRules?.botClass || "").trim().toLowerCase();
+  const nextBotClass = String(parsedRules?.botClass || "").trim().toLowerCase();
+  const triggerUpgrade = previousBotClass && nextBotClass && previousBotClass !== nextBotClass;
+
+  const syncedRules = syncRulesSubscription({
+    rules: parsedRules,
+    catalogItems: nextCatalog,
+    previousRules,
+    previousCatalogItems: previousCatalog,
+    now: new Date(),
+    triggerUpgrade,
+  });
+  const finalRulesJson = JSON.stringify(syncedRules);
 
   db.prepare(`UPDATE companies SET name=?, prompt=?, catalogJson=?, rulesJson=? WHERE id=?`).run(
-    name || id, prompt, catalogJson, rulesJson, id
+    name || id,
+    prompt,
+    catalogJson,
+    finalRulesJson,
+    id
   );
 
   res.json({ ok: true });
 });
-
 app.post("/api/companies/:id/delete", requireApiAuth, (req, res) => {
   db.prepare(`DELETE FROM companies WHERE id=?`).run(req.params.id);
   res.json({ ok: true });
@@ -559,16 +773,11 @@ app.post("/whatsapp", async (req, res) => {
       if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
       const catalogRaw = parseJsonSafe(row.catalogJson || "[]", []);
-      const catalog = Array.isArray(catalogRaw)
-        ? catalogRaw.map((item, idx) => ({
-            id: String(item?.id ?? ""),
-            name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
-          })).filter((item) => item.name)
-        : [];
+      const catalog = normalizeCatalogEntries(catalogRaw).map((item) => ({ id: item.id, name: item.name }));
 
       return respond(
         res,
-        `🤖 Catalogo de bots (${row.id}):\n${formatCatalogChoices(catalog)}\n\nUso: admin bot set ${row.id} <id o nombre>`
+        `Catalogo de bots (${row.id}):\n${formatCatalogChoices(catalog)}\n\nUso: admin bot set ${row.id} <id o nombre>`
       );
     }
 
@@ -576,19 +785,24 @@ app.post("/whatsapp", async (req, res) => {
     const botStatus = cmd.match(/^admin bot status ([a-z0-9_-]+)$/i);
     if (botStatus) {
       const companyId = botStatus[1].toLowerCase();
-      const row = db.prepare(`SELECT id,name,rulesJson FROM companies WHERE id=?`).get(companyId);
+      const row = db.prepare(`SELECT id,name,rulesJson,catalogJson FROM companies WHERE id=?`).get(companyId);
       if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
       const rulesRaw = parseJsonSafe(row.rulesJson || "{}", {});
       const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-      const botClass = String(rules.botClass || "").trim() || "Sin definir";
-      const planTier = String(rules.planTier || "").trim() || "Sin definir";
-      const channelMode = String(rules.channelMode || "").trim() || "Sin definir";
-      const botCatalogId = String(rules.botCatalogId || "").trim() || "-";
+      const catalog = normalizeCatalogEntries(parseJsonSafe(row.catalogJson || "[]", []));
+      const synced = syncRulesSubscription({
+        rules,
+        catalogItems: catalog,
+        previousRules: rules,
+        previousCatalogItems: catalog,
+        now: new Date(),
+        triggerUpgrade: false,
+      });
 
       return respond(
         res,
-        `📌 Bot empresa ${row.id}\nClase: ${botClass}\nPlan: ${planTier}\nCanal: ${channelMode}\nCatalogo ID: ${botCatalogId}`
+        `Bot empresa ${row.id}\nClase: ${String(synced.botClass || "Sin definir")}\nPlan: ${String(synced.planTier || "Sin definir")}\nCanal: ${String(synced.channelMode || "Sin definir")}\nInicio ciclo: ${String(synced.subscriptionCurrentStart || "-")}\nFin ciclo: ${String(synced.subscriptionCurrentEnd || "-")}\nProximo cobro: $${roundMoney(synced.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(synced.subscriptionProrationDueNow || 0)}`
       );
     }
 
@@ -602,15 +816,7 @@ app.post("/whatsapp", async (req, res) => {
       const row = db.prepare(`SELECT id,name,catalogJson,rulesJson FROM companies WHERE id=?`).get(companyId);
       if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
-      const catalogRaw = parseJsonSafe(row.catalogJson || "[]", []);
-      const catalog = Array.isArray(catalogRaw)
-        ? catalogRaw.map((item, idx) => ({
-            id: String(item?.id ?? "").trim(),
-            idLower: String(item?.id ?? "").trim().toLowerCase(),
-            name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
-            nameLower: String(item?.name || item?.title || `Producto ${idx + 1}`).trim().toLowerCase(),
-          })).filter((item) => item.name)
-        : [];
+      const catalog = normalizeCatalogEntries(parseJsonSafe(row.catalogJson || "[]", []));
       if (!catalog.length) return respond(res, `La empresa ${row.id} no tiene productos en catalogo.`);
 
       let selected = catalog.find((item) => item.idLower === botQuery);
@@ -624,7 +830,8 @@ app.post("/whatsapp", async (req, res) => {
       }
 
       const rulesRaw = parseJsonSafe(row.rulesJson || "{}", {});
-      const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+      const rules = rulesRaw && typeof rulesRaw === "object" ? { ...rulesRaw } : {};
+      const previousRules = { ...rules };
       rules.botClass = selected.name;
       if (selected.id) rules.botCatalogId = selected.id;
       rules.botClassUpdatedAt = new Date().toISOString();
@@ -641,14 +848,22 @@ app.post("/whatsapp", async (req, res) => {
         rules.channels = channelsFromMode(inferredChannel);
       }
 
-      db.prepare(`UPDATE companies SET rulesJson=? WHERE id=?`).run(JSON.stringify(rules), row.id);
+      const syncedRules = syncRulesSubscription({
+        rules,
+        catalogItems: catalog,
+        previousRules,
+        previousCatalogItems: catalog,
+        now: new Date(),
+        triggerUpgrade: true,
+      });
+
+      db.prepare(`UPDATE companies SET rulesJson=? WHERE id=?`).run(JSON.stringify(syncedRules), row.id);
 
       return respond(
         res,
-        `✅ Bot actualizado para ${row.id}\nClase: ${selected.name}\nPlan: ${rules.planTier || "-"}\nCanal: ${rules.channelMode || "-"}`
+        `OK Bot actualizado para ${row.id}\nClase: ${selected.name}\nPlan: ${syncedRules.planTier || "-"}\nCanal: ${syncedRules.channelMode || "-"}\nProximo cobro: $${roundMoney(syncedRules.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(syncedRules.subscriptionProrationDueNow || 0)}`
       );
     }
-
     // admin ai set off|lite|pro [numero]
     const mAi = cmd.match(/^admin ai set (off|lite|pro)(?:\s+(.+))?$/i);
     if (mAi) {

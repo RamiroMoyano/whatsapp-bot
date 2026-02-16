@@ -595,6 +595,11 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             <div><b>Pais:</b> ${escapeHtml(profile.companyCountry || "-")}</div>
             <div><b>Clase de bot:</b> ${escapeHtml(plan.botClass)}</div>
             <div><b>Plan activo:</b> ${escapeHtml(plan.fullLabel)}</div>
+            <div><b>Monto mensual:</b> ${formatMoney(state.subscription.amount, state.subscription.currency)}</div>
+            <div><b>Inicio ciclo actual:</b> ${escapeHtml(formatDateLabel(state.subscription.startAt))}</div>
+            <div><b>Fin ciclo actual:</b> ${escapeHtml(formatDateLabel(state.subscription.endAt))}</div>
+            <div><b>Cobro mes siguiente:</b> ${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</div>
+            <div><b>Prorrateo inmediato:</b> ${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}</div>
           </div>
         </div>
       </div>
@@ -620,6 +625,12 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
           </div>
           <div class="muted">
             Opciones detectadas en catalogo: ${botOptions.length}
+          </div>
+          <div class="muted">
+            Ciclo actual: ${escapeHtml(formatDateLabel(state.subscription.startAt))} a ${escapeHtml(formatDateLabel(state.subscription.endAt))}
+          </div>
+          <div class="muted">
+            Proximo cobro: ${formatMoney(state.subscription.nextAmount, state.subscription.currency)} | Prorrateo ahora: ${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}
           </div>
 
           <div class="actions">
@@ -1266,6 +1277,73 @@ function extractCatalogBotOptions(company) {
     .filter(Boolean);
 }
 
+function parseDateSafe(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function monthRefFromShift(year, month, shift) {
+  const d = new Date(Date.UTC(year, month + shift, 1));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() };
+}
+
+function clampDayOfMonth(year, month, day) {
+  const maxDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Math.min(Math.max(1, day), maxDay);
+}
+
+function buildUtcDate(year, month, day) {
+  return new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+}
+
+function computeMonthlyCycle(anchorInput, nowInput = new Date()) {
+  const now = parseDateSafe(nowInput) || new Date();
+  const anchor = parseDateSafe(anchorInput) || now;
+  const anchorDay = anchor.getUTCDate();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+
+  let currentStart = buildUtcDate(year, month, clampDayOfMonth(year, month, anchorDay));
+  if (now.getTime() < currentStart.getTime()) {
+    const prevRef = monthRefFromShift(year, month, -1);
+    currentStart = buildUtcDate(prevRef.year, prevRef.month, clampDayOfMonth(prevRef.year, prevRef.month, anchorDay));
+  }
+
+  const nextRef = monthRefFromShift(currentStart.getUTCFullYear(), currentStart.getUTCMonth(), 1);
+  const renewal = buildUtcDate(nextRef.year, nextRef.month, clampDayOfMonth(nextRef.year, nextRef.month, anchorDay));
+  const currentEnd = new Date(renewal.getTime() - 24 * 60 * 60 * 1000);
+  const totalDays = Math.max(1, Math.ceil((renewal.getTime() - currentStart.getTime()) / (24 * 60 * 60 * 1000)));
+  const remainingDays = Math.max(0, Math.ceil((renewal.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+
+  return {
+    anchorIso: anchor.toISOString(),
+    startIso: currentStart.toISOString(),
+    endIso: currentEnd.toISOString(),
+    renewalIso: renewal.toISOString(),
+    totalDays,
+    remainingDays,
+  };
+}
+
+function findCatalogItemForBot(catalog, botClass, botCatalogId) {
+  const idRaw = String(botCatalogId || "").trim().toLowerCase();
+  const nameRaw = String(botClass || "").trim().toLowerCase();
+  if (!Array.isArray(catalog) || !catalog.length) return null;
+
+  if (idRaw) {
+    const byId = catalog.find((item) => String(item.id || "").trim().toLowerCase() === idRaw);
+    if (byId) return byId;
+  }
+  if (nameRaw) {
+    const exact = catalog.find((item) => String(item.name || "").trim().toLowerCase() === nameRaw);
+    if (exact) return exact;
+    const partial = catalog.find((item) => String(item.name || "").trim().toLowerCase().includes(nameRaw));
+    if (partial) return partial;
+  }
+  return null;
+}
+
 function extractPlanInfo(company, rules) {
   const botClassRaw = String(
     rules?.botClass ||
@@ -1364,14 +1442,36 @@ function extractClientState(company) {
   const avgPrice = prices.length ? totalCatalogValue / prices.length : 0;
   const maxPrice = prices.length ? Math.max(...prices) : 0;
 
+  const activeCatalogItem = findCatalogItemForBot(catalog, plan.botClass, rules?.botCatalogId);
+  const activeBotAmount = activeCatalogItem ? toNumber(activeCatalogItem.price) : 0;
+  const anchorSource =
+    rules.subscriptionAnchorDate ||
+    rules.subscriptionStartDate ||
+    rules.botActivatedAt ||
+    company?.createdAt ||
+    new Date().toISOString();
+  const cycle = computeMonthlyCycle(anchorSource);
+  const computedAmount = activeBotAmount > 0
+    ? activeBotAmount
+    : toNumber(company?.subscriptionAmount ?? rules.subscriptionAmount ?? rules.monthlyPrice ?? 0);
+  const computedNextAmount = activeBotAmount > 0
+    ? activeBotAmount
+    : toNumber(rules.subscriptionNextAmount ?? computedAmount);
+
   const subscription = {
-    plan: String(company?.subscriptionPlan || rules.subscriptionPlan || rules.plan || plan.planLabel),
+    plan: String(rules.subscriptionPlan || company?.subscriptionPlan || rules.plan || plan.planLabel),
     status: String(company?.subscriptionStatus || rules.subscriptionStatus || "Activa"),
     cycle: String(company?.subscriptionCycle || rules.subscriptionCycle || "Mensual"),
-    renewalAt: company?.subscriptionRenewal || rules.subscriptionRenewal || company?.nextBillingDate || rules.nextBillingDate || "",
-    amount: toNumber(company?.subscriptionAmount ?? rules.subscriptionAmount ?? rules.monthlyPrice ?? 0),
+    startAt: rules.subscriptionCurrentStart || rules.subscriptionStartDate || cycle.startIso,
+    endAt: rules.subscriptionCurrentEnd || cycle.endIso,
+    renewalAt: rules.subscriptionRenewal || company?.subscriptionRenewal || company?.nextBillingDate || rules.nextBillingDate || cycle.renewalIso,
+    amount: computedAmount,
+    nextAmount: computedNextAmount,
+    prorationDueNow: toNumber(rules.subscriptionProrationDueNow ?? 0),
+    prorationAt: rules.subscriptionProrationAt || "",
     currency: String(company?.subscriptionCurrency || rules.subscriptionCurrency || "USD"),
     autoRenew: rules.autoRenew ?? company?.autoRenew ?? true,
+    activeBotName: activeCatalogItem?.name || plan.botClass,
   };
 
   return { rules, plan, profile, catalog, prices, totalCatalogValue, avgPrice, maxPrice, subscription };
@@ -1873,7 +1973,8 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
       <article class="cp-stat"><div class="cp-stat-label">Canales</div><div class="cp-stat-value">${escapeHtml(state.plan.channelLabel)}</div><div class="cp-stat-hint">activos</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Clase bot</div><div class="cp-stat-value">${escapeHtml(state.plan.botClass)}</div><div class="cp-stat-hint">asignada</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Estado</div><div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div><div class="cp-stat-hint">cuenta</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Monto</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Monto actual</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Cobro siguiente</div><div class="cp-stat-value">${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</div></article>
     </section>
 
     <section class="cp-grid">
@@ -1883,8 +1984,12 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
         <div class="cp-kv"><span>Canales</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
         <div class="cp-kv"><span>Clase asignada</span><b>${escapeHtml(state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
+        <div class="cp-kv"><span>Inicio plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.startAt))}</b></div>
+        <div class="cp-kv"><span>Fin plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.endAt))}</b></div>
         <div class="cp-kv"><span>Ciclo</span><b>${escapeHtml(state.subscription.cycle)}</b></div>
         <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Cobro mes siguiente</span><b>${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Prorrateo upgrade</span><b>${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}</b></div>
         <div class="cp-kv"><span>Proxima fecha</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
         <div class="cp-kv"><span>Renovacion</span><b>${state.subscription.autoRenew ? "Automatica" : "Manual"}</b></div>
       </article>
