@@ -192,6 +192,10 @@ app.get("/admin/login", (req, res) => {
       <div class="bs-vignette"></div>
 
       <div class="bs-card">
+        <div class="admin-login-avatar">
+          <img src="/img/admin-login-avatar.jpeg" alt="Admin avatar" onerror="this.style.display='none'" />
+        </div>
+
         <div class="bs-brand">
           <div class="bs-dot"></div>
           <div>
@@ -654,10 +658,6 @@ function renderClientLoginPage() {
       <div class="bs-vignette"></div>
 
       <div class="bs-card">
-        <div class="admin-login-avatar">
-          <img src="/img/admin-login-avatar.jpeg" alt="Admin avatar" onerror="this.style.display='none'" />
-        </div>
-
         <div class="bs-brand">
           <div class="bs-dot"></div>
           <div>
@@ -711,22 +711,126 @@ async function handleClientLogin(req, res) {
     }
 
     setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
-    return res.redirect("/c");
+    return res.redirect("/panel");
   } catch {
     return res.status(401).send("Credenciales incorrectas");
   }
 }
 
-function renderClientPage({ company, active, title, bodyHtml }) {
+function toNumber(value) {
+  const n = Number(String(value ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatMoney(value, currency = "USD") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "-";
+  try {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `$${Math.round(amount)}`;
+  }
+}
+
+function formatDateLabel(value) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString("es-AR");
+}
+
+function extractClientState(company) {
+  const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+  const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
+  const catalogBase = Array.isArray(catalogRaw) ? catalogRaw : [];
+  const catalog = catalogBase.map((item, idx) => ({
+    id: String(item?.id ?? `P-${idx + 1}`),
+    name: String(item?.name || item?.title || "Sin nombre"),
+    price: toNumber(item?.price ?? item?.amount ?? 0),
+    stock: item?.stock ?? item?.qty ?? "-",
+    category: String(item?.category || item?.type || "-"),
+  }));
+
+  const prices = catalog.map((item) => item.price).filter((p) => p > 0);
+  const totalCatalogValue = prices.reduce((acc, p) => acc + p, 0);
+  const avgPrice = prices.length ? totalCatalogValue / prices.length : 0;
+  const maxPrice = prices.length ? Math.max(...prices) : 0;
+
+  const subscription = {
+    plan: String(company?.subscriptionPlan || rules.subscriptionPlan || rules.plan || "Sin plan"),
+    status: String(company?.subscriptionStatus || rules.subscriptionStatus || "Activa"),
+    cycle: String(company?.subscriptionCycle || rules.subscriptionCycle || "Mensual"),
+    renewalAt: company?.subscriptionRenewal || rules.subscriptionRenewal || company?.nextBillingDate || rules.nextBillingDate || "",
+    amount: toNumber(company?.subscriptionAmount ?? rules.subscriptionAmount ?? rules.monthlyPrice ?? 0),
+    currency: String(company?.subscriptionCurrency || rules.subscriptionCurrency || "USD"),
+    autoRenew: rules.autoRenew ?? company?.autoRenew ?? true,
+  };
+
+  return { rules, catalog, prices, totalCatalogValue, avgPrice, maxPrice, subscription };
+}
+
+function buildPriceChart(values) {
+  const series = Array.isArray(values)
+    ? values.filter((v) => Number.isFinite(v) && v > 0).slice(0, 8)
+    : [];
+  if (!series.length) {
+    return `<div class="cp-empty">Sin datos de precios para graficar.</div>`;
+  }
+
+  const width = 680;
+  const height = 220;
+  const pad = 22;
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = max - min || 1;
+  const step = series.length === 1 ? 0 : (width - pad * 2) / (series.length - 1);
+
+  const points = series.map((v, idx) => {
+    const x = pad + step * idx;
+    const y = height - pad - ((v - min) / range) * (height - pad * 2);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+
+  const start = `${pad},${height - pad}`;
+  const endX = (pad + step * (series.length - 1)).toFixed(2);
+  const end = `${endX},${height - pad}`;
+  const areaPoints = `${start} ${points} ${end}`;
+
+  const grid = [0.2, 0.4, 0.6, 0.8].map((ratio) => {
+    const y = (pad + (height - pad * 2) * ratio).toFixed(2);
+    return `<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" />`;
+  }).join("");
+
+  const labels = series.map((_, idx) => `<span>${idx + 1}</span>`).join("");
+
+  return `
+    <div class="cp-chart-wrap">
+      <svg class="cp-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Evolucion de precios">
+        <g class="cp-chart-grid">${grid}</g>
+        <polygon class="cp-chart-area" points="${areaPoints}" />
+        <polyline class="cp-chart-line" points="${points}" />
+      </svg>
+      <div class="cp-chart-labels">${labels}</div>
+    </div>
+  `;
+}
+
+function renderClientPage({ company, active, title, subtitle, bodyHtml }) {
   const nav = [
-    { key: "inicio", label: "Inicio", href: "/panel" },
+    { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
     { key: "pedidos", label: "Pedidos", href: "/panel/pedidos" },
     { key: "suscripcion", label: "Suscripcion", href: "/panel/suscripcion" },
   ];
 
   const navHtml = nav.map((item) => `
-    <a class="sb-link ${active === item.key ? "active" : ""}" href="${item.href}">
+    <a class="cp-nav-link ${active === item.key ? "active" : ""}" href="${item.href}">
       ${item.label}
     </a>
   `).join("");
@@ -739,30 +843,27 @@ function renderClientPage({ company, active, title, bodyHtml }) {
       <link rel="stylesheet" href="/dashboard.css" />
       <title>${escapeHtml(title)}</title>
     </head>
-    <body class="dark">
-      <div class="container">
-        <header class="app-header">
-          <div class="brand">
+    <body class="client-ui">
+      <div class="cp-shell">
+        <aside class="cp-sidebar">
+          <div class="cp-brand">
             <img src="/img/logo.png" alt="BabySteps" onerror="this.style.display='none'" />
             <div>
-              <div class="title">${escapeHtml(company?.name || company?.id || "Panel")}</div>
-              <div class="subtitle">Panel de cliente</div>
+              <div class="cp-brand-title">${escapeHtml(company?.name || company?.id || "Panel")}</div>
+              <div class="cp-brand-sub">Panel de cliente</div>
             </div>
           </div>
-          <a class="btn secondary" href="/panel/logout">Salir</a>
-        </header>
+          <nav class="cp-nav">${navHtml}</nav>
+          <a class="cp-logout" href="/panel/logout">Salir</a>
+        </aside>
 
-        <div class="client-layout">
-          <aside class="sidebar">
-            <div class="sb-title">${escapeHtml(company?.name || company?.id || "Cuenta")}</div>
-            <div class="sb-sub">Menu</div>
-            <nav class="sb-nav">${navHtml}</nav>
-          </aside>
-
-          <main class="main-area">
-            ${bodyHtml}
-          </main>
-        </div>
+        <main class="cp-main">
+          <header class="cp-header">
+            <h1>${escapeHtml(title)}</h1>
+            <p>${escapeHtml(subtitle || "")}</p>
+          </header>
+          ${bodyHtml}
+        </main>
       </div>
     </body>
   </html>`;
@@ -780,83 +881,220 @@ app.post("/c/login", handleClientLogin);
 
 app.get("/panel", requireClientAuth, async (req, res) => {
   const company = req.company;
-  const catalogRaw = parseJsonSafe(company.catalogJson || "[]", []);
-  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
-  const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
-  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-
-  const catalogRows = catalog.map((item) => `
+  const state = extractClientState(company);
+  const catalogRows = state.catalog.slice(0, 6).map((item) => `
     <tr>
-      <td>${escapeHtml(item?.id ?? "")}</td>
-      <td>${escapeHtml(item?.name ?? "")}</td>
-      <td>${escapeHtml(item?.price ?? "")}</td>
+      <td>${escapeHtml(item.id)}</td>
+      <td>${escapeHtml(item.name)}</td>
+      <td>${formatMoney(item.price, state.subscription.currency)}</td>
     </tr>
   `).join("");
 
+  const stats = [
+    { label: "Productos", value: state.catalog.length, hint: "items en catalogo" },
+    { label: "Valor catalogo", value: formatMoney(state.totalCatalogValue, state.subscription.currency), hint: "suma precios" },
+    { label: "Precio promedio", value: formatMoney(state.avgPrice, state.subscription.currency), hint: "ticket estimado" },
+    { label: "Suscripcion", value: escapeHtml(state.subscription.plan), hint: `estado ${escapeHtml(state.subscription.status)}` },
+  ];
+
+  const statsHtml = stats.map((item) => `
+    <article class="cp-stat">
+      <div class="cp-stat-label">${item.label}</div>
+      <div class="cp-stat-value">${item.value}</div>
+      <div class="cp-stat-hint">${item.hint}</div>
+    </article>
+  `).join("");
+
   const bodyHtml = `
-    <div class="kpis">
-      <div class="kpi"><div class="label">Empresa</div><div class="value">${escapeHtml(company.id)}</div><div class="hint">ID</div></div>
-      <div class="kpi"><div class="label">Catalogo</div><div class="value">${catalog.length}</div><div class="hint">items</div></div>
-      <div class="kpi"><div class="label">Humano</div><div class="value">${rules.allowHuman ? "Si" : "No"}</div><div class="hint">derivacion</div></div>
-      <div class="kpi"><div class="label">Tono</div><div class="value">${escapeHtml(rules.tone || "-")}</div><div class="hint">regla</div></div>
-    </div>
+    <section class="cp-stats">${statsHtml}</section>
 
-    <div class="grid">
-      <div class="card">
-        <h2 style="margin:0 0 10px;">Tu configuracion</h2>
-        <div class="muted">Prompt</div>
-        <p style="margin:10px 0 0;">${escapeHtml(company.prompt || "")}</p>
-      </div>
+    <section class="cp-grid">
+      <article class="cp-card cp-span-2">
+        <div class="cp-card-head">
+          <h3>Evolucion de precios del catalogo</h3>
+          <span>${state.prices.length} valores detectados</span>
+        </div>
+        ${buildPriceChart(state.prices)}
+      </article>
 
-      <div class="card">
-        <h2 style="margin:0 0 10px;">Catalogo</h2>
-        <table class="table">
-          <thead>
-            <tr><th>ID</th><th>Producto</th><th>Precio</th></tr>
-          </thead>
-          <tbody>
-            ${catalogRows || `<tr><td colspan="3" class="muted">Sin productos.</td></tr>`}
-          </tbody>
+      <article class="cp-card">
+        <h3>Suscripcion</h3>
+        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.subscription.plan)}</b></div>
+        <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
+        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
+      </article>
+
+      <article class="cp-card cp-span-2">
+        <div class="cp-card-head">
+          <h3>Catalogo reciente</h3>
+          <a href="/panel/catalogo">Ver completo</a>
+        </div>
+        <table class="cp-table">
+          <thead><tr><th>ID</th><th>Producto</th><th>Precio</th></tr></thead>
+          <tbody>${catalogRows || `<tr><td colspan="3">Sin productos cargados.</td></tr>`}</tbody>
         </table>
-      </div>
-    </div>
+      </article>
+
+      <article class="cp-card">
+        <h3>Configuracion bot</h3>
+        <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
+        <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
+        <div class="cp-kv"><span>Tono</span><b>${escapeHtml(state.rules.tone || "No definido")}</b></div>
+        <div class="cp-kv"><span>Ultima fecha</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
+      </article>
+    </section>
   `;
 
   res.type("text/html").send(renderClientPage({
     company,
     active: "inicio",
-    title: `${company.name || company.id} - Inicio`,
+    title: "Overview",
+    subtitle: `${company.name || company.id} - resumen operativo`,
     bodyHtml,
   }));
 });
 
 app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
   const company = req.company;
+  const state = extractClientState(company);
+  const rows = state.catalog.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.id)}</td>
+      <td>${escapeHtml(item.name)}</td>
+      <td>${formatMoney(item.price, state.subscription.currency)}</td>
+      <td>${escapeHtml(item.stock)}</td>
+      <td>${escapeHtml(item.category)}</td>
+    </tr>
+  `).join("");
+
+  const bodyHtml = `
+    <section class="cp-stats">
+      <article class="cp-stat"><div class="cp-stat-label">Productos</div><div class="cp-stat-value">${state.catalog.length}</div><div class="cp-stat-hint">registrados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Precio max</div><div class="cp-stat-value">${formatMoney(state.maxPrice, state.subscription.currency)}</div><div class="cp-stat-hint">tope actual</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Precio promedio</div><div class="cp-stat-value">${formatMoney(state.avgPrice, state.subscription.currency)}</div><div class="cp-stat-hint">estimado</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Valor total</div><div class="cp-stat-value">${formatMoney(state.totalCatalogValue, state.subscription.currency)}</div><div class="cp-stat-hint">sumatoria</div></article>
+    </section>
+
+    <section class="cp-grid">
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>Catalogo completo</h3><span>${state.catalog.length} filas</span></div>
+        <table class="cp-table">
+          <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
+        </table>
+      </article>
+    </section>
+  `;
+
   res.type("text/html").send(renderClientPage({
     company,
     active: "catalogo",
-    title: `${company.name || company.id} - Catalogo`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Catalogo</h2><div class="muted">Proximo paso: editar, agregar o quitar productos.</div></div>`,
+    title: "Catalogo",
+    subtitle: `${company.name || company.id} - gestion de productos`,
+    bodyHtml,
   }));
 });
 
 app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const company = req.company;
+  let orders = [];
+  let fetchError = "";
+
+  try {
+    const params = new URLSearchParams();
+    params.set("q", String(company.id));
+    params.set("limit", "100");
+    const data = await api(`/api/orders?${params.toString()}`);
+    const all = Array.isArray(data) ? data : [];
+    orders = all.filter((o) => String(o.companyId || "") === String(company.id));
+  } catch (e) {
+    fetchError = e?.message || String(e);
+  }
+
+  const paidCount = orders.filter((o) => String(o.paymentStatus || "").toLowerCase() === "paid").length;
+  const deliveredCount = orders.filter((o) => String(o.orderStatus || "").toLowerCase() === "delivered").length;
+  const totalRevenue = orders.reduce((acc, o) => acc + toNumber(o.total), 0);
+
+  const rows = orders.map((o) => `
+    <tr>
+      <td>${escapeHtml(o.id || "-")}</td>
+      <td>${escapeHtml(formatDateLabel(o.createdAt))}</td>
+      <td>${escapeHtml(o.name || o.contact || "-")}</td>
+      <td>${formatMoney(toNumber(o.total), "USD")}</td>
+      <td>${escapeHtml(o.paymentStatus || "-")}</td>
+      <td>${escapeHtml(o.orderStatus || "-")}</td>
+    </tr>
+  `).join("");
+
+  const bodyHtml = `
+    <section class="cp-stats">
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos</div><div class="cp-stat-value">${orders.length}</div><div class="cp-stat-hint">ultimos 100</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pagados</div><div class="cp-stat-value">${paidCount}</div><div class="cp-stat-hint">paymentStatus=paid</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Entregados</div><div class="cp-stat-value">${deliveredCount}</div><div class="cp-stat-hint">orderStatus=delivered</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Facturacion</div><div class="cp-stat-value">${formatMoney(totalRevenue, "USD")}</div><div class="cp-stat-hint">estimada</div></article>
+    </section>
+
+    <section class="cp-grid">
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${orders.length} resultados</span></div>
+        ${fetchError ? `<div class="cp-empty">No se pudo cargar /api/orders: ${escapeHtml(fetchError)}</div>` : ""}
+        <table class="cp-table">
+          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Estado</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6">Sin pedidos para esta empresa.</td></tr>`}</tbody>
+        </table>
+      </article>
+    </section>
+  `;
+
   res.type("text/html").send(renderClientPage({
     company,
     active: "pedidos",
-    title: `${company.name || company.id} - Pedidos`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Pedidos</h2><div class="muted">Proximo paso: ver completados, en espera y cancelados.</div></div>`,
+    title: "Pedidos",
+    subtitle: `${company.name || company.id} - seguimiento operativo`,
+    bodyHtml,
   }));
 });
 
 app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
   const company = req.company;
+  const state = extractClientState(company);
+
+  const bodyHtml = `
+    <section class="cp-stats">
+      <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.subscription.plan)}</div><div class="cp-stat-hint">actual</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Estado</div><div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div><div class="cp-stat-hint">cuenta</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Monto</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Renovacion</div><div class="cp-stat-value">${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</div><div class="cp-stat-hint">${state.subscription.autoRenew ? "auto" : "manual"}</div></article>
+    </section>
+
+    <section class="cp-grid">
+      <article class="cp-card cp-span-2">
+        <h3>Detalle de suscripcion</h3>
+        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.subscription.plan)}</b></div>
+        <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
+        <div class="cp-kv"><span>Ciclo</span><b>${escapeHtml(state.subscription.cycle)}</b></div>
+        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Proxima fecha</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
+        <div class="cp-kv"><span>Renovacion</span><b>${state.subscription.autoRenew ? "Automatica" : "Manual"}</b></div>
+      </article>
+
+      <article class="cp-card">
+        <h3>Bot y servicio</h3>
+        <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
+        <div class="cp-kv"><span>Tono</span><b>${escapeHtml(state.rules.tone || "No definido")}</b></div>
+        <div class="cp-kv"><span>Productos</span><b>${state.catalog.length}</b></div>
+        <div class="cp-kv"><span>Ultima actualizacion</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
+      </article>
+    </section>
+  `;
+
   res.type("text/html").send(renderClientPage({
     company,
     active: "suscripcion",
-    title: `${company.name || company.id} - Suscripcion`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Suscripcion</h2><div class="muted">Proximo paso: plan, fechas y precio del proximo periodo.</div></div>`,
+    title: "Suscripcion",
+    subtitle: `${company.name || company.id} - estado del plan`,
+    bodyHtml,
   }));
 });
 
