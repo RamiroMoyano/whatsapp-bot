@@ -1427,6 +1427,23 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
       <td>${escapeHtml(item.category)}</td>
     </tr>
   `).join("");
+  const editorRows = state.catalog.map((item) => `
+    <tr class="cp-edit-row">
+      <td><input type="text" data-field="id" value="${escapeHtml(item.id)}" placeholder="ID" /></td>
+      <td><input type="text" data-field="name" value="${escapeHtml(item.name)}" placeholder="Producto" /></td>
+      <td><input type="number" step="0.01" min="0" data-field="price" value="${escapeHtml(String(item.price ?? 0))}" placeholder="0" /></td>
+      <td><input type="text" data-field="stock" value="${escapeHtml(String(item.stock ?? "-"))}" placeholder="Stock" /></td>
+      <td><input type="text" data-field="category" value="${escapeHtml(String(item.category ?? "-"))}" placeholder="Categoria" /></td>
+      <td class="cp-edit-actions"><button class="cp-btn danger cp-row-remove" type="button">Quitar</button></td>
+    </tr>
+  `).join("");
+  const initialCatalogJson = JSON.stringify(state.catalog.map((item, idx) => ({
+    id: item.id || String(idx + 1),
+    name: item.name || `Producto ${idx + 1}`,
+    price: toNumber(item.price),
+    stock: String(item.stock ?? "-"),
+    category: String(item.category ?? "-"),
+  })));
 
   const bodyHtml = `
     ${saved ? `<div class="cp-alert success">Catalogo actualizado correctamente.</div>` : ""}
@@ -1455,16 +1472,154 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
       </article>
 
       <article class="cp-card cp-span-3" id="editar-catalogo">
-        <div class="cp-card-head"><h3>Editar catalogo (JSON)</h3><span>Guardado directo</span></div>
-        <form method="POST" action="/panel/catalogo/save" class="cp-form">
-          <label>Catalog JSON</label>
-          <textarea name="catalogJson" rows="14">${escapeHtml(company.catalogJson || "[]")}</textarea>
+        <div class="cp-card-head"><h3>Editar catalogo (simple)</h3><span>Sin escribir JSON</span></div>
+        <form id="catalogEditorForm" method="POST" action="/panel/catalogo/save" class="cp-form">
+          <p class="cp-note">Edita los productos en tabla. Al guardar, el sistema lo convierte a JSON automaticamente.</p>
+          <input id="catalogJsonInput" type="hidden" name="catalogJson" value="${escapeHtml(initialCatalogJson)}" />
+          <div class="cp-table-wrap">
+            <table class="cp-table cp-edit-table">
+              <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th><th>Accion</th></tr></thead>
+              <tbody id="catalogEditorBody">${editorRows}</tbody>
+            </table>
+          </div>
+          <div id="catalogEditorStatus" class="cp-note" aria-live="polite"></div>
           <div class="cp-actions">
+            <button class="cp-btn" type="button" id="catalogAddRowBtn">Agregar producto</button>
+            <span id="catalogEditorCount">${state.catalog.length} filas</span>
             <button class="cp-btn primary" type="submit">Guardar catalogo</button>
           </div>
+          <noscript>
+            <label>Modo sin JavaScript (Catalog JSON)</label>
+            <textarea name="catalogJson" rows="10">${escapeHtml(company.catalogJson || "[]")}</textarea>
+          </noscript>
         </form>
       </article>
     </section>
+
+    <script>
+      (function () {
+        const form = document.getElementById("catalogEditorForm");
+        const body = document.getElementById("catalogEditorBody");
+        const hidden = document.getElementById("catalogJsonInput");
+        const addBtn = document.getElementById("catalogAddRowBtn");
+        const status = document.getElementById("catalogEditorStatus");
+        const counter = document.getElementById("catalogEditorCount");
+        if (!form || !body || !hidden || !addBtn || !status || !counter) return;
+
+        function getRows() {
+          return Array.from(body.querySelectorAll("tr"));
+        }
+
+        function setStatus(message, isError) {
+          status.textContent = message || "";
+          status.classList.toggle("error", !!isError);
+        }
+
+        function updateCount() {
+          counter.textContent = getRows().length + " filas";
+        }
+
+        function addRow(data) {
+          const row = document.createElement("tr");
+          row.className = "cp-edit-row";
+          row.innerHTML =
+            '<td><input type="text" data-field="id" placeholder="ID" /></td>' +
+            '<td><input type="text" data-field="name" placeholder="Producto" /></td>' +
+            '<td><input type="number" step="0.01" min="0" data-field="price" placeholder="0" /></td>' +
+            '<td><input type="text" data-field="stock" placeholder="Stock" /></td>' +
+            '<td><input type="text" data-field="category" placeholder="Categoria" /></td>' +
+            '<td class="cp-edit-actions"><button class="cp-btn danger cp-row-remove" type="button">Quitar</button></td>';
+          body.appendChild(row);
+
+          row.querySelector('[data-field="id"]').value = String(data?.id || "");
+          row.querySelector('[data-field="name"]').value = String(data?.name || "");
+          row.querySelector('[data-field="price"]').value = String(data?.price ?? "");
+          row.querySelector('[data-field="stock"]').value = String(data?.stock || "");
+          row.querySelector('[data-field="category"]').value = String(data?.category || "");
+          updateCount();
+        }
+
+        function ensureAtLeastOneRow() {
+          if (!getRows().length) {
+            addRow({ id: "", name: "", price: "", stock: "", category: "" });
+          }
+        }
+
+        function serializeRows() {
+          const items = [];
+          const rows = getRows();
+          for (let idx = 0; idx < rows.length; idx += 1) {
+            const row = rows[idx];
+            const idRaw = String(row.querySelector('[data-field="id"]')?.value || "").trim();
+            const nameRaw = String(row.querySelector('[data-field="name"]')?.value || "").trim();
+            const priceRaw = String(row.querySelector('[data-field="price"]')?.value || "").trim();
+            const stockRaw = String(row.querySelector('[data-field="stock"]')?.value || "").trim();
+            const categoryRaw = String(row.querySelector('[data-field="category"]')?.value || "").trim();
+
+            const hasData = idRaw || nameRaw || priceRaw || stockRaw || categoryRaw;
+            if (!hasData) continue;
+
+            const normalizedPrice = Number(priceRaw.replace(",", "."));
+            if (!Number.isFinite(normalizedPrice) || normalizedPrice < 0) {
+              throw new Error("Precio invalido en fila " + (idx + 1));
+            }
+
+            items.push({
+              id: idRaw || String(items.length + 1),
+              name: nameRaw || ("Producto " + (items.length + 1)),
+              price: Math.round(normalizedPrice * 100) / 100,
+              stock: stockRaw || "-",
+              category: categoryRaw || "-",
+            });
+          }
+
+          hidden.value = JSON.stringify(items);
+          updateCount();
+          return items;
+        }
+
+        function safeSerialize() {
+          try {
+            serializeRows();
+            setStatus("", false);
+          } catch (err) {
+            setStatus(err?.message || String(err), true);
+          }
+        }
+
+        body.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (!target.classList.contains("cp-row-remove")) return;
+          const row = target.closest("tr");
+          if (row) row.remove();
+          ensureAtLeastOneRow();
+          safeSerialize();
+        });
+
+        body.addEventListener("input", () => {
+          safeSerialize();
+        });
+
+        addBtn.addEventListener("click", () => {
+          addRow({ id: "", name: "", price: "", stock: "", category: "" });
+          safeSerialize();
+        });
+
+        form.addEventListener("submit", (event) => {
+          try {
+            const items = serializeRows();
+            if (!items.length) setStatus("Se guardara un catalogo vacio.", false);
+          } catch (err) {
+            event.preventDefault();
+            setStatus(err?.message || String(err), true);
+          }
+        });
+
+        ensureAtLeastOneRow();
+        safeSerialize();
+      })();
+    </script>
   `;
 
   res.type("text/html").send(renderClientPage({

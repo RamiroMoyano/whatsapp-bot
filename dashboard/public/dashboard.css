@@ -817,6 +817,12 @@ body.client-ui {
   background: linear-gradient(135deg, #2f7cf6, #1d56c6);
 }
 
+.cp-btn.danger {
+  border-color: #f4c7c7;
+  background: #fff5f5;
+  color: #8d2f2f;
+}
+
 .cp-alert {
   border-radius: 12px;
   padding: 12px 14px;
@@ -842,6 +848,16 @@ body.client-ui {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.cp-note {
+  margin: 0;
+  color: #6884b5;
+  font-size: 13px;
+}
+
+.cp-note.error {
+  color: #8b2e2e;
 }
 
 .cp-grid-2 {
@@ -920,6 +936,32 @@ body.client-ui {
 
 .cp-table tr:hover td {
   background: #f9fbff;
+}
+
+.cp-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.cp-edit-table {
+  min-width: 840px;
+}
+
+.cp-edit-table th,
+.cp-edit-table td {
+  vertical-align: middle;
+}
+
+.cp-edit-table td input {
+  min-width: 120px;
+}
+
+.cp-edit-table td:nth-child(2) input {
+  min-width: 220px;
+}
+
+.cp-edit-actions {
+  width: 110px;
 }
 
 .cp-empty {
