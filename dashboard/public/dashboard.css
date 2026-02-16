@@ -851,6 +851,10 @@ body.client-ui {
   align-items: center;
 }
 
+.cp-hidden {
+  display: none !important;
+}
+
 .cp-btn {
   display: inline-flex;
   align-items: center;
@@ -1025,6 +1029,38 @@ body.client-ui {
   background: #f7faff;
   color: #6581b5;
   font-size: 13px;
+}
+
+.cp-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 104px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #c7d9ff;
+  background: #eef4ff;
+  color: #3d5f96;
+}
+
+.cp-status-completed {
+  border-color: #8eddb3;
+  background: #eafaf1;
+  color: #12753e;
+}
+
+.cp-status-pending {
+  border-color: #ffe2a3;
+  background: #fff8e7;
+  color: #9a6700;
+}
+
+.cp-status-rejected {
+  border-color: #f2b7b7;
+  background: #fff0f0;
+  color: #a12626;
 }
 
 .cp-info-stack {

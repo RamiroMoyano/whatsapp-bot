@@ -762,6 +762,67 @@ app.post("/api/assignments/delete", requireApiAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ===== API: Orders =====
+app.get("/api/orders", requireApiAuth, (req, res) => {
+  const q = String(req.query.q || "").trim();
+  const companyId = String(req.query.companyId || "").trim();
+  const limitRaw = Number(req.query.limit || 100);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 1000) : 100;
+
+  const parseDateParam = (value, endOfDay = false) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [yy, mm, dd] = raw.split("-").map((v) => Number(v));
+      const date = endOfDay
+        ? new Date(Date.UTC(yy, mm - 1, dd, 23, 59, 59, 999))
+        : new Date(Date.UTC(yy, mm - 1, dd, 0, 0, 0, 0));
+      return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+    }
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  };
+
+  const fromIso = parseDateParam(req.query.from, false);
+  const toIso = parseDateParam(req.query.to, true);
+
+  const where = [];
+  const params = [];
+
+  if (companyId) {
+    where.push("companyId = ?");
+    params.push(companyId);
+  }
+
+  if (q) {
+    const like = `%${q}%`;
+    where.push("(id LIKE ? OR fromNumber LIKE ? OR companyId LIKE ? OR name LIKE ? OR contact LIKE ?)");
+    params.push(like, like, like, like, like);
+  }
+
+  if (fromIso) {
+    where.push("datetime(createdAt) >= datetime(?)");
+    params.push(fromIso);
+  }
+
+  if (toIso) {
+    where.push("datetime(createdAt) <= datetime(?)");
+    params.push(toIso);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const sql = `
+    SELECT id,createdAt,fromNumber,companyId,name,contact,notes,itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,orderStatus,deliveredAt
+    FROM orders
+    ${whereSql}
+    ORDER BY datetime(createdAt) DESC
+    LIMIT ?
+  `;
+
+  const rows = db.prepare(sql).all(...params, limit);
+  res.json(rows);
+});
+
 // ================= WEBHOOK =================
 app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";

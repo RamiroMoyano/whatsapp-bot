@@ -2039,51 +2039,211 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
+  const selectedRangeRaw = String(req.query.range || "month").trim().toLowerCase();
+  const selectedStatusRaw = String(req.query.status || "all").trim().toLowerCase();
+  const selectedRange = ["today", "week", "month", "3months", "custom"].includes(selectedRangeRaw)
+    ? selectedRangeRaw
+    : "month";
+  const selectedStatus = ["all", "completed", "pending", "rejected"].includes(selectedStatusRaw)
+    ? selectedStatusRaw
+    : "all";
+
+  const dayStart = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  const dayEnd = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+  const parseDateInput = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const date = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const toYmd = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+    const yy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  const now = new Date();
+  let filterFrom = null;
+  let filterTo = null;
+
+  if (selectedRange === "today") {
+    filterFrom = dayStart(now);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "week") {
+    const from = new Date(now);
+    from.setDate(from.getDate() - 6);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "month") {
+    const from = new Date(now);
+    from.setMonth(from.getMonth() - 1);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "3months") {
+    const from = new Date(now);
+    from.setMonth(from.getMonth() - 3);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else {
+    const rawFrom = parseDateInput(req.query.from);
+    const rawTo = parseDateInput(req.query.to);
+    if (rawFrom) filterFrom = dayStart(rawFrom);
+    if (rawTo) filterTo = dayEnd(rawTo);
+    if (filterFrom && filterTo && filterFrom.getTime() > filterTo.getTime()) {
+      const tmp = filterFrom;
+      filterFrom = filterTo;
+      filterTo = tmp;
+    }
+  }
 
   try {
     const params = new URLSearchParams();
-    params.set("q", String(company.id));
-    params.set("limit", "100");
+    params.set("companyId", String(company.id));
+    params.set("limit", "500");
+    if (filterFrom) params.set("from", filterFrom.toISOString());
+    if (filterTo) params.set("to", filterTo.toISOString());
     const data = await api(`/api/orders?${params.toString()}`);
-    const all = Array.isArray(data) ? data : [];
-    orders = all.filter((o) => String(o.companyId || "") === String(company.id));
+    orders = Array.isArray(data) ? data : [];
   } catch (e) {
     fetchError = e?.message || String(e);
   }
 
-  const paidCount = orders.filter((o) => String(o.paymentStatus || "").toLowerCase() === "paid").length;
-  const deliveredCount = orders.filter((o) => String(o.orderStatus || "").toLowerCase() === "delivered").length;
-  const totalRevenue = orders.reduce((acc, o) => acc + toNumber(o.total), 0);
+  const classifyOrder = (order) => {
+    const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
+    const paymentStatus = String(order?.paymentStatus || "").trim().toLowerCase();
+    if (
+      ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderStatus.includes(v)) ||
+      ["failed", "voided", "refunded", "chargeback"].some((v) => paymentStatus.includes(v))
+    ) {
+      return "rejected";
+    }
+    if (["delivered", "completed", "done", "entregado", "finalizado", "cerrado"].some((v) => orderStatus.includes(v))) {
+      return "completed";
+    }
+    return "pending";
+  };
+  const categoryLabel = (category) => {
+    if (category === "completed") return "Completado";
+    if (category === "rejected") return "Rechazado";
+    return "Pendiente";
+  };
 
-  const rows = orders.map((o) => `
+  const ordersWithCategory = orders.map((order) => ({
+    ...order,
+    category: classifyOrder(order),
+  }));
+
+  const completedCount = ordersWithCategory.filter((order) => order.category === "completed").length;
+  const pendingCount = ordersWithCategory.filter((order) => order.category === "pending").length;
+  const rejectedCount = ordersWithCategory.filter((order) => order.category === "rejected").length;
+
+  const visibleOrders = selectedStatus === "all"
+    ? ordersWithCategory
+    : ordersWithCategory.filter((order) => order.category === selectedStatus);
+
+  const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
+  const paidCount = visibleOrders.filter((order) => String(order.paymentStatus || "").toLowerCase() === "paid").length;
+
+  const rangeLabel = (() => {
+    if (selectedRange === "today") return "hoy";
+    if (selectedRange === "week") return "ultimos 7 dias";
+    if (selectedRange === "3months") return "ultimos 3 meses";
+    if (selectedRange === "custom") return "rango personalizado";
+    return "ultimo mes";
+  })();
+
+  const rows = visibleOrders.map((order) => `
     <tr>
-      <td>${escapeHtml(o.id || "-")}</td>
-      <td>${escapeHtml(formatDateLabel(o.createdAt))}</td>
-      <td>${escapeHtml(o.name || o.contact || "-")}</td>
-      <td>${formatMoney(toNumber(o.total), "USD")}</td>
-      <td>${escapeHtml(o.paymentStatus || "-")}</td>
-      <td>${escapeHtml(o.orderStatus || "-")}</td>
+      <td>${escapeHtml(order.id || "-")}</td>
+      <td>${escapeHtml(formatDateLabel(order.createdAt))}</td>
+      <td>${escapeHtml(order.name || order.contact || "-")}</td>
+      <td>${formatMoney(toNumber(order.total), "USD")}</td>
+      <td>${escapeHtml(order.paymentStatus || "-")}</td>
+      <td>${escapeHtml(order.orderStatus || "-")}</td>
+      <td>
+        <span class="cp-status-badge cp-status-${escapeHtml(order.category)}">${escapeHtml(categoryLabel(order.category))}</span>
+      </td>
     </tr>
   `).join("");
 
   const bodyHtml = `
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Pedidos</div><div class="cp-stat-value">${orders.length}</div><div class="cp-stat-hint">ultimos 100</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Pagados</div><div class="cp-stat-value">${paidCount}</div><div class="cp-stat-hint">paymentStatus=paid</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Entregados</div><div class="cp-stat-value">${deliveredCount}</div><div class="cp-stat-hint">orderStatus=delivered</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Facturacion</div><div class="cp-stat-value">${formatMoney(totalRevenue, "USD")}</div><div class="cp-stat-hint">estimada</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos</div><div class="cp-stat-value">${ordersWithCategory.length}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Completados</div><div class="cp-stat-value">${completedCount}</div><div class="cp-stat-hint">entregados/finalizados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pendientes</div><div class="cp-stat-value">${pendingCount}</div><div class="cp-stat-hint">en proceso</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Rechazados</div><div class="cp-stat-value">${rejectedCount}</div><div class="cp-stat-hint">cancelados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pagados</div><div class="cp-stat-value">${paidCount}</div><div class="cp-stat-hint">segun filtro</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Facturacion</div><div class="cp-stat-value">${formatMoney(totalRevenue, "USD")}</div><div class="cp-stat-hint">segun filtro</div></article>
     </section>
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${orders.length} resultados</span></div>
-        ${fetchError ? `<div class="cp-empty">No se pudo cargar /api/orders: ${escapeHtml(fetchError)}</div>` : ""}
+        <div class="cp-card-head"><h3>Filtros</h3><span>${escapeHtml(rangeLabel)}</span></div>
+        <form method="GET" action="/panel/pedidos" class="cp-form">
+          <div class="cp-grid-2">
+            <div>
+              <label>Periodo</label>
+              <select id="ordersRangeSelect" name="range">
+                <option value="today" ${selectedRange === "today" ? "selected" : ""}>Del dia</option>
+                <option value="week" ${selectedRange === "week" ? "selected" : ""}>De la semana</option>
+                <option value="month" ${selectedRange === "month" ? "selected" : ""}>Ultimo mes</option>
+                <option value="3months" ${selectedRange === "3months" ? "selected" : ""}>Ultimos 3 meses</option>
+                <option value="custom" ${selectedRange === "custom" ? "selected" : ""}>Personalizado</option>
+              </select>
+            </div>
+            <div>
+              <label>Categoria</label>
+              <select name="status">
+                <option value="all" ${selectedStatus === "all" ? "selected" : ""}>Todas</option>
+                <option value="completed" ${selectedStatus === "completed" ? "selected" : ""}>Completados</option>
+                <option value="pending" ${selectedStatus === "pending" ? "selected" : ""}>Pendientes</option>
+                <option value="rejected" ${selectedStatus === "rejected" ? "selected" : ""}>Rechazados</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="ordersCustomRange" class="cp-grid-2 ${selectedRange === "custom" ? "" : "cp-hidden"}">
+            <div>
+              <label>Desde</label>
+              <input type="date" name="from" value="${escapeHtml(String(req.query.from || toYmd(filterFrom)))}" />
+            </div>
+            <div>
+              <label>Hasta</label>
+              <input type="date" name="to" value="${escapeHtml(String(req.query.to || toYmd(filterTo)))}" />
+            </div>
+          </div>
+
+          <div class="cp-actions">
+            <button class="cp-btn primary" type="submit">Aplicar filtros</button>
+            <a class="cp-btn" href="/panel/pedidos">Limpiar</a>
+          </div>
+        </form>
+      </article>
+
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
+        ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
         <table class="cp-table">
-          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Estado</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6">Sin pedidos para esta empresa.</td></tr>`}</tbody>
+          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Estado</th><th>Categoria</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7">Sin pedidos para este filtro.</td></tr>`}</tbody>
         </table>
       </article>
     </section>
+    <script>
+      (() => {
+        const range = document.getElementById("ordersRangeSelect");
+        const custom = document.getElementById("ordersCustomRange");
+        if (!range || !custom) return;
+        const sync = () => {
+          if (range.value === "custom") custom.classList.remove("cp-hidden");
+          else custom.classList.add("cp-hidden");
+        };
+        range.addEventListener("change", sync);
+        sync();
+      })();
+    </script>
   `;
 
   res.type("text/html").send(renderClientPage({
