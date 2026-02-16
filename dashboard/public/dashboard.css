@@ -790,6 +790,92 @@ body.client-ui {
   font-weight: 700;
 }
 
+.cp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #cddcff;
+  background: #f0f6ff;
+  color: #2a4f95;
+  text-decoration: none;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cp-btn.primary {
+  color: #fff;
+  border-color: #2f7cf6;
+  background: linear-gradient(135deg, #2f7cf6, #1d56c6);
+}
+
+.cp-alert {
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  border: 1px solid #d6e4ff;
+  background: #f6f9ff;
+  color: #38558a;
+}
+
+.cp-alert.success {
+  border-color: #b4e0c0;
+  background: #eefaf1;
+  color: #1f6d38;
+}
+
+.cp-alert.error {
+  border-color: #f0c2c2;
+  background: #fff3f3;
+  color: #8b2e2e;
+}
+
+.cp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.client-ui label {
+  margin-top: 6px;
+  color: #5e7aab;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.client-ui input,
+.client-ui textarea,
+.client-ui select {
+  width: 100%;
+  border: 1px solid #d2e2ff;
+  border-radius: 12px;
+  padding: 10px 11px;
+  background: #f8fbff;
+  color: #1f355f;
+  outline: none;
+}
+
+.client-ui input:focus,
+.client-ui textarea:focus,
+.client-ui select:focus {
+  border-color: #8db5ff;
+  box-shadow: 0 0 0 3px rgba(47, 124, 246, 0.16);
+}
+
 .cp-kv {
   display: flex;
   justify-content: space-between;
@@ -912,6 +998,10 @@ body.client-ui {
   .cp-span-2,
   .cp-span-3 {
     grid-column: auto;
+  }
+
+  .cp-grid-2 {
+    grid-template-columns: 1fr;
   }
 }
 

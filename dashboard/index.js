@@ -18,6 +18,7 @@ app.get("/c/logout", (req, res) => res.redirect("/panel/logout"));
 app.get("/c/catalogo", (req, res) => res.redirect("/panel/catalogo"));
 app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
 app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
+app.get("/c/cuenta", (req, res) => res.redirect("/panel/cuenta"));
 
 const DASH_USER = (process.env.DASH_USER || "").trim();
 const DASH_PASS = (process.env.DASH_PASS || "").trim();
@@ -262,15 +263,22 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
     const companies = await api("/api/companies");
 
-    const rows = companies.map(c => `
+    const rows = companies.map((c) => {
+      const rules = parseJsonSafe(c.rulesJson || "{}", {});
+      const plan = extractPlanInfo(c, rules);
+      const profile = extractCompanyProfile(rules);
+      return `
       <div class="company-item">
         <div>
           <div><b>${c.id}</b> - ${c.name || ""}</div>
           <div class="muted">Creada: ${c.createdAt || "-"}</div>
+          <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | Email: ${escapeHtml(profile.ownerEmail || "-")}</div>
+          <div class="muted">Plan: ${escapeHtml(plan.fullLabel)}</div>
         </div>
         <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
       </div>
-    `).join("");
+    `;
+    }).join("");
 
     res.type("text/html").send(`
 <!doctype html>
@@ -295,6 +303,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
 
         <div class="nav-tabs">
           <a class="btn primary" href="/admin">Empresas</a>
+          <a class="btn secondary" href="/admin/company/new">Nueva empresa</a>
           <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
           <a class="btn secondary" href="/admin/logout">Logout</a>
         </div>
@@ -359,13 +368,173 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   }
 });
 
+app.get("/admin/company/new", requireDashboardAuth, (req, res) => {
+  const body = `
+    <div class="card">
+      <h3 style="margin-top:0">Nueva empresa</h3>
+      <form method="POST" action="/admin/company/new" class="form">
+        <label>ID empresa (slug)</label>
+        <input name="id" placeholder="ej: miempresa" />
+
+        <label>Nombre visible</label>
+        <input name="name" placeholder="Mi Empresa" />
+
+        <div class="grid2">
+          <div>
+            <label>Nombre dueno / CEO</label>
+            <input name="ownerName" placeholder="Nombre y apellido" />
+          </div>
+          <div>
+            <label>Cargo</label>
+            <input name="ownerRole" value="Dueno/CEO" />
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label>Email contacto</label>
+            <input name="ownerEmail" placeholder="mail@empresa.com" />
+          </div>
+          <div>
+            <label>Telefono</label>
+            <input name="ownerPhone" placeholder="+549..." />
+          </div>
+        </div>
+
+        <label>Direccion</label>
+        <input name="companyAddress" placeholder="Calle y numero" />
+
+        <div class="grid2">
+          <div>
+            <label>Ciudad</label>
+            <input name="companyCity" />
+          </div>
+          <div>
+            <label>Pais</label>
+            <input name="companyCountry" />
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label>Plan bot</label>
+            <select name="planTier">
+              <option value="BASICO">Basico (sin AI)</option>
+              <option value="LITE">Con AI LITE</option>
+              <option value="PRO">Con AI PRO</option>
+            </select>
+          </div>
+          <div>
+            <label>Canal</label>
+            <select name="channelMode">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="instagram">Instagram</option>
+              <option value="combinado">Combinado</option>
+            </select>
+          </div>
+        </div>
+
+        <label>Password acceso cliente</label>
+        <input name="clientPassword" placeholder="Si vacio, se genera automatica" />
+
+        <label>Prompt inicial (opcional)</label>
+        <textarea name="prompt" rows="4" placeholder="Prompt del bot"></textarea>
+
+        <div class="actions">
+          <button class="btn primary" type="submit">Crear empresa</button>
+          <a class="btn secondary" href="/admin">Cancelar</a>
+        </div>
+      </form>
+    </div>
+  `;
+
+  res.type("text/html").send(layout({
+    title: "Nueva empresa",
+    active: "companies",
+    body,
+  }));
+});
+
+app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
+  const id = String(req.body.id || "").trim().toLowerCase();
+  const name = String(req.body.name || "").trim();
+
+  if (!id || !name) {
+    return res.status(400).type("text/html").send(layout({
+      title: "Nueva empresa",
+      active: "companies",
+      body: `<div class="card"><b>Error:</b> id y nombre son obligatorios.</div><div class="card"><a class="btn secondary" href="/admin/company/new">Volver</a></div>`,
+    }));
+  }
+
+  try {
+    await api("/api/companies", {
+      method: "POST",
+      body: { id, name },
+    });
+
+    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+    const planTier = normalizePlanTier(req.body.planTier) || "BASICO";
+    const channelMode = normalizeChannelMode(req.body.channelMode) || "whatsapp";
+
+    rules.ownerName = String(req.body.ownerName || "").trim();
+    rules.ownerRole = String(req.body.ownerRole || "Dueno/CEO").trim();
+    rules.ownerEmail = String(req.body.ownerEmail || "").trim();
+    rules.ownerPhone = String(req.body.ownerPhone || "").trim();
+    rules.companyAddress = String(req.body.companyAddress || "").trim();
+    rules.companyCity = String(req.body.companyCity || "").trim();
+    rules.companyCountry = String(req.body.companyCountry || "").trim();
+    rules.planTier = planTier;
+    rules.aiEnabled = planTier !== "BASICO";
+    rules.channelMode = channelMode;
+    rules.channels = channelsFromMode(channelMode);
+
+    const providedPassword = String(req.body.clientPassword || "").trim();
+    rules.clientPassword = providedPassword || rules.clientPassword || generateClientPassword();
+
+    const prompt = String(req.body.prompt || "").trim() || company.prompt || "Sos el asistente de la empresa.";
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: name || id,
+        prompt,
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?created=1`);
+  } catch (e) {
+    res.status(500).type("text/html").send(layout({
+      title: "Nueva empresa",
+      active: "companies",
+      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/new">Volver</a></div>`,
+    }));
+  }
+});
+
 // ===== ADMIN: Editar empresa =====
 app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
 
-  const c = await api(`/api/companies/${encodeURIComponent(id)}`);
+  try {
+    const c = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const state = extractClientState(c);
+    const profile = state.profile;
+    const plan = state.plan;
 
-  res.type("text/html").send(`<!doctype html>
+    const alerts = [
+      String(req.query.created || "") === "1" ? `<div class="card"><b>Empresa creada correctamente.</b></div>` : "",
+      String(req.query.updated || "") === "1" ? `<div class="card"><b>Datos actualizados.</b></div>` : "",
+      String(req.query.manualPwd || "") === "1" ? `<div class="card"><b>Password actualizada manualmente.</b></div>` : "",
+      String(req.query.generatedPwd || "") ? `<div class="card"><b>Nueva password generada:</b> <code>${escapeHtml(String(req.query.generatedPwd || ""))}</code></div>` : "",
+    ].join("");
+
+    res.type("text/html").send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -389,29 +558,135 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </div>
       </div>
 
+      ${alerts}
+
       <div class="card">
-        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
-          <label>Nombre visible</label>
-          <input name="name" value="${(c.name || "").replaceAll('"', "&quot;")}" />
+        <h3 style="margin-top:0">Resumen importante</h3>
+        <div class="grid2">
+          <div>
+            <div><b>Dueno/CEO:</b> ${escapeHtml(profile.ownerName || "-")}</div>
+            <div><b>Cargo:</b> ${escapeHtml(profile.ownerRole || "-")}</div>
+            <div><b>Email:</b> ${escapeHtml(profile.ownerEmail || "-")}</div>
+            <div><b>Telefono:</b> ${escapeHtml(profile.ownerPhone || "-")}</div>
+          </div>
+          <div>
+            <div><b>Direccion:</b> ${escapeHtml(profile.companyAddress || "-")}</div>
+            <div><b>Ciudad:</b> ${escapeHtml(profile.companyCity || "-")}</div>
+            <div><b>Pais:</b> ${escapeHtml(profile.companyCountry || "-")}</div>
+            <div><b>Plan activo:</b> ${escapeHtml(plan.fullLabel)}</div>
+          </div>
+        </div>
+      </div>
 
-          <label>Prompt</label>
-          <textarea name="prompt" rows="6">${c.prompt || ""}</textarea>
+      <div class="card">
+        <h3 style="margin-top:0">Datos de empresa y solicitante</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/profile/save" class="form">
+          <label>Nombre visible de la empresa</label>
+          <input name="name" value="${escapeHtml(c.name || c.id)}" />
 
-          <label>Catalog JSON</label>
-          <textarea name="catalogJson" rows="8">${c.catalogJson || "[]"}</textarea>
+          <div class="grid2">
+            <div>
+              <label>Nombre dueno / CEO</label>
+              <input name="ownerName" value="${escapeHtml(profile.ownerName)}" />
+            </div>
+            <div>
+              <label>Cargo</label>
+              <input name="ownerRole" value="${escapeHtml(profile.ownerRole)}" />
+            </div>
+          </div>
 
-          <label>Rules JSON</label>
-          <textarea name="rulesJson" rows="8">${c.rulesJson || "{}"}</textarea>
+          <div class="grid2">
+            <div>
+              <label>Email</label>
+              <input name="ownerEmail" value="${escapeHtml(profile.ownerEmail)}" />
+            </div>
+            <div>
+              <label>Telefono</label>
+              <input name="ownerPhone" value="${escapeHtml(profile.ownerPhone)}" />
+            </div>
+          </div>
+
+          <label>Direccion</label>
+          <input name="companyAddress" value="${escapeHtml(profile.companyAddress)}" />
+
+          <div class="grid2">
+            <div>
+              <label>Ciudad</label>
+              <input name="companyCity" value="${escapeHtml(profile.companyCity)}" />
+            </div>
+            <div>
+              <label>Pais</label>
+              <input name="companyCountry" value="${escapeHtml(profile.companyCountry)}" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div>
+              <label>Plan activo</label>
+              <select name="planTier">
+                <option value="BASICO" ${plan.tier === "BASICO" ? "selected" : ""}>Basico (sin AI)</option>
+                <option value="LITE" ${plan.tier === "LITE" ? "selected" : ""}>Con AI LITE</option>
+                <option value="PRO" ${plan.tier === "PRO" ? "selected" : ""}>Con AI PRO</option>
+              </select>
+            </div>
+            <div>
+              <label>Canal</label>
+              <select name="channelMode">
+                <option value="whatsapp" ${plan.channelMode === "whatsapp" ? "selected" : ""}>WhatsApp</option>
+                <option value="instagram" ${plan.channelMode === "instagram" ? "selected" : ""}>Instagram</option>
+                <option value="combinado" ${plan.channelMode === "combinado" ? "selected" : ""}>Combinado</option>
+              </select>
+            </div>
+          </div>
+
+          <label>Password cliente (opcional, para cambiar manualmente)</label>
+          <input name="clientPassword" placeholder="Dejar vacio para mantener" />
 
           <div class="actions">
-            <button class="btn primary" type="submit">Guardar</button>
-            <a class="btn secondary" href="/admin">Cancelar</a>
+            <button class="btn primary" type="submit">Guardar datos</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Acceso del cliente</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/reset-password" class="form">
+          <label>Restablecer password (opcional manual)</label>
+          <input name="newPassword" placeholder="Vacio = generar automatica" />
+          <div class="actions">
+            <button class="btn secondary" type="submit">Restablecer password</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Edicion avanzada</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
+          <input type="hidden" name="name" value="${escapeHtml(c.name || c.id)}" />
+          <label>Prompt</label>
+          <textarea name="prompt" rows="6">${escapeHtml(c.prompt || "")}</textarea>
+
+          <label>Catalog JSON</label>
+          <textarea name="catalogJson" rows="8">${escapeHtml(c.catalogJson || "[]")}</textarea>
+
+          <label>Rules JSON</label>
+          <textarea name="rulesJson" rows="8">${escapeHtml(c.rulesJson || "{}")}</textarea>
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Guardar JSON</button>
           </div>
         </form>
       </div>
     </div>
   </body>
 </html>`);
+  } catch (e) {
+    res.status(500).type("text/html").send(layout({
+      title: "Empresa",
+      active: "companies",
+      body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin">Volver</a></div>`,
+    }));
+  }
 });
 
 app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
@@ -428,6 +703,86 @@ app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
   });
 
   res.redirect(`/admin/company/${encodeURIComponent(id)}`);
+});
+
+app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+    const planTier = normalizePlanTier(req.body.planTier) || "BASICO";
+    const channelMode = normalizeChannelMode(req.body.channelMode) || "whatsapp";
+
+    rules.ownerName = String(req.body.ownerName || "").trim();
+    rules.ownerRole = String(req.body.ownerRole || "").trim();
+    rules.ownerEmail = String(req.body.ownerEmail || "").trim();
+    rules.ownerPhone = String(req.body.ownerPhone || "").trim();
+    rules.companyAddress = String(req.body.companyAddress || "").trim();
+    rules.companyCity = String(req.body.companyCity || "").trim();
+    rules.companyCountry = String(req.body.companyCountry || "").trim();
+    rules.planTier = planTier;
+    rules.aiEnabled = planTier !== "BASICO";
+    rules.channelMode = channelMode;
+    rules.channels = channelsFromMode(channelMode);
+
+    const manualPassword = String(req.body.clientPassword || "").trim();
+    if (manualPassword) {
+      rules.clientPassword = manualPassword;
+    }
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: String(req.body.name || company.name || id).trim() || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    const passwordFlag = manualPassword ? "&manualPwd=1" : "";
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?updated=1${passwordFlag}`);
+  } catch (e) {
+    res.status(500).type("text/html").send(layout({
+      title: "Empresa",
+      active: "companies",
+      body: `<div class="card"><b>Error guardando perfil:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/${encodeURIComponent(id)}">Volver</a></div>`,
+    }));
+  }
+});
+
+app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const requested = String(req.body.newPassword || "").trim();
+  const nextPassword = requested || generateClientPassword(10);
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+    rules.clientPassword = nextPassword;
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?generatedPwd=${encodeURIComponent(nextPassword)}`);
+  } catch (e) {
+    res.status(500).type("text/html").send(layout({
+      title: "Empresa",
+      active: "companies",
+      body: `<div class="card"><b>Error restableciendo password:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/${encodeURIComponent(id)}">Volver</a></div>`,
+    }));
+  }
 });
 
 // ================= ASIGNAR CLIENTES =================
@@ -743,9 +1098,110 @@ function formatDateLabel(value) {
   return d.toLocaleDateString("es-AR");
 }
 
+function normalizePlanTier(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("pro")) return "PRO";
+  if (raw.includes("lite")) return "LITE";
+  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai")) return "BASICO";
+  return "";
+}
+
+function normalizeChannelMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("comb")) return "combinado";
+  if (raw.includes("insta")) return "instagram";
+  if (raw.includes("what")) return "whatsapp";
+  return raw;
+}
+
+function channelsFromMode(mode) {
+  if (mode === "combinado") return ["whatsapp", "instagram"];
+  if (mode === "instagram") return ["instagram"];
+  return ["whatsapp"];
+}
+
+function planLabelFromTier(tier) {
+  if (tier === "PRO") return "Con AI PRO";
+  if (tier === "LITE") return "Con AI LITE";
+  return "Basico (sin AI)";
+}
+
+function channelLabelFromMode(mode) {
+  if (mode === "instagram") return "Instagram";
+  if (mode === "combinado") return "WhatsApp + Instagram";
+  return "WhatsApp";
+}
+
+function extractPlanInfo(company, rules) {
+  const rawTier = normalizePlanTier(
+    rules?.planTier ||
+    rules?.botPlan ||
+    rules?.aiPlan ||
+    rules?.planType ||
+    company?.subscriptionPlan ||
+    rules?.subscriptionPlan
+  );
+
+  let channelMode = normalizeChannelMode(
+    rules?.channelMode ||
+    rules?.channel ||
+    rules?.platform
+  );
+
+  const channelsRaw = Array.isArray(rules?.channels)
+    ? rules.channels.map((v) => String(v || "").toLowerCase())
+    : [];
+  if (!channelMode) {
+    const hasWa = channelsRaw.includes("whatsapp");
+    const hasIg = channelsRaw.includes("instagram");
+    if (hasWa && hasIg) channelMode = "combinado";
+    else if (hasIg) channelMode = "instagram";
+    else if (hasWa) channelMode = "whatsapp";
+  }
+  if (!channelMode) channelMode = "whatsapp";
+
+  const aiEnabled = rules?.aiEnabled !== undefined ? !!rules.aiEnabled : rawTier !== "BASICO";
+  const tier = rawTier || (aiEnabled ? "LITE" : "BASICO");
+
+  return {
+    tier,
+    aiEnabled: tier === "BASICO" ? false : aiEnabled,
+    channelMode,
+    channels: channelsFromMode(channelMode),
+    planLabel: planLabelFromTier(tier),
+    channelLabel: channelLabelFromMode(channelMode),
+    fullLabel: `${planLabelFromTier(tier)} - ${channelLabelFromMode(channelMode)}`,
+  };
+}
+
+function extractCompanyProfile(rules) {
+  return {
+    ownerName: String(rules?.ownerName || rules?.ceoName || ""),
+    ownerRole: String(rules?.ownerRole || rules?.ceoRole || "Dueno/CEO"),
+    ownerEmail: String(rules?.ownerEmail || rules?.email || ""),
+    ownerPhone: String(rules?.ownerPhone || rules?.phone || ""),
+    companyAddress: String(rules?.companyAddress || rules?.address || ""),
+    companyCity: String(rules?.companyCity || rules?.city || ""),
+    companyCountry: String(rules?.companyCountry || rules?.country || ""),
+  };
+}
+
+function generateClientPassword(length = 10) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$!";
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
 function extractClientState(company) {
   const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
   const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  const plan = extractPlanInfo(company, rules);
+  const profile = extractCompanyProfile(rules);
 
   const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
   const catalogBase = Array.isArray(catalogRaw) ? catalogRaw : [];
@@ -763,7 +1219,7 @@ function extractClientState(company) {
   const maxPrice = prices.length ? Math.max(...prices) : 0;
 
   const subscription = {
-    plan: String(company?.subscriptionPlan || rules.subscriptionPlan || rules.plan || "Sin plan"),
+    plan: String(company?.subscriptionPlan || rules.subscriptionPlan || rules.plan || plan.planLabel),
     status: String(company?.subscriptionStatus || rules.subscriptionStatus || "Activa"),
     cycle: String(company?.subscriptionCycle || rules.subscriptionCycle || "Mensual"),
     renewalAt: company?.subscriptionRenewal || rules.subscriptionRenewal || company?.nextBillingDate || rules.nextBillingDate || "",
@@ -772,7 +1228,7 @@ function extractClientState(company) {
     autoRenew: rules.autoRenew ?? company?.autoRenew ?? true,
   };
 
-  return { rules, catalog, prices, totalCatalogValue, avgPrice, maxPrice, subscription };
+  return { rules, plan, profile, catalog, prices, totalCatalogValue, avgPrice, maxPrice, subscription };
 }
 
 function buildPriceChart(values) {
@@ -827,6 +1283,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml }) {
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
     { key: "pedidos", label: "Pedidos", href: "/panel/pedidos" },
     { key: "suscripcion", label: "Suscripcion", href: "/panel/suscripcion" },
+    { key: "cuenta", label: "Cuenta", href: "/panel/cuenta" },
   ];
 
   const navHtml = nav.map((item) => `
@@ -894,7 +1351,7 @@ app.get("/panel", requireClientAuth, async (req, res) => {
     { label: "Productos", value: state.catalog.length, hint: "items en catalogo" },
     { label: "Valor catalogo", value: formatMoney(state.totalCatalogValue, state.subscription.currency), hint: "suma precios" },
     { label: "Precio promedio", value: formatMoney(state.avgPrice, state.subscription.currency), hint: "ticket estimado" },
-    { label: "Suscripcion", value: escapeHtml(state.subscription.plan), hint: `estado ${escapeHtml(state.subscription.status)}` },
+    { label: "Plan activo", value: escapeHtml(state.plan.planLabel), hint: escapeHtml(state.plan.channelLabel) },
   ];
 
   const statsHtml = stats.map((item) => `
@@ -919,7 +1376,8 @@ app.get("/panel", requireClientAuth, async (req, res) => {
 
       <article class="cp-card">
         <h3>Suscripcion</h3>
-        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.subscription.plan)}</b></div>
+        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
+        <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
         <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
         <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
@@ -958,6 +1416,8 @@ app.get("/panel", requireClientAuth, async (req, res) => {
 app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
   const company = req.company;
   const state = extractClientState(company);
+  const saved = String(req.query.saved || "") === "1";
+  const errorMsg = String(req.query.error || "").trim();
   const rows = state.catalog.map((item) => `
     <tr>
       <td>${escapeHtml(item.id)}</td>
@@ -969,6 +1429,9 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
   `).join("");
 
   const bodyHtml = `
+    ${saved ? `<div class="cp-alert success">Catalogo actualizado correctamente.</div>` : ""}
+    ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
+
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Productos</div><div class="cp-stat-value">${state.catalog.length}</div><div class="cp-stat-hint">registrados</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Precio max</div><div class="cp-stat-value">${formatMoney(state.maxPrice, state.subscription.currency)}</div><div class="cp-stat-hint">tope actual</div></article>
@@ -978,11 +1441,28 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>Catalogo completo</h3><span>${state.catalog.length} filas</span></div>
+        <div class="cp-card-head">
+          <h3>Catalogo completo</h3>
+          <div class="cp-actions">
+            <span>${state.catalog.length} filas</span>
+            <a class="cp-btn" href="#editar-catalogo">Modificar catalogo</a>
+          </div>
+        </div>
         <table class="cp-table">
           <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
         </table>
+      </article>
+
+      <article class="cp-card cp-span-3" id="editar-catalogo">
+        <div class="cp-card-head"><h3>Editar catalogo (JSON)</h3><span>Guardado directo</span></div>
+        <form method="POST" action="/panel/catalogo/save" class="cp-form">
+          <label>Catalog JSON</label>
+          <textarea name="catalogJson" rows="14">${escapeHtml(company.catalogJson || "[]")}</textarea>
+          <div class="cp-actions">
+            <button class="cp-btn primary" type="submit">Guardar catalogo</button>
+          </div>
+        </form>
       </article>
     </section>
   `;
@@ -994,6 +1474,31 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
     subtitle: `${company.name || company.id} - gestion de productos`,
     bodyHtml,
   }));
+});
+
+app.post("/panel/catalogo/save", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const id = company.id;
+  const catalogJson = String(req.body.catalogJson || "[]");
+
+  try {
+    const parsed = JSON.parse(catalogJson);
+    if (!Array.isArray(parsed)) throw new Error("catalogJson debe ser un array");
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson,
+        rulesJson: company.rulesJson || "{}",
+      },
+    });
+
+    res.redirect("/panel/catalogo?saved=1");
+  } catch (e) {
+    res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
+  }
 });
 
 app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
@@ -1062,16 +1567,17 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
 
   const bodyHtml = `
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.subscription.plan)}</div><div class="cp-stat-hint">actual</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div><div class="cp-stat-hint">actual</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Canales</div><div class="cp-stat-value">${escapeHtml(state.plan.channelLabel)}</div><div class="cp-stat-hint">activos</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Estado</div><div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div><div class="cp-stat-hint">cuenta</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Monto</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Renovacion</div><div class="cp-stat-value">${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</div><div class="cp-stat-hint">${state.subscription.autoRenew ? "auto" : "manual"}</div></article>
     </section>
 
     <section class="cp-grid">
       <article class="cp-card cp-span-2">
         <h3>Detalle de suscripcion</h3>
-        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.subscription.plan)}</b></div>
+        <div class="cp-kv"><span>Tipo de bot</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
+        <div class="cp-kv"><span>Canales</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
         <div class="cp-kv"><span>Ciclo</span><b>${escapeHtml(state.subscription.cycle)}</b></div>
         <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
@@ -1096,6 +1602,115 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
     subtitle: `${company.name || company.id} - estado del plan`,
     bodyHtml,
   }));
+});
+
+app.get("/panel/cuenta", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const state = extractClientState(company);
+  const saved = String(req.query.saved || "") === "1";
+  const errorMsg = String(req.query.error || "").trim();
+
+  const bodyHtml = `
+    ${saved ? `<div class="cp-alert success">Datos de cuenta actualizados.</div>` : ""}
+    ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
+
+    <section class="cp-grid">
+      <article class="cp-card cp-span-2">
+        <div class="cp-card-head"><h3>Datos de cuenta</h3><span>${escapeHtml(company.id)}</span></div>
+        <form method="POST" action="/panel/cuenta/save" class="cp-form">
+          <label>Nombre del responsable</label>
+          <input name="ownerName" value="${escapeHtml(state.profile.ownerName)}" />
+
+          <label>Cargo</label>
+          <input name="ownerRole" value="${escapeHtml(state.profile.ownerRole)}" />
+
+          <div class="cp-grid-2">
+            <div>
+              <label>Email</label>
+              <input name="ownerEmail" value="${escapeHtml(state.profile.ownerEmail)}" />
+            </div>
+            <div>
+              <label>Telefono</label>
+              <input name="ownerPhone" value="${escapeHtml(state.profile.ownerPhone)}" />
+            </div>
+          </div>
+
+          <label>Direccion</label>
+          <input name="companyAddress" value="${escapeHtml(state.profile.companyAddress)}" />
+
+          <div class="cp-grid-2">
+            <div>
+              <label>Ciudad</label>
+              <input name="companyCity" value="${escapeHtml(state.profile.companyCity)}" />
+            </div>
+            <div>
+              <label>Pais</label>
+              <input name="companyCountry" value="${escapeHtml(state.profile.companyCountry)}" />
+            </div>
+          </div>
+
+          <label>Nueva contrasena de acceso (opcional)</label>
+          <input name="clientPassword" type="password" placeholder="Dejar vacio para no cambiar" />
+
+          <div class="cp-actions">
+            <button class="cp-btn primary" type="submit">Guardar datos</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="cp-card">
+        <h3>Plan activo</h3>
+        <div class="cp-kv"><span>Tipo</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
+        <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
+        <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
+        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
+      </article>
+    </section>
+  `;
+
+  res.type("text/html").send(renderClientPage({
+    company,
+    active: "cuenta",
+    title: "Cuenta",
+    subtitle: `${company.name || company.id} - datos personales y acceso`,
+    bodyHtml,
+  }));
+});
+
+app.post("/panel/cuenta/save", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const id = company.id;
+  const currentRules = parseJsonSafe(company.rulesJson || "{}", {});
+  const rules = currentRules && typeof currentRules === "object" ? currentRules : {};
+
+  rules.ownerName = String(req.body.ownerName || "").trim();
+  rules.ownerRole = String(req.body.ownerRole || "").trim();
+  rules.ownerEmail = String(req.body.ownerEmail || "").trim();
+  rules.ownerPhone = String(req.body.ownerPhone || "").trim();
+  rules.companyAddress = String(req.body.companyAddress || "").trim();
+  rules.companyCity = String(req.body.companyCity || "").trim();
+  rules.companyCountry = String(req.body.companyCountry || "").trim();
+
+  const newPassword = String(req.body.clientPassword || "").trim();
+  if (newPassword) {
+    rules.clientPassword = newPassword;
+  }
+
+  try {
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    res.redirect("/panel/cuenta?saved=1");
+  } catch (e) {
+    res.redirect(`/panel/cuenta?error=${encodeURIComponent(e?.message || e)}`);
+  }
 });
 
 app.get("/panel/logout", (req, res) => {
