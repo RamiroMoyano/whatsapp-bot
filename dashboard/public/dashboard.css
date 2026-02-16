@@ -354,6 +354,60 @@ select:focus {
   text-decoration: none;
 }
 
+.admin-nav-actions {
+  gap: 10px;
+}
+
+.admin-nav-actions .btn {
+  min-width: 98px;
+}
+
+.admin-nav-divider {
+  width: 1px;
+  align-self: stretch;
+  background: linear-gradient(180deg, transparent 0%, rgba(190, 215, 255, 0.75) 20%, rgba(190, 215, 255, 0.75) 80%, transparent 100%);
+}
+
+.admin-toggle-card {
+  padding: 12px 14px;
+}
+
+.admin-toggle-head {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+}
+
+.admin-toggle-head:hover {
+  filter: brightness(1.05);
+}
+
+.admin-toggle-caret {
+  display: inline-flex;
+  font-size: 18px;
+  transform: rotate(0deg);
+  transition: transform 0.18s ease;
+}
+
+.admin-toggle-card.collapsed .admin-toggle-caret {
+  transform: rotate(-90deg);
+}
+
+.admin-toggle-body {
+  margin-top: 12px;
+}
+
 .client-layout {
   grid-template-columns: 240px 1fr;
   align-items: start;
@@ -971,6 +1025,30 @@ body.client-ui {
   background: #f7faff;
   color: #6581b5;
   font-size: 13px;
+}
+
+.cp-info-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.cp-info-block {
+  border: 1px solid #dce8ff;
+  border-radius: 14px;
+  background: #f5f9ff;
+  padding: 12px 14px;
+}
+
+.cp-info-block h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #1e3a8a;
+}
+
+.cp-info-block p {
+  margin: 0;
+  color: #3e5d92;
+  line-height: 1.55;
 }
 
 .cp-chart-wrap {

@@ -547,6 +547,21 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     });
     const profile = state.profile;
     const plan = state.plan;
+    const brandManual = String(
+      state.rules?.brandManual ||
+      state.rules?.brandGuide ||
+      state.rules?.manualMarca ||
+      state.rules?.manualDeMarca ||
+      ""
+    ).trim();
+    const companyPurpose = String(
+      state.rules?.companyPurpose ||
+      state.rules?.purpose ||
+      state.rules?.objective ||
+      state.rules?.objetivo ||
+      state.rules?.goal ||
+      ""
+    ).trim();
     const botOptions = extractCatalogBotOptions(providerForPricing);
     const currentBotClass = String(plan.botClass || "").trim();
     const hasCurrentBotInCatalog = currentBotClass
@@ -590,15 +605,16 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             <div class="subtitle">${c.id}</div>
           </div>
         </div>
-        <div class="nav">
-          <a href="/admin"><- Volver</a>
-          <a href="/admin/logout">Logout</a>
+        <div class="nav admin-nav-actions">
+          <a class="btn secondary" href="/admin"><- Volver</a>
+          <span class="admin-nav-divider" aria-hidden="true"></span>
+          <a class="btn secondary" href="/admin/logout">Logout</a>
         </div>
       </div>
 
       ${alerts}
 
-      <div class="card">
+      <div class="card admin-toggle-card" data-default-open="1">
         <h3 style="margin-top:0">Resumen importante</h3>
         <div class="grid2">
           <div>
@@ -623,15 +639,15 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </div>
       </div>
 
-      <div class="card">
-        <h3 style="margin-top:0">Cambio de bot (segun catalogo)</h3>
+      <div class="card admin-toggle-card" data-default-open="1">
+        <h3 style="margin-top:0">Cambio de bot</h3>
         <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/bot/save" class="form">
           <label>Selecciona bot del catalogo</label>
           <select name="botClass">
             ${botOptionsHtml}
           </select>
 
-          <label>O escribir clase personalizada (opcional)</label>
+          <label>O escribir clase personalizada</label>
           <input name="botClassCustom" placeholder="Ej: Bot Unificado PRO" />
 
           <label style="display:flex;align-items:center;gap:8px;margin-top:6px">
@@ -643,7 +659,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             Actual: <b>${escapeHtml(plan.botClass)}</b> | ${escapeHtml(plan.fullLabel)}
           </div>
           <div class="muted">
-            Opciones detectadas en catalogo (${escapeHtml(providerForPricing?.id || c.id)}): ${botOptions.length}
+            Opciones detectadas del catalogo: ${botOptions.length}
           </div>
           <div class="muted">
             Ciclo actual: ${escapeHtml(formatDateLabel(state.subscription.startAt))} a ${escapeHtml(formatDateLabel(state.subscription.endAt))}
@@ -658,7 +674,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </form>
       </div>
 
-      <div class="card">
+      <div class="card admin-toggle-card">
         <h3 style="margin-top:0">Datos de empresa y solicitante</h3>
         <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/profile/save" class="form">
           <label>Nombre visible de la empresa</label>
@@ -700,6 +716,12 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             </div>
           </div>
 
+          <label>Manual de marca</label>
+          <textarea name="brandManual" rows="4" placeholder="Tono, estilo, palabras permitidas/prohibidas, lineamientos...">${escapeHtml(brandManual)}</textarea>
+
+          <label>Objetivo o proposito</label>
+          <textarea name="companyPurpose" rows="3" placeholder="Que busca lograr la empresa con el bot">${escapeHtml(companyPurpose)}</textarea>
+
           <div class="grid2">
             <div>
               <label>Plan activo</label>
@@ -728,7 +750,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </form>
       </div>
 
-      <div class="card">
+      <div class="card admin-toggle-card">
         <h3 style="margin-top:0">Acceso del cliente</h3>
         <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/reset-password" class="form">
           <label>Restablecer password (opcional manual)</label>
@@ -739,7 +761,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </form>
       </div>
 
-      <div class="card">
+      <div class="card admin-toggle-card">
         <h3 style="margin-top:0">Edicion avanzada</h3>
         <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
           <input type="hidden" name="name" value="${escapeHtml(c.name || c.id)}" />
@@ -758,6 +780,44 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         </form>
       </div>
     </div>
+    <script>
+      (() => {
+        const cards = Array.from(document.querySelectorAll(".admin-toggle-card"));
+        cards.forEach((card, idx) => {
+          const title = card.querySelector("h3");
+          if (!title) return;
+
+          const body = document.createElement("div");
+          body.className = "admin-toggle-body";
+          while (card.firstChild) {
+            if (card.firstChild === title) {
+              card.removeChild(title);
+              continue;
+            }
+            body.appendChild(card.firstChild);
+          }
+
+          const head = document.createElement("button");
+          head.type = "button";
+          head.className = "admin-toggle-head";
+          head.innerHTML = '<span>' + title.textContent + '</span><span class="admin-toggle-caret" aria-hidden="true">&#9662;</span>';
+
+          const openByDefault = card.dataset.defaultOpen === "1" || idx === 0;
+          if (!openByDefault) {
+            body.style.display = "none";
+            card.classList.add("collapsed");
+          }
+
+          head.addEventListener("click", () => {
+            const isCollapsed = card.classList.toggle("collapsed");
+            body.style.display = isCollapsed ? "none" : "";
+          });
+
+          card.appendChild(head);
+          card.appendChild(body);
+        });
+      })();
+    </script>
   </body>
 </html>`);
   } catch (e) {
@@ -805,6 +865,8 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
     rules.companyAddress = String(req.body.companyAddress || "").trim();
     rules.companyCity = String(req.body.companyCity || "").trim();
     rules.companyCountry = String(req.body.companyCountry || "").trim();
+    rules.brandManual = String(req.body.brandManual || "").trim();
+    rules.companyPurpose = String(req.body.companyPurpose || "").trim();
     rules.planTier = planTier;
     rules.aiEnabled = planTier !== "BASICO";
     rules.channelMode = channelMode;
@@ -1629,6 +1691,23 @@ app.post("/c/login", handleClientLogin);
 app.get("/panel", requireClientAuth, async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
+  const toHtmlText = (value) => escapeHtml(value).replace(/\r?\n/g, "<br/>");
+  const brandManual = String(
+    state.rules?.brandManual ||
+    state.rules?.brandGuide ||
+    state.rules?.manualMarca ||
+    state.rules?.manualDeMarca ||
+    company.prompt ||
+    ""
+  ).trim();
+  const companyPurpose = String(
+    state.rules?.companyPurpose ||
+    state.rules?.purpose ||
+    state.rules?.objective ||
+    state.rules?.objetivo ||
+    state.rules?.goal ||
+    ""
+  ).trim();
   const catalogRows = state.catalog.slice(0, 6).map((item) => `
     <tr>
       <td>${escapeHtml(item.id)}</td>
@@ -1658,10 +1737,19 @@ app.get("/panel", requireClientAuth, async (req, res) => {
     <section class="cp-grid">
       <article class="cp-card cp-span-2">
         <div class="cp-card-head">
-          <h3>Evolucion de precios del catalogo</h3>
-          <span>${state.prices.length} valores detectados</span>
+          <h3>Informacion de la empresa</h3>
+          <span>Manual y proposito</span>
         </div>
-        ${buildPriceChart(state.prices)}
+        <div class="cp-info-stack">
+          <div class="cp-info-block">
+            <h4>Manual de marca</h4>
+            <p>${brandManual ? toHtmlText(brandManual) : "No definido todavia."}</p>
+          </div>
+          <div class="cp-info-block">
+            <h4>Objetivo / Proposito</h4>
+            <p>${companyPurpose ? toHtmlText(companyPurpose) : "No definido todavia."}</p>
+          </div>
+        </div>
       </article>
 
       <article class="cp-card">
