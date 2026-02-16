@@ -12,10 +12,12 @@ app.use(express.urlencoded({ extended: false }));
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "public")));
 
-// ===== Compat: redirigir panel viejo (/panel) al nuevo (/c) =====
-app.get("/panel", (req, res) => res.redirect("/c"));
-app.get("/panel/login", (req, res) => res.redirect("/c/login"));
-app.get("/panel/logout", (req, res) => res.redirect("/c/logout"));
+// ===== Compat: alias legado (/c) al panel cliente real (/panel) =====
+app.get("/c", (req, res) => res.redirect("/panel"));
+app.get("/c/logout", (req, res) => res.redirect("/panel/logout"));
+app.get("/c/catalogo", (req, res) => res.redirect("/panel/catalogo"));
+app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
+app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
 
 const DASH_USER = (process.env.DASH_USER || "").trim();
 const DASH_PASS = (process.env.DASH_PASS || "").trim();
@@ -72,20 +74,21 @@ async function requireClientAuth(req, res, next) {
   }
 
   const cookie = parseCookies(req)["client"];
-  if (!cookie) return res.redirect("/c/login");
+  if (!cookie) return res.redirect("/panel/login");
 
   const [companyId, sig] = cookie.split(".");
-  if (!companyId || !sig) return res.redirect("/c/login");
+  if (!companyId || !sig) return res.redirect("/panel/login");
 
-  if (signClient(companyId) !== sig) return res.redirect("/c/login");
+  if (signClient(companyId) !== sig) return res.redirect("/panel/login");
 
   // Cargamos la empresa para usar en el panel cliente
   try {
     const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
     req.company = company;
+    req.companyId = companyId;
     next();
   } catch (e) {
-    return res.redirect("/c/login");
+    return res.redirect("/panel/login");
   }
 }
 
@@ -184,7 +187,7 @@ app.get("/admin/login", (req, res) => {
 
   <body>
     <div class="bs-login">
-      <!-- Imagen fondo full (robot). Cambiá el nombre si tu archivo es otro -->
+      <!-- Imagen fondo full (robot). Cambia el nombre si tu archivo es otro -->
       <div class="bs-bg" style="background-image:url('/img/robot.png')"></div>
       <div class="bs-vignette"></div>
 
@@ -203,15 +206,15 @@ app.get("/admin/login", (req, res) => {
           <label>Usuario</label>
           <input name="user" placeholder="Usuario" autocomplete="username" />
 
-          <label>Contraseña</label>
+          <label>Contrasena</label>
           <div class="pw-row">
-            <input id="pass" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-            <button type="button" class="icon-btn" id="togglePass" aria-label="Ver contraseña">👁</button>
+            <input id="pass" name="pass" type="password" placeholder="Contrasena" autocomplete="current-password" />
+            <button type="button" class="icon-btn" id="togglePass" aria-label="Ver contrasena">eye</button>
           </div>
 
           <div class="login-actions">
             <button class="btn primary">Entrar</button>
-            <a class="btn secondary" href="/admin/forgot">Olvidé mi contraseña</a>
+            <a class="btn secondary" href="/admin/forgot">Olvide mi contrasena</a>
           </div>
         </form>
       </div>
@@ -258,7 +261,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const rows = companies.map(c => `
       <div class="company-item">
         <div>
-          <div><b>${c.id}</b> — ${c.name || ""}</div>
+          <div><b>${c.id}</b> - ${c.name || ""}</div>
           <div class="muted">Creada: ${c.createdAt || "-"}</div>
         </div>
         <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
@@ -272,7 +275,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/dashboard.css" />
-    <title>BabySteps • Admin</title>
+    <title>BabySteps - Admin</title>
   </head>
   <body>
     <div class="container">
@@ -301,24 +304,24 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         </div>
         <div class="kpi">
           <div class="label">Pedidos hoy</div>
-          <div class="value">—</div>
+          <div class="value">-</div>
           <div class="hint">Luego conectamos</div>
         </div>
         <div class="kpi">
           <div class="label">Clientes</div>
-          <div class="value">—</div>
+          <div class="value">-</div>
           <div class="hint">Luego conectamos</div>
         </div>
         <div class="kpi">
           <div class="label">Bots online</div>
-          <div class="value">—</div>
+          <div class="value">-</div>
           <div class="hint">Luego conectamos</div>
         </div>
       </div>
 
       <div class="card">
         <h3 style="margin:0 0 12px;">Listado</h3>
-        <div class="company-list">${rows || `<div class="muted">Aún no hay empresas.</div>`}</div>
+        <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
       </div>
 
     </div>
@@ -339,7 +342,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <div class="container">
       <div class="card">
         <h3 style="margin:0 0 10px;">Error cargando /admin</h3>
-        <div class="muted">Esto es lo que está fallando:</div>
+        <div class="muted">Esto es lo que esta fallando:</div>
         <pre style="white-space:pre-wrap; margin-top:10px;">${String(e?.message || e)}</pre>
         <div style="margin-top:12px;">
           <a class="btn secondary" href="/admin/logout">Volver al login</a>
@@ -377,7 +380,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
           </div>
         </div>
         <div class="nav">
-          <a href="/admin">← Volver</a>
+          <a href="/admin"><- Volver</a>
           <a href="/admin/logout">Logout</a>
         </div>
       </div>
@@ -430,7 +433,7 @@ app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
     const mappings = await api("/api/assignments");
 
     const options = companies.map((c) =>
-      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} — ${escapeHtml(c.name || "")}</option>`
+      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} - ${escapeHtml(c.name || "")}</option>`
     ).join("");
 
     const list = mappings.map((m) => `
@@ -462,7 +465,7 @@ app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
       </div>
 
       <div class="card">
-        <h3 style="margin-top:0">Últimas asignaciones</h3>
+        <h3 style="margin-top:0">Ultimas asignaciones</h3>
         <table class="table">
           <thead>
             <tr><th>Cliente</th><th>Empresa</th><th>Actualizado</th><th></th></tr>
@@ -518,7 +521,7 @@ app.post("/admin/assign/delete", requireDashboardAuth, async (req, res) => {
   }
 });
 
-// ================= PEDIDOS + ESTADÍSTICAS + BUSCADOR + CSV =================
+// ================= PEDIDOS + ESTADISTICAS + BUSCADOR + CSV =================
 app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
@@ -565,7 +568,7 @@ app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
           <div class="grid2">
             <input name="q" value="${escapeHtml(q)}" placeholder="PED-XXXX, whatsapp:+54..., nombre, contacto..." />
             <select name="limit">
-              ${[10,25,50,100,200].map(n => `<option value="${n}" ${n===limit?"selected":""}>${n} últimos</option>`).join("")}
+              ${[10,25,50,100,200].map(n => `<option value="${n}" ${n===limit?"selected":""}>${n} ultimos</option>`).join("")}
             </select>
           </div>
           <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap">
@@ -598,7 +601,7 @@ app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
       title: "Pedidos",
       active: "orders",
       body: `<div class="card"><b>Error:</b><pre>${escapeHtml(e?.message || e)}</pre></div>
-             <div class="card"><div class="muted">Esto suele pasar si el backend todavía no tiene <code>/api/orders</code>.</div></div>`
+             <div class="card"><div class="muted">Esto suele pasar si el backend todavia no tiene <code>/api/orders</code>.</div></div>`
     }));
   }
 });
@@ -626,179 +629,24 @@ app.get("/admin/orders/export.csv", requireDashboardAuth, async (req, res) => {
 
 // ====================== CLIENT ROUTES (empresas) ======================
 
-// Login cliente
-app.get("/c", (req, res) => {
-  const companyId = req.query.company || "babystepsbots";
-
-  res.type("text/html").send(`
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="/dashboard.css" />
-  <title>Panel Cliente</title>
-</head>
-
-<body class="dark">
-
-  <div class="client-shell">
-
-    <!-- SIDEBAR -->
-    <aside class="client-sidebar">
-      <div class="client-brand">
-        <div class="dot"></div>
-        <div>
-          <div class="name">${companyId}</div>
-          <div class="sub">Panel de cliente</div>
-        </div>
-      </div>
-
-      <nav class="client-nav">
-        <a class="active" href="/c?company=${companyId}">🏠 Inicio</a>
-        <a href="/c/catalog?company=${companyId}">📦 Catálogo</a>
-        <a href="/c/orders?company=${companyId}">🧾 Pedidos</a>
-        <a href="/c/subscription?company=${companyId}">💳 Suscripción</a>
-      </nav>
-    </aside>
-
-
-    <!-- CONTENIDO -->
-    <main class="client-main">
-
-      <div class="client-topbar">
-        <div>
-          <div class="client-title">${companyId}</div>
-          <div class="client-subtitle">Panel de control</div>
-        </div>
-        <a href="/c/logout" class="btn secondary">Salir</a>
-      </div>
-
-
-      <!-- DASHBOARD -->
-      <div class="grid3">
-
-        <div class="kpi">
-          <div class="label">Productos</div>
-          <div class="value">3</div>
-        </div>
-
-        <div class="kpi">
-          <div class="label">Pedidos hoy</div>
-          <div class="value">0</div>
-        </div>
-
-        <div class="kpi">
-          <div class="label">Estado</div>
-          <div class="value">Activo</div>
-        </div>
-
-      </div>
-
-
-      <div class="card">
-        <h3>Inicio</h3>
-        <p class="muted">
-          Acá vamos a mostrar métricas, pedidos, mensajes y actividad según tu empresa.
-        </p>
-      </div>
-
-    </main>
-  </div>
-
-</body>
-</html>
-  `);
-});
-
-app.post("/c/login", async (req, res) => {
+function parseJsonSafe(raw, fallback) {
   try {
-    const companyId = (req.body.companyId || "").trim();
-    const pass = (req.body.pass || "").trim();
-    if (!companyId || !pass) return res.status(400).send("Faltan datos");
-
-    const c = await api(`/api/companies/${encodeURIComponent(companyId)}`);
-
-    let rules = {};
-    try { rules = JSON.parse(c.rulesJson || "{}"); } catch {}
-
-    // ✅ La password del cliente vive en rulesJson.clientPassword
-    const expected = (rules.clientPassword || "").trim();
-
-    if (!expected || pass !== expected) {
-      return res.status(401).send("Credenciales incorrectas");
-    }
-
-    // Cookie cliente (separada de admin)
-    setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
-    return res.redirect("/c");
-  } catch (e) {
-    return res.status(401).send("Credenciales incorrectas");
+    const parsed = JSON.parse(raw ?? "");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
   }
-});
+}
 
-// Panel cliente (básico por ahora)
-app.get("/c", requireClientAuth, async (req, res) => {
-  const c = req.company;
-
-  res.type("text/html").send(`
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <link rel="stylesheet" href="/dashboard.css" />
-        <title>Panel - ${c.name || c.id}</title>
-      </head>
-      <body class="dark">
-        <div class="container">
-          <header class="top">
-            <div>
-              <h2>${c.name || c.id}</h2>
-              <div class="muted">Panel de cliente</div>
-            </div>
-            <a class="btn secondary" href="/c/logout">Salir</a>
-          </header>
-
-          <div class="card">
-            <div class="muted">Empresa</div>
-            <div style="margin-top:8px">
-              <b>ID:</b> <code>${c.id}</code><br/>
-              <b>Nombre:</b> ${c.name || ""}<br/>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="muted">Próximo</div>
-            <div style="margin-top:8px">
-              Acá vamos a mostrar métricas, pedidos, mensajes y actividad según tu empresa.
-            </div>
-          </div>
-        </div>
-      </body>
-    </html>
-  `);
-});
-
-app.get("/c/logout", (req, res) => {
-  clearCookie(res, "client");
-  res.redirect("/c/login");
-});
-
-// ===============================
-// LOGIN EMPRESAS (cliente panel)
-// ===============================
-
-// Pantalla login de empresas
-app.get("/panel/login", (req, res) => {
-  res.type("text/html").send(`
+function renderClientLoginPage() {
+  return `
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/dashboard.css" />
-    <title>Login Cliente</title>
+    <title>Login cliente</title>
   </head>
   <body>
     <div class="bs-login">
@@ -820,13 +668,13 @@ app.get("/panel/login", (req, res) => {
           <label>Empresa (ID)</label>
           <input name="companyId" placeholder="ej: babystepsbots" autocomplete="username" />
 
-          <label>Contraseña</label>
+          <label>Contrasena</label>
           <div class="pw-row">
-            <input id="panelPass" name="pass" type="password" placeholder="Contraseña" autocomplete="current-password" />
-            <button type="button" class="icon-btn" onclick="
-              const i=document.getElementById('panelPass');
+            <input id="clientPass" name="pass" type="password" placeholder="Contrasena" autocomplete="current-password" />
+            <button type="button" class="icon-btn" aria-label="Ver contrasena" onclick="
+              const i=document.getElementById('clientPass');
               i.type = (i.type==='password'?'text':'password');
-            ">👁</button>
+            ">eye</button>
           </div>
 
           <div class="login-actions">
@@ -837,63 +685,45 @@ app.get("/panel/login", (req, res) => {
       </div>
     </div>
   </body>
-</html>
-  `);
-});
+</html>`;
+}
 
-// login empresa
-app.post("/panel/login", async (req, res) => {
+async function handleClientLogin(req, res) {
   try {
     const companyId = (req.body.companyId || "").trim();
     const pass = (req.body.pass || "").trim();
-
     if (!companyId || !pass) return res.status(400).send("Faltan datos");
 
-    const c = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+    const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    const expected = String(rules.clientPassword || company.clientPassword || "").trim();
 
-    let rules = {};
-    try { rules = JSON.parse(c.rulesJson || "{}"); } catch {}
+    if (!expected) {
+      return res.status(400).send("La empresa no tiene password de cliente configurada");
+    }
 
-    const expected = (rules.clientPassword || "").trim();
-    if (!expected || pass !== expected) {
+    if (pass !== expected) {
       return res.status(401).send("Credenciales incorrectas");
     }
 
-    // cookie de empresa
-    res.setHeader(
-      "Set-Cookie",
-      `company=${encodeURIComponent(companyId)}; Path=/; HttpOnly; SameSite=Lax`
-    );
-
+    setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
     return res.redirect("/c");
   } catch {
     return res.status(401).send("Credenciales incorrectas");
   }
-});
-
-// middleware empresa auth
-function requireCompany(req, res, next) {
-  const raw = req.headers.cookie || "";
-  const found = raw.split(";").find(c => c.trim().startsWith("company="));
-
-  if (!found) return res.redirect("/panel/login");
-
-  req.companyId = decodeURIComponent(found.split("=")[1]);
-  next();
 }
 
-// panel cliente
 function renderClientPage({ company, active, title, bodyHtml }) {
   const nav = [
     { key: "inicio", label: "Inicio", href: "/panel" },
-    { key: "catalogo", label: "Catálogo", href: "/panel/catalogo" },
+    { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
     { key: "pedidos", label: "Pedidos", href: "/panel/pedidos" },
-    { key: "suscripcion", label: "Suscripción", href: "/panel/suscripcion" },
+    { key: "suscripcion", label: "Suscripcion", href: "/panel/suscripcion" },
   ];
 
-  const navHtml = nav.map(i => `
-    <a class="sb-link ${active === i.key ? "active" : ""}" href="${i.href}">
-      ${i.label}
+  const navHtml = nav.map((item) => `
+    <a class="sb-link ${active === item.key ? "active" : ""}" href="${item.href}">
+      ${item.label}
     </a>
   `).join("");
 
@@ -903,7 +733,7 @@ function renderClientPage({ company, active, title, bodyHtml }) {
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <link rel="stylesheet" href="/dashboard.css" />
-      <title>${title}</title>
+      <title>${escapeHtml(title)}</title>
     </head>
     <body class="dark">
       <div class="container">
@@ -911,7 +741,7 @@ function renderClientPage({ company, active, title, bodyHtml }) {
           <div class="brand">
             <img src="/img/logo.png" alt="BabySteps" onerror="this.style.display='none'" />
             <div>
-              <div class="title">${company?.name || company?.id || "Panel"}</div>
+              <div class="title">${escapeHtml(company?.name || company?.id || "Panel")}</div>
               <div class="subtitle">Panel de cliente</div>
             </div>
           </div>
@@ -920,8 +750,8 @@ function renderClientPage({ company, active, title, bodyHtml }) {
 
         <div class="client-layout">
           <aside class="sidebar">
-            <div class="sb-title">${company?.name || company?.id || "Cuenta"}</div>
-            <div class="sb-sub">Menú</div>
+            <div class="sb-title">${escapeHtml(company?.name || company?.id || "Cuenta")}</div>
+            <div class="sb-sub">Menu</div>
             <nav class="sb-nav">${navHtml}</nav>
           </aside>
 
@@ -934,42 +764,54 @@ function renderClientPage({ company, active, title, bodyHtml }) {
   </html>`;
 }
 
-app.get("/panel", requireClientAuth, async (req, res) => {
-  const companyId = req.companyId; // <-- usa el nombre que ya tengas (cookie)
-  const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+app.get("/panel/login", (req, res) => {
+  res.type("text/html").send(renderClientLoginPage());
+});
+app.get("/c/login", (req, res) => {
+  res.type("text/html").send(renderClientLoginPage());
+});
 
-  let catalog = [];
-  try { catalog = JSON.parse(company.catalogJson || "[]"); } catch {}
+app.post("/panel/login", handleClientLogin);
+app.post("/c/login", handleClientLogin);
+
+app.get("/panel", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const catalogRaw = parseJsonSafe(company.catalogJson || "[]", []);
+  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
+  const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+  const catalogRows = catalog.map((item) => `
+    <tr>
+      <td>${escapeHtml(item?.id ?? "")}</td>
+      <td>${escapeHtml(item?.name ?? "")}</td>
+      <td>${escapeHtml(item?.price ?? "")}</td>
+    </tr>
+  `).join("");
 
   const bodyHtml = `
     <div class="kpis">
-      <div class="kpi"><div class="label">Empresa</div><div class="value">${company.id}</div><div class="hint">ID</div></div>
-      <div class="kpi"><div class="label">Catálogo</div><div class="value">${catalog.length}</div><div class="hint">items</div></div>
-      <div class="kpi"><div class="label">Humano</div><div class="value">${company.rulesJson?.includes('"allowHuman":true') || company.rulesJson?.includes('"allowHuman": true') ? "Sí" : "No"}</div><div class="hint">derivación</div></div>
-      <div class="kpi"><div class="label">Tono</div><div class="value">${(JSON.parse(company.rulesJson || "{}").tone || "—")}</div><div class="hint">regla</div></div>
+      <div class="kpi"><div class="label">Empresa</div><div class="value">${escapeHtml(company.id)}</div><div class="hint">ID</div></div>
+      <div class="kpi"><div class="label">Catalogo</div><div class="value">${catalog.length}</div><div class="hint">items</div></div>
+      <div class="kpi"><div class="label">Humano</div><div class="value">${rules.allowHuman ? "Si" : "No"}</div><div class="hint">derivacion</div></div>
+      <div class="kpi"><div class="label">Tono</div><div class="value">${escapeHtml(rules.tone || "-")}</div><div class="hint">regla</div></div>
     </div>
 
     <div class="grid">
       <div class="card">
-        <h2 style="margin:0 0 10px;">Tu configuración</h2>
+        <h2 style="margin:0 0 10px;">Tu configuracion</h2>
         <div class="muted">Prompt</div>
-        <p style="margin:10px 0 0;">${(company.prompt || "").replaceAll("<","&lt;").replaceAll(">","&gt;")}</p>
+        <p style="margin:10px 0 0;">${escapeHtml(company.prompt || "")}</p>
       </div>
 
       <div class="card">
-        <h2 style="margin:0 0 10px;">Catálogo</h2>
+        <h2 style="margin:0 0 10px;">Catalogo</h2>
         <table class="table">
           <thead>
             <tr><th>ID</th><th>Producto</th><th>Precio</th></tr>
           </thead>
           <tbody>
-            ${catalog.map(p => `
-              <tr>
-                <td>${p.id ?? ""}</td>
-                <td>${(p.name || "").replaceAll("<","&lt;").replaceAll(">","&gt;")}</td>
-                <td>${p.price ?? ""}</td>
-              </tr>
-            `).join("")}
+            ${catalogRows || `<tr><td colspan="3" class="muted">Sin productos.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -979,43 +821,43 @@ app.get("/panel", requireClientAuth, async (req, res) => {
   res.type("text/html").send(renderClientPage({
     company,
     active: "inicio",
-    title: `${company.name || company.id} — Inicio`,
-    bodyHtml
+    title: `${company.name || company.id} - Inicio`,
+    bodyHtml,
   }));
 });
 
 app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
-  const company = await api(`/api/companies/${encodeURIComponent(req.companyId)}`);
+  const company = req.company;
   res.type("text/html").send(renderClientPage({
     company,
     active: "catalogo",
-    title: `${company.name || company.id} — Catálogo`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Catálogo</h2><div class="muted">Próximo paso: editar / agregar / quitar productos.</div></div>`
+    title: `${company.name || company.id} - Catalogo`,
+    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Catalogo</h2><div class="muted">Proximo paso: editar, agregar o quitar productos.</div></div>`,
   }));
 });
 
 app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
-  const company = await api(`/api/companies/${encodeURIComponent(req.companyId)}`);
+  const company = req.company;
   res.type("text/html").send(renderClientPage({
     company,
     active: "pedidos",
-    title: `${company.name || company.id} — Pedidos`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Pedidos</h2><div class="muted">Próximo paso: ver completados / en espera / cancelados.</div></div>`
+    title: `${company.name || company.id} - Pedidos`,
+    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Pedidos</h2><div class="muted">Proximo paso: ver completados, en espera y cancelados.</div></div>`,
   }));
 });
 
 app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
-  const company = await api(`/api/companies/${encodeURIComponent(req.companyId)}`);
+  const company = req.company;
   res.type("text/html").send(renderClientPage({
     company,
     active: "suscripcion",
-    title: `${company.name || company.id} — Suscripción`,
-    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Suscripción</h2><div class="muted">Próximo paso: plan, fechas y precio próximo período.</div></div>`
+    title: `${company.name || company.id} - Suscripcion`,
+    bodyHtml: `<div class="card"><h2 style="margin:0 0 10px;">Suscripcion</h2><div class="muted">Proximo paso: plan, fechas y precio del proximo periodo.</div></div>`,
   }));
 });
 
 app.get("/panel/logout", (req, res) => {
-  res.setHeader("Set-Cookie", "company=; Path=/; Max-Age=0");
+  clearCookie(res, "client");
   res.redirect("/panel/login");
 });
 
@@ -1073,3 +915,4 @@ app.get("/__routes", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
+
