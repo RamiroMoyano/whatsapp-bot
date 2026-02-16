@@ -227,7 +227,7 @@ app.get("/admin/login", (req, res) => {
           <label>Contrasena</label>
           <div class="pw-row">
             <input id="pass" name="pass" type="password" placeholder="Contrasena" autocomplete="current-password" />
-            <button type="button" class="icon-btn" id="togglePass" aria-label="Ver contrasena">eye</button>
+            <button type="button" class="icon-btn" id="togglePass" aria-label="Mostrar contrasena">🙈</button>
           </div>
 
           <div class="login-actions">
@@ -242,9 +242,16 @@ app.get("/admin/login", (req, res) => {
       const btn = document.getElementById("togglePass");
       const pass = document.getElementById("pass");
       if (btn && pass) {
+        const syncEye = () => {
+          const hidden = pass.type === "password";
+          btn.textContent = hidden ? "🙈" : "👁️";
+          btn.setAttribute("aria-label", hidden ? "Mostrar contrasena" : "Ocultar contrasena");
+        };
         btn.addEventListener("click", () => {
           pass.type = pass.type === "password" ? "text" : "password";
+          syncEye();
         });
+        syncEye();
       }
     </script>
   </body>
@@ -274,13 +281,24 @@ app.get("/admin/logout", (req, res) => {
 // ================= EMPRESAS =================
 app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
+    const q = String(req.query.q || "").trim().toLowerCase();
     const companies = await api("/api/companies");
 
-    const rows = companies.map((c) => {
+    const rowsData = companies.map((c) => {
       const rules = parseJsonSafe(c.rulesJson || "{}", {});
       const plan = extractPlanInfo(c, rules);
       const profile = extractCompanyProfile(rules);
-      return `
+      const searchText = [
+        c.id,
+        c.name,
+        c.createdAt,
+        profile.ownerName,
+        profile.ownerEmail,
+        profile.ownerPhone,
+        plan.botClass,
+        plan.fullLabel,
+      ].map((value) => String(value || "").toLowerCase()).join(" ");
+      const html = `
       <div class="company-item">
         <div>
           <div><b>${c.id}</b> - ${c.name || ""}</div>
@@ -291,7 +309,13 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
       </div>
     `;
-    }).join("");
+      return { html, searchText };
+    });
+
+    const filtered = q
+      ? rowsData.filter((row) => row.searchText.includes(q))
+      : rowsData;
+    const rows = filtered.map((row) => row.html).join("");
 
     res.type("text/html").send(`
 <!doctype html>
@@ -317,6 +341,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         <div class="nav-tabs">
           <a class="btn primary" href="/admin">Empresas</a>
           <a class="btn secondary" href="/admin/company/new">Nueva empresa</a>
+          <a class="btn secondary" href="/admin/orders">Pedidos</a>
           <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
           <a class="btn secondary" href="/admin/logout">Logout</a>
         </div>
@@ -325,8 +350,8 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
       <div class="kpis">
         <div class="kpi">
           <div class="label">Empresas</div>
-          <div class="value">${companies.length}</div>
-          <div class="hint">Total activas</div>
+          <div class="value">${filtered.length}</div>
+          <div class="hint">de ${companies.length} activas</div>
         </div>
         <div class="kpi">
           <div class="label">Pedidos hoy</div>
@@ -346,6 +371,14 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
       </div>
 
       <div class="card">
+        <form method="GET" action="/admin" class="form" style="margin-bottom:12px">
+          <label>Buscar empresa</label>
+          <div class="actions">
+            <input name="q" value="${escapeHtml(String(req.query.q || ""))}" placeholder="ID, nombre, dueno, mail, bot..." />
+            <button class="btn primary" type="submit">Buscar</button>
+            <a class="btn secondary" href="/admin">Limpiar</a>
+          </div>
+        </form>
         <h3 style="margin:0 0 12px;">Listado</h3>
         <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
       </div>
@@ -1233,10 +1266,7 @@ function renderClientLoginPage() {
           <label>Contrasena</label>
           <div class="pw-row">
             <input id="clientPass" name="pass" type="password" placeholder="Contrasena" autocomplete="current-password" />
-            <button type="button" class="icon-btn" aria-label="Ver contrasena" onclick="
-              const i=document.getElementById('clientPass');
-              i.type = (i.type==='password'?'text':'password');
-            ">eye</button>
+            <button type="button" class="icon-btn" id="toggleClientPass" aria-label="Mostrar contrasena">🙈</button>
           </div>
 
           <div class="login-actions">
@@ -1246,6 +1276,22 @@ function renderClientLoginPage() {
         </form>
       </div>
     </div>
+    <script>
+      const btn = document.getElementById("toggleClientPass");
+      const pass = document.getElementById("clientPass");
+      if (btn && pass) {
+        const syncEye = () => {
+          const hidden = pass.type === "password";
+          btn.textContent = hidden ? "🙈" : "👁️";
+          btn.setAttribute("aria-label", hidden ? "Mostrar contrasena" : "Ocultar contrasena");
+        };
+        btn.addEventListener("click", () => {
+          pass.type = pass.type === "password" ? "text" : "password";
+          syncEye();
+        });
+        syncEye();
+      }
+    </script>
   </body>
 </html>`;
 }
@@ -1342,6 +1388,55 @@ function defaultBotClassFromMode(mode) {
   if (mode === "instagram") return "Bot Instagram";
   if (mode === "combinado") return "Bot Unificado";
   return "Bot WhatsApp";
+}
+
+function tierRank(tier) {
+  if (tier === "PRO") return 2;
+  if (tier === "LITE") return 1;
+  return 0;
+}
+
+function tierFromRank(rank) {
+  if (rank >= 2) return "PRO";
+  if (rank <= 0) return "BASICO";
+  return "LITE";
+}
+
+function findCatalogItemForTierAndChannel(catalog, tier, channelMode) {
+  if (!Array.isArray(catalog) || !catalog.length) return null;
+  const normalize = (v) => String(v || "").toLowerCase();
+  const hasAny = (value, tokens) => tokens.some((token) => value.includes(token));
+
+  const byChannel = catalog.filter((item) => {
+    const name = normalize(item?.name);
+    if (!name) return false;
+    if (channelMode === "instagram") {
+      return hasAny(name, ["instagram", "insta"]);
+    }
+    if (channelMode === "combinado") {
+      return hasAny(name, ["combinado", "unificado", "multi", "whatsapp + instagram"]);
+    }
+    return hasAny(name, ["whatsapp"]) || !hasAny(name, ["instagram", "insta", "combinado", "unificado", "multi"]);
+  });
+
+  const scoped = byChannel.length ? byChannel : catalog;
+  const tierTokens = {
+    PRO: ["pro"],
+    LITE: ["lite"],
+    BASICO: ["basico", "basic", "sin ai", "standard"],
+  };
+  const preferred = scoped.find((item) => hasAny(normalize(item?.name), tierTokens[tier] || []));
+  if (preferred) return preferred;
+
+  if (tier === "BASICO") {
+    const withoutAi = scoped.find((item) => {
+      const name = normalize(item?.name);
+      return !name.includes("lite") && !name.includes("pro");
+    });
+    if (withoutAi) return withoutAi;
+  }
+
+  return scoped[0] || null;
 }
 
 function extractCatalogEntriesForCompany(company) {
@@ -2258,8 +2353,21 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
 app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
+  const updated = String(req.query.updated || "") === "1";
+  const noop = String(req.query.noop || "") === "1";
+  const errorMsg = String(req.query.error || "").trim();
+  const action = String(req.query.action || "").trim().toLowerCase();
+  const actionLabel = action === "upgrade"
+    ? "Upgrade"
+    : action === "downgrade"
+      ? "Downgrade"
+      : action === "cancel"
+        ? "Cancelacion"
+        : "Actualizacion";
 
   const bodyHtml = `
+    ${updated ? `<div class="cp-alert success">${escapeHtml(actionLabel)} aplicado correctamente${noop ? " (sin cambios de nivel)." : "."}</div>` : ""}
+    ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div><div class="cp-stat-hint">actual</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Canales</div><div class="cp-stat-value">${escapeHtml(state.plan.channelLabel)}</div><div class="cp-stat-hint">activos</div></article>
@@ -2285,6 +2393,20 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
         <div class="cp-kv"><span>Prorrateo upgrade</span><b>${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}</b></div>
         <div class="cp-kv"><span>Proxima fecha</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
         <div class="cp-kv"><span>Renovacion</span><b>${state.subscription.autoRenew ? "Automatica" : "Manual"}</b></div>
+        <div class="cp-actions" style="margin-top:12px">
+          <form method="POST" action="/panel/suscripcion/action">
+            <input type="hidden" name="action" value="downgrade" />
+            <button class="cp-btn" type="submit">Downgrade</button>
+          </form>
+          <form method="POST" action="/panel/suscripcion/action">
+            <input type="hidden" name="action" value="upgrade" />
+            <button class="cp-btn primary" type="submit">Upgrade</button>
+          </form>
+          <form method="POST" action="/panel/suscripcion/action" onsubmit="return confirm('Se cancelara la suscripcion. Continuar?')">
+            <input type="hidden" name="action" value="cancel" />
+            <button class="cp-btn danger" type="submit">Cancelar suscripcion</button>
+          </form>
+        </div>
       </article>
 
       <article class="cp-card">
@@ -2304,6 +2426,71 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
     subtitle: `${company.name || company.id} - estado del plan`,
     bodyHtml,
   }));
+});
+
+app.post("/panel/suscripcion/action", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const action = String(req.body.action || "").trim().toLowerCase();
+  if (!["upgrade", "downgrade", "cancel"].includes(action)) {
+    return res.redirect("/panel/suscripcion");
+  }
+
+  try {
+    const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
+    const providerCompany = await getBotCatalogProviderCompany(currentCompany);
+    const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+    const currentPlan = extractPlanInfo(currentCompany, rules);
+    const currentTier = normalizePlanTier(rules.planTier || currentPlan.tier) || currentPlan.tier || "BASICO";
+    const channelMode = normalizeChannelMode(rules.channelMode || currentPlan.channelMode) || "whatsapp";
+
+    let nextTier = currentTier;
+    let noop = false;
+
+    if (action === "upgrade") {
+      nextTier = tierFromRank(Math.min(2, tierRank(currentTier) + 1));
+      noop = nextTier === currentTier;
+    } else if (action === "downgrade") {
+      nextTier = tierFromRank(Math.max(0, tierRank(currentTier) - 1));
+      noop = nextTier === currentTier;
+    }
+
+    if (action === "cancel") {
+      rules.subscriptionStatus = "Cancelada";
+      rules.autoRenew = false;
+      rules.subscriptionCancelledAt = new Date().toISOString();
+    } else {
+      rules.planTier = nextTier;
+      rules.aiEnabled = nextTier !== "BASICO";
+      rules.channelMode = channelMode;
+      rules.channels = channelsFromMode(channelMode);
+      rules.subscriptionStatus = "Activa";
+      rules.autoRenew = true;
+
+      const providerCatalog = extractCatalogEntriesForCompany(providerCompany || currentCompany);
+      const selected = findCatalogItemForTierAndChannel(providerCatalog, nextTier, channelMode);
+      if (selected) {
+        rules.botClass = selected.name;
+        if (selected.id) rules.botCatalogId = selected.id;
+      } else if (!String(rules.botClass || "").trim()) {
+        rules.botClass = defaultBotClassFromMode(channelMode);
+      }
+    }
+
+    await api(`/api/companies/${encodeURIComponent(company.id)}/save`, {
+      method: "POST",
+      body: {
+        name: String(currentCompany.name || company.id).trim() || company.id,
+        prompt: currentCompany.prompt || "",
+        catalogJson: currentCompany.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    res.redirect(`/panel/suscripcion?updated=1&action=${encodeURIComponent(action)}${noop ? "&noop=1" : ""}`);
+  } catch (e) {
+    res.redirect(`/panel/suscripcion?error=${encodeURIComponent(e?.message || e)}`);
+  }
 });
 
 app.get("/panel/cuenta", requireClientAuth, async (req, res) => {

@@ -764,63 +764,110 @@ app.post("/api/assignments/delete", requireApiAuth, (req, res) => {
 
 // ===== API: Orders =====
 app.get("/api/orders", requireApiAuth, (req, res) => {
-  const q = String(req.query.q || "").trim();
-  const companyId = String(req.query.companyId || "").trim();
-  const limitRaw = Number(req.query.limit || 100);
-  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 1000) : 100;
+  try {
+    const q = String(req.query.q || "").trim();
+    const companyId = String(req.query.companyId || "").trim();
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 1000) : 100;
 
-  const parseDateParam = (value, endOfDay = false) => {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-      const [yy, mm, dd] = raw.split("-").map((v) => Number(v));
-      const date = endOfDay
-        ? new Date(Date.UTC(yy, mm - 1, dd, 23, 59, 59, 999))
-        : new Date(Date.UTC(yy, mm - 1, dd, 0, 0, 0, 0));
+    const parseDateParam = (value, endOfDay = false) => {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        const [yy, mm, dd] = raw.split("-").map((v) => Number(v));
+        const date = endOfDay
+          ? new Date(Date.UTC(yy, mm - 1, dd, 23, 59, 59, 999))
+          : new Date(Date.UTC(yy, mm - 1, dd, 0, 0, 0, 0));
+        return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+      }
+      const date = new Date(raw);
       return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+    };
+
+    const fromIso = parseDateParam(req.query.from, false);
+    const toIso = parseDateParam(req.query.to, true);
+
+    const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
+    const columns = new Set((Array.isArray(tableInfo) ? tableInfo : []).map((row) => String(row?.name || "")));
+    if (!columns.size) return res.json([]);
+
+    const has = (name) => columns.has(name);
+    const selectable = [
+      "id",
+      "createdAt",
+      "fromNumber",
+      "companyId",
+      "name",
+      "contact",
+      "notes",
+      "itemsJson",
+      "itemsDetailedJson",
+      "total",
+      "paymentStatus",
+      "paymentMethod",
+      "orderStatus",
+      "deliveredAt",
+    ].filter(has);
+
+    const where = [];
+    const params = [];
+
+    if (companyId && has("companyId")) {
+      where.push("companyId = ?");
+      params.push(companyId);
     }
-    const date = new Date(raw);
-    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
-  };
 
-  const fromIso = parseDateParam(req.query.from, false);
-  const toIso = parseDateParam(req.query.to, true);
+    if (q) {
+      const like = `%${q}%`;
+      const searchFields = ["id", "fromNumber", "companyId", "name", "contact"].filter(has);
+      if (searchFields.length) {
+        where.push(`(${searchFields.map((field) => `${field} LIKE ?`).join(" OR ")})`);
+        params.push(...searchFields.map(() => like));
+      }
+    }
 
-  const where = [];
-  const params = [];
+    if (fromIso && has("createdAt")) {
+      where.push("datetime(createdAt) >= datetime(?)");
+      params.push(fromIso);
+    }
 
-  if (companyId) {
-    where.push("companyId = ?");
-    params.push(companyId);
+    if (toIso && has("createdAt")) {
+      where.push("datetime(createdAt) <= datetime(?)");
+      params.push(toIso);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const orderSql = has("createdAt") ? "ORDER BY datetime(createdAt) DESC" : (has("id") ? "ORDER BY id DESC" : "");
+    const selectSql = selectable.length ? selectable.join(",") : "*";
+    const sql = `
+      SELECT ${selectSql}
+      FROM orders
+      ${whereSql}
+      ${orderSql}
+      LIMIT ?
+    `;
+
+    const rows = db.prepare(sql).all(...params, limit);
+    const normalized = rows.map((row) => ({
+      id: row?.id ?? "",
+      createdAt: row?.createdAt ?? "",
+      fromNumber: row?.fromNumber ?? "",
+      companyId: row?.companyId ?? "",
+      name: row?.name ?? "",
+      contact: row?.contact ?? "",
+      notes: row?.notes ?? "",
+      itemsJson: row?.itemsJson ?? "[]",
+      itemsDetailedJson: row?.itemsDetailedJson ?? "[]",
+      total: Number(row?.total || 0),
+      paymentStatus: row?.paymentStatus ?? "",
+      paymentMethod: row?.paymentMethod ?? "",
+      orderStatus: row?.orderStatus ?? "",
+      deliveredAt: row?.deliveredAt ?? null,
+    }));
+    res.json(normalized);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
   }
-
-  if (q) {
-    const like = `%${q}%`;
-    where.push("(id LIKE ? OR fromNumber LIKE ? OR companyId LIKE ? OR name LIKE ? OR contact LIKE ?)");
-    params.push(like, like, like, like, like);
-  }
-
-  if (fromIso) {
-    where.push("datetime(createdAt) >= datetime(?)");
-    params.push(fromIso);
-  }
-
-  if (toIso) {
-    where.push("datetime(createdAt) <= datetime(?)");
-    params.push(toIso);
-  }
-
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const sql = `
-    SELECT id,createdAt,fromNumber,companyId,name,contact,notes,itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,orderStatus,deliveredAt
-    FROM orders
-    ${whereSql}
-    ORDER BY datetime(createdAt) DESC
-    LIMIT ?
-  `;
-
-  const rows = db.prepare(sql).all(...params, limit);
-  res.json(rows);
 });
 
 // ================= WEBHOOK =================
