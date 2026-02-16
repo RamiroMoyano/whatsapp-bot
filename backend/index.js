@@ -152,6 +152,7 @@ INSERT OR IGNORE INTO companies VALUES
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const AI_GLOBAL = (process.env.AI_GLOBAL || "on").trim().toLowerCase();
+const BOT_CATALOG_PROVIDER_ID = (process.env.BOT_CATALOG_PROVIDER_ID || "babystepsbots").trim().toLowerCase();
 
 // ================= ADMIN =================
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || "").trim();
@@ -192,6 +193,7 @@ function getSession(from) {
     aiMode: "off",
     aiCount: 0,
     aiCountDate: "",
+    aiHistory: [],
     lastAiAt: 0,
     humanNotified: false,
   };
@@ -253,9 +255,54 @@ const cartText = (s) => {
 };
 
 // ================= AI =================
+function aiModeProfile(modeRaw) {
+  const mode = String(modeRaw || "").toLowerCase();
+  if (mode === "pro") {
+    return {
+      dailyLimit: 120,
+      memoryMessages: 24,
+      memoryChars: 12000,
+    };
+  }
+  return {
+    dailyLimit: 40,
+    memoryMessages: 8,
+    memoryChars: 3500,
+  };
+}
+
+function normalizeAiHistory(rawHistory) {
+  if (!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .map((item) => ({
+      role: item?.role === "assistant" ? "assistant" : "user",
+      content: String(item?.content || "").trim(),
+    }))
+    .filter((item) => item.content);
+}
+
+function trimAiHistoryForProfile(history, profile) {
+  const maxMessages = Math.max(0, Number(profile?.memoryMessages || 0));
+  const maxChars = Math.max(0, Number(profile?.memoryChars || 0));
+  if (!maxMessages || !maxChars) return [];
+
+  let chars = 0;
+  const selected = [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    const nextChars = chars + item.content.length;
+    if (selected.length >= maxMessages) break;
+    if (nextChars > maxChars && selected.length > 0) break;
+    selected.push(item);
+    chars = nextChars;
+  }
+  return selected.reverse();
+}
+
 async function aiReply(session, from, text) {
   if (!openai || AI_GLOBAL === "off") return "IA no disponible.";
-  if (!["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase())) return null;
+  const aiMode = String(session.data.aiMode || "").toLowerCase();
+  if (!["lite", "pro"].includes(aiMode)) return null;
 
   const today = new Date().toISOString().slice(0, 10);
   if (session.data.aiCountDate !== today) {
@@ -263,8 +310,10 @@ async function aiReply(session, from, text) {
     session.data.aiCount = 0;
   }
 
-  const limit = String(session.data.aiMode).toLowerCase() === "pro" ? 120 : 40;
-  if (Number(session.data.aiCount || 0) >= limit) return "⚠️ Límite diario de IA alcanzado. Escribí humano.";
+  const profile = aiModeProfile(aiMode);
+  if (Number(session.data.aiCount || 0) >= profile.dailyLimit) {
+    return "⚠️ Límite diario de IA alcanzado. Escribí humano.";
+  }
 
   const c = getCompanySafe(session);
   const prompt = `
@@ -279,16 +328,29 @@ Reglas:
 - Siempre cerrar con pregunta
 `;
 
+  const history = normalizeAiHistory(session.data.aiHistory || []);
+  const memoryWindow = trimAiHistoryForProfile(history, profile);
+  const inputMessages = [
+    ...memoryWindow.map((item) => ({ role: item.role, content: item.content })),
+    { role: "user", content: text },
+  ];
+
   const resp = await openai.responses.create({
     model: "gpt-4o-mini",
-    input: [{ role: "user", content: text }],
+    input: inputMessages,
     instructions: prompt,
   });
 
+  const answer = (resp.output_text || "").trim();
   session.data.aiCount = Number(session.data.aiCount || 0) + 1;
+  session.data.aiHistory = [
+    ...history,
+    { role: "user", content: String(text || "").trim(), at: new Date().toISOString() },
+    { role: "assistant", content: answer || "Sin respuesta.", at: new Date().toISOString() },
+  ].slice(-120);
   saveSession(session);
 
-  return (resp.output_text || "").trim();
+  return answer;
 }
 
 // ================= UTILIDADES =================
@@ -361,6 +423,39 @@ function normalizeCatalogEntries(catalogRaw) {
       price: roundMoney(item?.price ?? item?.amount ?? 0),
     }))
     .filter((item) => item.name);
+}
+
+function getCatalogProviderRow() {
+  return db.prepare(`SELECT id,name,catalogJson FROM companies WHERE id=?`).get(BOT_CATALOG_PROVIDER_ID);
+}
+
+function resolveBotCatalogForCompany(targetCompanyId, targetCatalogRaw) {
+  const targetId = String(targetCompanyId || "").trim().toLowerCase();
+  const ownCatalog = normalizeCatalogEntries(targetCatalogRaw);
+
+  if (targetId === BOT_CATALOG_PROVIDER_ID) {
+    return {
+      sourceId: BOT_CATALOG_PROVIDER_ID,
+      sourceName: "Catalogo proveedor",
+      catalogItems: ownCatalog,
+    };
+  }
+
+  const providerRow = getCatalogProviderRow();
+  const providerCatalog = normalizeCatalogEntries(parseJsonSafe(providerRow?.catalogJson || "[]", []));
+  if (providerCatalog.length) {
+    return {
+      sourceId: String(providerRow?.id || BOT_CATALOG_PROVIDER_ID),
+      sourceName: String(providerRow?.name || BOT_CATALOG_PROVIDER_ID),
+      catalogItems: providerCatalog,
+    };
+  }
+
+  return {
+    sourceId: targetId || BOT_CATALOG_PROVIDER_ID,
+    sourceName: "Catalogo empresa",
+    catalogItems: ownCatalog,
+  };
 }
 
 function isValidDateObj(d) {
@@ -585,8 +680,10 @@ app.post("/api/companies/:id/save", requireApiAuth, (req, res) => {
 
   const existing = db.prepare(`SELECT rulesJson,catalogJson FROM companies WHERE id=?`).get(id);
   const previousRules = parseJsonSafe(existing?.rulesJson || "{}", {});
-  const previousCatalog = normalizeCatalogEntries(parseJsonSafe(existing?.catalogJson || "[]", []));
-  const nextCatalog = normalizeCatalogEntries(parsedCatalog);
+  const previousOwnCatalog = normalizeCatalogEntries(parseJsonSafe(existing?.catalogJson || "[]", []));
+  const resolvedCatalog = resolveBotCatalogForCompany(id, parsedCatalog);
+  const nextCatalog = resolvedCatalog.catalogItems;
+  const previousCatalog = id === BOT_CATALOG_PROVIDER_ID ? previousOwnCatalog : nextCatalog;
   const previousBotClass = String(previousRules?.botClass || "").trim().toLowerCase();
   const nextBotClass = String(parsedRules?.botClass || "").trim().toLowerCase();
   const triggerUpgrade = previousBotClass && nextBotClass && previousBotClass !== nextBotClass;
@@ -599,6 +696,8 @@ app.post("/api/companies/:id/save", requireApiAuth, (req, res) => {
     now: new Date(),
     triggerUpgrade,
   });
+  syncedRules.botCatalogProviderId = resolvedCatalog.sourceId;
+  syncedRules.botCatalogProviderName = resolvedCatalog.sourceName;
   const finalRulesJson = JSON.stringify(syncedRules);
 
   db.prepare(`UPDATE companies SET name=?, prompt=?, catalogJson=?, rulesJson=? WHERE id=?`).run(
@@ -772,12 +871,15 @@ app.post("/whatsapp", async (req, res) => {
       const row = db.prepare(`SELECT id,name,catalogJson FROM companies WHERE id=?`).get(companyId);
       if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
-      const catalogRaw = parseJsonSafe(row.catalogJson || "[]", []);
-      const catalog = normalizeCatalogEntries(catalogRaw).map((item) => ({ id: item.id, name: item.name }));
+      const catalogCtx = resolveBotCatalogForCompany(row.id, parseJsonSafe(row.catalogJson || "[]", []));
+      const catalog = catalogCtx.catalogItems.map((item) => ({ id: item.id, name: item.name }));
+      if (!catalog.length) {
+        return respond(res, `No hay bots configurados en el catalogo proveedor '${catalogCtx.sourceId}'.`);
+      }
 
       return respond(
         res,
-        `Catalogo de bots (${row.id}):\n${formatCatalogChoices(catalog)}\n\nUso: admin bot set ${row.id} <id o nombre>`
+        `Catalogo de bots (${catalogCtx.sourceId}) para ${row.id}:\n${formatCatalogChoices(catalog)}\n\nUso: admin bot set ${row.id} <id o nombre>`
       );
     }
 
@@ -790,7 +892,8 @@ app.post("/whatsapp", async (req, res) => {
 
       const rulesRaw = parseJsonSafe(row.rulesJson || "{}", {});
       const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-      const catalog = normalizeCatalogEntries(parseJsonSafe(row.catalogJson || "[]", []));
+      const catalogCtx = resolveBotCatalogForCompany(row.id, parseJsonSafe(row.catalogJson || "[]", []));
+      const catalog = catalogCtx.catalogItems;
       const synced = syncRulesSubscription({
         rules,
         catalogItems: catalog,
@@ -802,7 +905,7 @@ app.post("/whatsapp", async (req, res) => {
 
       return respond(
         res,
-        `Bot empresa ${row.id}\nClase: ${String(synced.botClass || "Sin definir")}\nPlan: ${String(synced.planTier || "Sin definir")}\nCanal: ${String(synced.channelMode || "Sin definir")}\nInicio ciclo: ${String(synced.subscriptionCurrentStart || "-")}\nFin ciclo: ${String(synced.subscriptionCurrentEnd || "-")}\nProximo cobro: $${roundMoney(synced.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(synced.subscriptionProrationDueNow || 0)}`
+        `Bot empresa ${row.id}\nProveedor catalogo: ${catalogCtx.sourceId}\nClase: ${String(synced.botClass || "Sin definir")}\nPlan: ${String(synced.planTier || "Sin definir")}\nCanal: ${String(synced.channelMode || "Sin definir")}\nInicio ciclo: ${String(synced.subscriptionCurrentStart || "-")}\nFin ciclo: ${String(synced.subscriptionCurrentEnd || "-")}\nProximo cobro: $${roundMoney(synced.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(synced.subscriptionProrationDueNow || 0)}`
       );
     }
 
@@ -816,8 +919,11 @@ app.post("/whatsapp", async (req, res) => {
       const row = db.prepare(`SELECT id,name,catalogJson,rulesJson FROM companies WHERE id=?`).get(companyId);
       if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
 
-      const catalog = normalizeCatalogEntries(parseJsonSafe(row.catalogJson || "[]", []));
-      if (!catalog.length) return respond(res, `La empresa ${row.id} no tiene productos en catalogo.`);
+      const catalogCtx = resolveBotCatalogForCompany(row.id, parseJsonSafe(row.catalogJson || "[]", []));
+      const catalog = catalogCtx.catalogItems;
+      if (!catalog.length) {
+        return respond(res, `No hay productos en el catalogo proveedor '${catalogCtx.sourceId}'.`);
+      }
 
       let selected = catalog.find((item) => item.idLower === botQuery);
       if (!selected) selected = catalog.find((item) => item.nameLower === botQuery);
@@ -856,12 +962,14 @@ app.post("/whatsapp", async (req, res) => {
         now: new Date(),
         triggerUpgrade: true,
       });
+      syncedRules.botCatalogProviderId = catalogCtx.sourceId;
+      syncedRules.botCatalogProviderName = catalogCtx.sourceName;
 
       db.prepare(`UPDATE companies SET rulesJson=? WHERE id=?`).run(JSON.stringify(syncedRules), row.id);
 
       return respond(
         res,
-        `OK Bot actualizado para ${row.id}\nClase: ${selected.name}\nPlan: ${syncedRules.planTier || "-"}\nCanal: ${syncedRules.channelMode || "-"}\nProximo cobro: $${roundMoney(syncedRules.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(syncedRules.subscriptionProrationDueNow || 0)}`
+        `OK Bot actualizado para ${row.id}\nProveedor catalogo: ${catalogCtx.sourceId}\nClase: ${selected.name}\nPlan: ${syncedRules.planTier || "-"}\nCanal: ${syncedRules.channelMode || "-"}\nProximo cobro: $${roundMoney(syncedRules.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(syncedRules.subscriptionProrationDueNow || 0)}`
       );
     }
     // admin ai set off|lite|pro [numero]

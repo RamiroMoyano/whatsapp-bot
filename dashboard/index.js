@@ -26,6 +26,7 @@ const DASH_COOKIE_SECRET = (process.env.DASH_COOKIE_SECRET || "").trim();
 
 const API_BASE_URL = (process.env.API_BASE_URL || "").trim();
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
+const BOT_CATALOG_PROVIDER_ID = (process.env.BOT_CATALOG_PROVIDER_ID || "babystepsbots").trim().toLowerCase();
 
 function signToken(token) {
   const h = crypto.createHmac("sha256", DASH_COOKIE_SECRET || "dev");
@@ -106,6 +107,18 @@ async function api(pathname, { method = "GET", body } = {}) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.error || `API error ${r.status}`);
   return data;
+}
+
+async function getBotCatalogProviderCompany(currentCompany) {
+  const currentId = String(currentCompany?.id || "").trim().toLowerCase();
+  if (currentCompany && currentId === BOT_CATALOG_PROVIDER_ID) {
+    return currentCompany;
+  }
+  try {
+    return await api(`/api/companies/${encodeURIComponent(BOT_CATALOG_PROVIDER_ID)}`);
+  } catch {
+    return currentCompany || null;
+  }
 }
 
 function escapeHtml(s) {
@@ -526,10 +539,15 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
 
   try {
     const c = await api(`/api/companies/${encodeURIComponent(id)}`);
-    const state = extractClientState(c);
+    const providerCompany = await getBotCatalogProviderCompany(c);
+    const providerForPricing = providerCompany || c;
+    const state = extractClientState(c, {
+      priceCatalog: extractCatalogEntriesForCompany(providerForPricing),
+      pricingSourceCompanyId: providerForPricing?.id || c.id,
+    });
     const profile = state.profile;
     const plan = state.plan;
-    const botOptions = extractCatalogBotOptions(c);
+    const botOptions = extractCatalogBotOptions(providerForPricing);
     const currentBotClass = String(plan.botClass || "").trim();
     const hasCurrentBotInCatalog = currentBotClass
       ? botOptions.some((item) => item.name.toLowerCase() === currentBotClass.toLowerCase())
@@ -595,6 +613,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             <div><b>Pais:</b> ${escapeHtml(profile.companyCountry || "-")}</div>
             <div><b>Clase de bot:</b> ${escapeHtml(plan.botClass)}</div>
             <div><b>Plan activo:</b> ${escapeHtml(plan.fullLabel)}</div>
+            <div><b>Catalogo precios:</b> ${escapeHtml(state.subscription.pricingSourceCompanyId || "-")}</div>
             <div><b>Monto mensual:</b> ${formatMoney(state.subscription.amount, state.subscription.currency)}</div>
             <div><b>Inicio ciclo actual:</b> ${escapeHtml(formatDateLabel(state.subscription.startAt))}</div>
             <div><b>Fin ciclo actual:</b> ${escapeHtml(formatDateLabel(state.subscription.endAt))}</div>
@@ -624,7 +643,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             Actual: <b>${escapeHtml(plan.botClass)}</b> | ${escapeHtml(plan.fullLabel)}
           </div>
           <div class="muted">
-            Opciones detectadas en catalogo: ${botOptions.length}
+            Opciones detectadas en catalogo (${escapeHtml(providerForPricing?.id || c.id)}): ${botOptions.length}
           </div>
           <div class="muted">
             Ciclo actual: ${escapeHtml(formatDateLabel(state.subscription.startAt))} a ${escapeHtml(formatDateLabel(state.subscription.endAt))}
@@ -771,6 +790,8 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
 
   try {
     const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const providerCompany = await getBotCatalogProviderCompany(company);
+    const providerForPricing = providerCompany || company;
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
 
@@ -835,8 +856,10 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
 
     rules.botClass = botClass;
     rules.botClassUpdatedAt = new Date().toISOString();
+    rules.botCatalogProviderId = providerForPricing?.id || company.id;
+    rules.botCatalogProviderName = providerForPricing?.name || providerForPricing?.id || company.id;
 
-    const catalogOptions = extractCatalogBotOptions(company);
+    const catalogOptions = extractCatalogBotOptions(providerForPricing);
     const selectedCatalog = catalogOptions.find((item) => item.name.toLowerCase() === botClass.toLowerCase());
     if (selectedCatalog?.id) {
       rules.botCatalogId = selectedCatalog.id;
@@ -1259,15 +1282,27 @@ function defaultBotClassFromMode(mode) {
   return "Bot WhatsApp";
 }
 
-function extractCatalogBotOptions(company) {
+function extractCatalogEntriesForCompany(company) {
   const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
+  const catalogBase = Array.isArray(catalogRaw) ? catalogRaw : [];
+  return catalogBase.map((item, idx) => ({
+    id: String(item?.id ?? `P-${idx + 1}`),
+    name: String(item?.name || item?.title || "Sin nombre"),
+    price: toNumber(item?.price ?? item?.amount ?? 0),
+    stock: item?.stock ?? item?.qty ?? "-",
+    category: String(item?.category || item?.type || "-"),
+  }));
+}
+
+function extractCatalogBotOptions(company) {
+  const catalogRaw = extractCatalogEntriesForCompany(company);
   if (!Array.isArray(catalogRaw)) return [];
   const seen = new Set();
 
   return catalogRaw
     .map((item) => {
       const id = String(item?.id ?? "").trim();
-      const name = String(item?.name || item?.title || "").trim();
+      const name = String(item?.name || "").trim();
       if (!name) return null;
       const key = `${id.toLowerCase()}::${name.toLowerCase()}`;
       if (seen.has(key)) return null;
@@ -1421,28 +1456,23 @@ function generateClientPassword(length = 10) {
   return out;
 }
 
-function extractClientState(company) {
+function extractClientState(company, options = {}) {
   const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
   const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
   const plan = extractPlanInfo(company, rules);
   const profile = extractCompanyProfile(rules);
 
-  const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
-  const catalogBase = Array.isArray(catalogRaw) ? catalogRaw : [];
-  const catalog = catalogBase.map((item, idx) => ({
-    id: String(item?.id ?? `P-${idx + 1}`),
-    name: String(item?.name || item?.title || "Sin nombre"),
-    price: toNumber(item?.price ?? item?.amount ?? 0),
-    stock: item?.stock ?? item?.qty ?? "-",
-    category: String(item?.category || item?.type || "-"),
-  }));
+  const catalog = extractCatalogEntriesForCompany(company);
+  const priceCatalog = Array.isArray(options?.priceCatalog) && options.priceCatalog.length
+    ? options.priceCatalog
+    : catalog;
 
   const prices = catalog.map((item) => item.price).filter((p) => p > 0);
   const totalCatalogValue = prices.reduce((acc, p) => acc + p, 0);
   const avgPrice = prices.length ? totalCatalogValue / prices.length : 0;
   const maxPrice = prices.length ? Math.max(...prices) : 0;
 
-  const activeCatalogItem = findCatalogItemForBot(catalog, plan.botClass, rules?.botCatalogId);
+  const activeCatalogItem = findCatalogItemForBot(priceCatalog, plan.botClass, rules?.botCatalogId);
   const activeBotAmount = activeCatalogItem ? toNumber(activeCatalogItem.price) : 0;
   const anchorSource =
     rules.subscriptionAnchorDate ||
@@ -1472,9 +1502,23 @@ function extractClientState(company) {
     currency: String(company?.subscriptionCurrency || rules.subscriptionCurrency || "USD"),
     autoRenew: rules.autoRenew ?? company?.autoRenew ?? true,
     activeBotName: activeCatalogItem?.name || plan.botClass,
+    pricingSourceCompanyId: String(options?.pricingSourceCompanyId || rules?.botCatalogProviderId || company?.id || ""),
   };
 
   return { rules, plan, profile, catalog, prices, totalCatalogValue, avgPrice, maxPrice, subscription };
+}
+
+async function loadClientStateWithProvider(company) {
+  const providerCompany = await getBotCatalogProviderCompany(company);
+  const pricingSource = providerCompany || company;
+  const priceCatalog = extractCatalogEntriesForCompany(pricingSource);
+  return {
+    state: extractClientState(company, {
+      priceCatalog,
+      pricingSourceCompanyId: pricingSource?.id || company?.id || "",
+    }),
+    pricingSourceCompany: pricingSource,
+  };
 }
 
 function buildPriceChart(values) {
@@ -1584,7 +1628,7 @@ app.post("/c/login", handleClientLogin);
 
 app.get("/panel", requireClientAuth, async (req, res) => {
   const company = req.company;
-  const state = extractClientState(company);
+  const { state } = await loadClientStateWithProvider(company);
   const catalogRows = state.catalog.slice(0, 6).map((item) => `
     <tr>
       <td>${escapeHtml(item.id)}</td>
@@ -1662,7 +1706,7 @@ app.get("/panel", requireClientAuth, async (req, res) => {
 
 app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
   const company = req.company;
-  const state = extractClientState(company);
+  const { state } = await loadClientStateWithProvider(company);
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const rows = state.catalog.map((item) => `
@@ -1965,7 +2009,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
 
 app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
   const company = req.company;
-  const state = extractClientState(company);
+  const { state } = await loadClientStateWithProvider(company);
 
   const bodyHtml = `
     <section class="cp-stats">
@@ -1983,6 +2027,7 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
         <div class="cp-kv"><span>Tipo de bot</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
         <div class="cp-kv"><span>Canales</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
         <div class="cp-kv"><span>Clase asignada</span><b>${escapeHtml(state.plan.botClass)}</b></div>
+        <div class="cp-kv"><span>Fuente de precios</span><b>${escapeHtml(state.subscription.pricingSourceCompanyId || "-")}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
         <div class="cp-kv"><span>Inicio plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.startAt))}</b></div>
         <div class="cp-kv"><span>Fin plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.endAt))}</b></div>
@@ -2015,7 +2060,7 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
 
 app.get("/panel/cuenta", requireClientAuth, async (req, res) => {
   const company = req.company;
-  const state = extractClientState(company);
+  const { state } = await loadClientStateWithProvider(company);
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
 
