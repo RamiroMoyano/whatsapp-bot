@@ -273,7 +273,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
           <div><b>${c.id}</b> - ${c.name || ""}</div>
           <div class="muted">Creada: ${c.createdAt || "-"}</div>
           <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | Email: ${escapeHtml(profile.ownerEmail || "-")}</div>
-          <div class="muted">Plan: ${escapeHtml(plan.fullLabel)}</div>
+          <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)}</div>
         </div>
         <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
       </div>
@@ -491,6 +491,9 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
     rules.aiEnabled = planTier !== "BASICO";
     rules.channelMode = channelMode;
     rules.channels = channelsFromMode(channelMode);
+    if (!String(rules.botClass || "").trim()) {
+      rules.botClass = defaultBotClassFromMode(channelMode);
+    }
 
     const providedPassword = String(req.body.clientPassword || "").trim();
     rules.clientPassword = providedPassword || rules.clientPassword || generateClientPassword();
@@ -526,12 +529,29 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     const state = extractClientState(c);
     const profile = state.profile;
     const plan = state.plan;
+    const botOptions = extractCatalogBotOptions(c);
+    const currentBotClass = String(plan.botClass || "").trim();
+    const hasCurrentBotInCatalog = currentBotClass
+      ? botOptions.some((item) => item.name.toLowerCase() === currentBotClass.toLowerCase())
+      : false;
+    const botOptionsHtml = [
+      `<option value="">Seleccionar desde catalogo</option>`,
+      ...(!hasCurrentBotInCatalog && currentBotClass
+        ? [`<option value="${escapeHtml(currentBotClass)}" selected>Actual: ${escapeHtml(currentBotClass)}</option>`]
+        : []),
+      ...botOptions.map((item) => {
+        const selected = item.name.toLowerCase() === currentBotClass.toLowerCase() ? "selected" : "";
+        return `<option value="${escapeHtml(item.name)}" ${selected}>${escapeHtml(item.label)}</option>`;
+      }),
+    ].join("");
 
     const alerts = [
       String(req.query.created || "") === "1" ? `<div class="card"><b>Empresa creada correctamente.</b></div>` : "",
       String(req.query.updated || "") === "1" ? `<div class="card"><b>Datos actualizados.</b></div>` : "",
+      String(req.query.botUpdated || "") === "1" ? `<div class="card"><b>Clase de bot actualizada.</b></div>` : "",
       String(req.query.manualPwd || "") === "1" ? `<div class="card"><b>Password actualizada manualmente.</b></div>` : "",
       String(req.query.generatedPwd || "") ? `<div class="card"><b>Nueva password generada:</b> <code>${escapeHtml(String(req.query.generatedPwd || ""))}</code></div>` : "",
+      String(req.query.botError || "") ? `<div class="card"><b>Error al cambiar bot:</b> ${escapeHtml(String(req.query.botError || ""))}</div>` : "",
     ].join("");
 
     res.type("text/html").send(`<!doctype html>
@@ -573,9 +593,39 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             <div><b>Direccion:</b> ${escapeHtml(profile.companyAddress || "-")}</div>
             <div><b>Ciudad:</b> ${escapeHtml(profile.companyCity || "-")}</div>
             <div><b>Pais:</b> ${escapeHtml(profile.companyCountry || "-")}</div>
+            <div><b>Clase de bot:</b> ${escapeHtml(plan.botClass)}</div>
             <div><b>Plan activo:</b> ${escapeHtml(plan.fullLabel)}</div>
           </div>
         </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Cambio de bot (segun catalogo)</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/bot/save" class="form">
+          <label>Selecciona bot del catalogo</label>
+          <select name="botClass">
+            ${botOptionsHtml}
+          </select>
+
+          <label>O escribir clase personalizada (opcional)</label>
+          <input name="botClassCustom" placeholder="Ej: Bot Unificado PRO" />
+
+          <label style="display:flex;align-items:center;gap:8px;margin-top:6px">
+            <input type="checkbox" name="syncPlan" value="1" checked style="width:auto" />
+            Sincronizar plan/canal automaticamente segun la clase de bot
+          </label>
+
+          <div class="muted">
+            Actual: <b>${escapeHtml(plan.botClass)}</b> | ${escapeHtml(plan.fullLabel)}
+          </div>
+          <div class="muted">
+            Opciones detectadas en catalogo: ${botOptions.length}
+          </div>
+
+          <div class="actions">
+            <button class="btn primary" type="submit">Guardar clase de bot</button>
+          </div>
+        </form>
       </div>
 
       <div class="card">
@@ -727,6 +777,9 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
     rules.aiEnabled = planTier !== "BASICO";
     rules.channelMode = channelMode;
     rules.channels = channelsFromMode(channelMode);
+    if (!String(rules.botClass || "").trim()) {
+      rules.botClass = defaultBotClassFromMode(channelMode);
+    }
 
     const manualPassword = String(req.body.clientPassword || "").trim();
     if (manualPassword) {
@@ -751,6 +804,60 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
       active: "companies",
       body: `<div class="card"><b>Error guardando perfil:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/${encodeURIComponent(id)}">Volver</a></div>`,
     }));
+  }
+});
+
+app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+    const fromSelect = String(req.body.botClass || "").trim();
+    const fromCustom = String(req.body.botClassCustom || "").trim();
+    const botClass = fromCustom || fromSelect;
+    if (!botClass) {
+      return res.redirect(`/admin/company/${encodeURIComponent(id)}?botError=${encodeURIComponent("Debes seleccionar o escribir una clase de bot")}`);
+    }
+
+    rules.botClass = botClass;
+    rules.botClassUpdatedAt = new Date().toISOString();
+
+    const catalogOptions = extractCatalogBotOptions(company);
+    const selectedCatalog = catalogOptions.find((item) => item.name.toLowerCase() === botClass.toLowerCase());
+    if (selectedCatalog?.id) {
+      rules.botCatalogId = selectedCatalog.id;
+    }
+
+    const syncPlan = String(req.body.syncPlan || "") === "1";
+    if (syncPlan) {
+      const inferredTier = normalizePlanTier(botClass);
+      const inferredChannel = normalizeChannelMode(botClass);
+      if (inferredTier) {
+        rules.planTier = inferredTier;
+        rules.aiEnabled = inferredTier !== "BASICO";
+      }
+      if (inferredChannel) {
+        rules.channelMode = inferredChannel;
+        rules.channels = channelsFromMode(inferredChannel);
+      }
+    }
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?botUpdated=1`);
+  } catch (e) {
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?botError=${encodeURIComponent(e?.message || e)}`);
   }
 });
 
@@ -1110,6 +1217,7 @@ function normalizePlanTier(value) {
 function normalizeChannelMode(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
+  if (raw.includes("unifi") || raw.includes("multi")) return "combinado";
   if (raw.includes("comb")) return "combinado";
   if (raw.includes("insta")) return "instagram";
   if (raw.includes("what")) return "whatsapp";
@@ -1134,21 +1242,57 @@ function channelLabelFromMode(mode) {
   return "WhatsApp";
 }
 
+function defaultBotClassFromMode(mode) {
+  if (mode === "instagram") return "Bot Instagram";
+  if (mode === "combinado") return "Bot Unificado";
+  return "Bot WhatsApp";
+}
+
+function extractCatalogBotOptions(company) {
+  const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
+  if (!Array.isArray(catalogRaw)) return [];
+  const seen = new Set();
+
+  return catalogRaw
+    .map((item) => {
+      const id = String(item?.id ?? "").trim();
+      const name = String(item?.name || item?.title || "").trim();
+      if (!name) return null;
+      const key = `${id.toLowerCase()}::${name.toLowerCase()}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return { id, name, label: id ? `${id} - ${name}` : name };
+    })
+    .filter(Boolean);
+}
+
 function extractPlanInfo(company, rules) {
-  const rawTier = normalizePlanTier(
-    rules?.planTier ||
-    rules?.botPlan ||
-    rules?.aiPlan ||
-    rules?.planType ||
-    company?.subscriptionPlan ||
-    rules?.subscriptionPlan
-  );
+  const botClassRaw = String(
+    rules?.botClass ||
+    rules?.botType ||
+    rules?.botName ||
+    ""
+  ).trim();
+
+  const rawTier =
+    normalizePlanTier(
+      rules?.planTier ||
+      rules?.botPlan ||
+      rules?.aiPlan ||
+      rules?.planType ||
+      company?.subscriptionPlan ||
+      rules?.subscriptionPlan
+    ) ||
+    normalizePlanTier(botClassRaw);
 
   let channelMode = normalizeChannelMode(
     rules?.channelMode ||
     rules?.channel ||
     rules?.platform
   );
+  if (!channelMode && botClassRaw) {
+    channelMode = normalizeChannelMode(botClassRaw);
+  }
 
   const channelsRaw = Array.isArray(rules?.channels)
     ? rules.channels.map((v) => String(v || "").toLowerCase())
@@ -1164,12 +1308,14 @@ function extractPlanInfo(company, rules) {
 
   const aiEnabled = rules?.aiEnabled !== undefined ? !!rules.aiEnabled : rawTier !== "BASICO";
   const tier = rawTier || (aiEnabled ? "LITE" : "BASICO");
+  const botClass = botClassRaw || defaultBotClassFromMode(channelMode);
 
   return {
     tier,
     aiEnabled: tier === "BASICO" ? false : aiEnabled,
     channelMode,
     channels: channelsFromMode(channelMode),
+    botClass,
     planLabel: planLabelFromTier(tier),
     channelLabel: channelLabelFromMode(channelMode),
     fullLabel: `${planLabelFromTier(tier)} - ${channelLabelFromMode(channelMode)}`,
@@ -1397,6 +1543,7 @@ app.get("/panel", requireClientAuth, async (req, res) => {
       <article class="cp-card">
         <h3>Configuracion bot</h3>
         <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
+        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
         <div class="cp-kv"><span>Tono</span><b>${escapeHtml(state.rules.tone || "No definido")}</b></div>
         <div class="cp-kv"><span>Ultima fecha</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
@@ -1724,6 +1871,7 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div><div class="cp-stat-hint">actual</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Canales</div><div class="cp-stat-value">${escapeHtml(state.plan.channelLabel)}</div><div class="cp-stat-hint">activos</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Clase bot</div><div class="cp-stat-value">${escapeHtml(state.plan.botClass)}</div><div class="cp-stat-hint">asignada</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Estado</div><div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div><div class="cp-stat-hint">cuenta</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Monto</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
     </section>
@@ -1733,6 +1881,7 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
         <h3>Detalle de suscripcion</h3>
         <div class="cp-kv"><span>Tipo de bot</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
         <div class="cp-kv"><span>Canales</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
+        <div class="cp-kv"><span>Clase asignada</span><b>${escapeHtml(state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
         <div class="cp-kv"><span>Ciclo</span><b>${escapeHtml(state.subscription.cycle)}</b></div>
         <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
@@ -1817,6 +1966,7 @@ app.get("/panel/cuenta", requireClientAuth, async (req, res) => {
         <h3>Plan activo</h3>
         <div class="cp-kv"><span>Tipo</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
         <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
+        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
         <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
       </article>

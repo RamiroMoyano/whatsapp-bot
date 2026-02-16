@@ -303,6 +303,47 @@ const isReserved = (t) =>
 
 const isHumanTrigger = (t) => ["humano","asesor","hablar con humano"].includes(t);
 
+function parseJsonSafe(raw, fallback) {
+  try {
+    const parsed = JSON.parse(raw ?? "");
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePlanTierFromText(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("pro")) return "PRO";
+  if (raw.includes("lite")) return "LITE";
+  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai")) return "BASICO";
+  return "";
+}
+
+function normalizeChannelModeFromText(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("unifi") || raw.includes("multi")) return "combinado";
+  if (raw.includes("comb")) return "combinado";
+  if (raw.includes("insta")) return "instagram";
+  if (raw.includes("what")) return "whatsapp";
+  return "";
+}
+
+function channelsFromMode(mode) {
+  if (mode === "combinado") return ["whatsapp", "instagram"];
+  if (mode === "instagram") return ["instagram"];
+  return ["whatsapp"];
+}
+
+function formatCatalogChoices(catalogItems) {
+  if (!catalogItems.length) return "Sin opciones de catalogo.";
+  return catalogItems
+    .map((item) => `- ${item.id ? `${item.id}) ` : ""}${item.name}`)
+    .join("\n");
+}
+
 // ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÍ ==================
 // ===== API: Companies =====
 app.get("/api/companies", requireApiAuth, (req, res) => {
@@ -413,7 +454,8 @@ app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";
   const body = (req.body.Body || "").trim();
   const text = body.toLowerCase();
-  const cmd = body.replace(/\s+/g, " ").toLowerCase();
+  const cmdRaw = body.replace(/\s+/g, " ").trim();
+  const cmd = cmdRaw.toLowerCase();
 
   // Guardar último cliente (para admin sin número)
   if (from && !cmd.startsWith("admin")) setSetting("last_customer", from);
@@ -507,6 +549,104 @@ app.post("/whatsapp", async (req, res) => {
       saveSession(s2);
 
       return respond(res, `🏢 Empresa para ${target}: ${row.id} (${row.name}) ✅`);
+    }
+
+    // admin bot list <companyId>
+    const botList = cmd.match(/^admin bot list ([a-z0-9_-]+)$/i);
+    if (botList) {
+      const companyId = botList[1].toLowerCase();
+      const row = db.prepare(`SELECT id,name,catalogJson FROM companies WHERE id=?`).get(companyId);
+      if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
+
+      const catalogRaw = parseJsonSafe(row.catalogJson || "[]", []);
+      const catalog = Array.isArray(catalogRaw)
+        ? catalogRaw.map((item, idx) => ({
+            id: String(item?.id ?? ""),
+            name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
+          })).filter((item) => item.name)
+        : [];
+
+      return respond(
+        res,
+        `🤖 Catalogo de bots (${row.id}):\n${formatCatalogChoices(catalog)}\n\nUso: admin bot set ${row.id} <id o nombre>`
+      );
+    }
+
+    // admin bot status <companyId>
+    const botStatus = cmd.match(/^admin bot status ([a-z0-9_-]+)$/i);
+    if (botStatus) {
+      const companyId = botStatus[1].toLowerCase();
+      const row = db.prepare(`SELECT id,name,rulesJson FROM companies WHERE id=?`).get(companyId);
+      if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
+
+      const rulesRaw = parseJsonSafe(row.rulesJson || "{}", {});
+      const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+      const botClass = String(rules.botClass || "").trim() || "Sin definir";
+      const planTier = String(rules.planTier || "").trim() || "Sin definir";
+      const channelMode = String(rules.channelMode || "").trim() || "Sin definir";
+      const botCatalogId = String(rules.botCatalogId || "").trim() || "-";
+
+      return respond(
+        res,
+        `📌 Bot empresa ${row.id}\nClase: ${botClass}\nPlan: ${planTier}\nCanal: ${channelMode}\nCatalogo ID: ${botCatalogId}`
+      );
+    }
+
+    // admin bot set <companyId> <catalog-id o nombre>
+    const botSet = cmdRaw.match(/^admin bot set ([a-z0-9_-]+)\s+(.+)$/i);
+    if (botSet) {
+      const companyId = String(botSet[1] || "").toLowerCase().trim();
+      const botQueryRaw = String(botSet[2] || "").trim();
+      const botQuery = botQueryRaw.toLowerCase();
+
+      const row = db.prepare(`SELECT id,name,catalogJson,rulesJson FROM companies WHERE id=?`).get(companyId);
+      if (!row) return respond(res, `No existe la empresa '${companyId}'.`);
+
+      const catalogRaw = parseJsonSafe(row.catalogJson || "[]", []);
+      const catalog = Array.isArray(catalogRaw)
+        ? catalogRaw.map((item, idx) => ({
+            id: String(item?.id ?? "").trim(),
+            idLower: String(item?.id ?? "").trim().toLowerCase(),
+            name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
+            nameLower: String(item?.name || item?.title || `Producto ${idx + 1}`).trim().toLowerCase(),
+          })).filter((item) => item.name)
+        : [];
+      if (!catalog.length) return respond(res, `La empresa ${row.id} no tiene productos en catalogo.`);
+
+      let selected = catalog.find((item) => item.idLower === botQuery);
+      if (!selected) selected = catalog.find((item) => item.nameLower === botQuery);
+      if (!selected) selected = catalog.find((item) => item.nameLower.includes(botQuery));
+      if (!selected) {
+        return respond(
+          res,
+          `No encontre '${botQueryRaw}' en el catalogo de ${row.id}.\nOpciones:\n${formatCatalogChoices(catalog)}`
+        );
+      }
+
+      const rulesRaw = parseJsonSafe(row.rulesJson || "{}", {});
+      const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+      rules.botClass = selected.name;
+      if (selected.id) rules.botCatalogId = selected.id;
+      rules.botClassUpdatedAt = new Date().toISOString();
+
+      const inferredTier = normalizePlanTierFromText(selected.name);
+      if (inferredTier) {
+        rules.planTier = inferredTier;
+        rules.aiEnabled = inferredTier !== "BASICO";
+      }
+
+      const inferredChannel = normalizeChannelModeFromText(selected.name);
+      if (inferredChannel) {
+        rules.channelMode = inferredChannel;
+        rules.channels = channelsFromMode(inferredChannel);
+      }
+
+      db.prepare(`UPDATE companies SET rulesJson=? WHERE id=?`).run(JSON.stringify(rules), row.id);
+
+      return respond(
+        res,
+        `✅ Bot actualizado para ${row.id}\nClase: ${selected.name}\nPlan: ${rules.planTier || "-"}\nCanal: ${rules.channelMode || "-"}`
+      );
     }
 
     // admin ai set off|lite|pro [numero]
