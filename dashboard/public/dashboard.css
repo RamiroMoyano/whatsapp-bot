@@ -421,16 +421,17 @@ select:focus {
   align-items: center;
   justify-content: flex-start;
   overflow: hidden;
-  padding: clamp(18px, 4vw, 56px);
+  padding: clamp(18px, 4vh, 56px) clamp(18px, 4vw, 56px) clamp(18px, 4vh, 56px) clamp(28px, 8vw, 120px);
 }
 
 .bs-bg {
   position: absolute;
   inset: 0;
-  background-position: center right;
+  background-position: right center;
   background-size: cover;
   background-repeat: no-repeat;
-  transform: scale(1.03);
+  transform: scale(1.01);
+  filter: saturate(1.1) contrast(1.06);
   z-index: 0;
 }
 
@@ -439,8 +440,9 @@ select:focus {
   inset: 0;
   z-index: 1;
   background:
-    radial-gradient(900px 600px at 20% 28%, rgba(59, 130, 246, 0.24), transparent 60%),
-    linear-gradient(90deg, rgba(9, 18, 36, 0.94) 0%, rgba(9, 18, 36, 0.76) 42%, rgba(9, 18, 36, 0.18) 78%, rgba(9, 18, 36, 0.06) 100%);
+    radial-gradient(920px 620px at 16% 26%, rgba(0, 184, 255, 0.28), transparent 58%),
+    linear-gradient(90deg, rgba(2, 13, 35, 0.96) 0%, rgba(4, 21, 54, 0.80) 38%, rgba(4, 21, 54, 0.30) 66%, rgba(4, 21, 54, 0.08) 100%),
+    repeating-linear-gradient(160deg, rgba(24, 150, 255, 0.10) 0 2px, transparent 2px 28px);
 }
 
 .bs-card {
@@ -454,6 +456,7 @@ select:focus {
   -webkit-backdrop-filter: blur(14px);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
   padding: 26px 26px 22px;
+  margin-left: clamp(0px, 1vw, 12px);
 }
 
 .admin-login-avatar {
@@ -570,6 +573,7 @@ select:focus {
 
   .bs-login {
     justify-content: center;
+    padding: 22px;
   }
 
   .bs-bg {

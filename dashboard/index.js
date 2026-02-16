@@ -188,7 +188,7 @@ app.get("/admin/login", (req, res) => {
   <body>
     <div class="bs-login">
       <!-- Imagen fondo full (robot). Cambia el nombre si tu archivo es otro -->
-      <div class="bs-bg" style="background-image:url('/img/robot.png')"></div>
+      <div class="bs-bg" style="background-image:url('/img/login-tech-bg.png')"></div>
       <div class="bs-vignette"></div>
 
       <div class="bs-card">
@@ -654,7 +654,7 @@ function renderClientLoginPage() {
   </head>
   <body>
     <div class="bs-login">
-      <div class="bs-bg" style="background-image:url('/img/robot.png')"></div>
+      <div class="bs-bg" style="background-image:url('/img/login-tech-bg.png')"></div>
       <div class="bs-vignette"></div>
 
       <div class="bs-card">
