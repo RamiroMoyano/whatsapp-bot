@@ -59,6 +59,11 @@ code {
   margin: 24px auto;
 }
 
+body.admin-home-page .container {
+  width: min(1360px, calc(100% - 24px));
+  margin: 14px auto;
+}
+
 .top,
 .app-header,
 .admin-header,
@@ -240,6 +245,22 @@ select:focus {
   padding: 14px 16px;
 }
 
+.kpi-filter {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+
+.kpi-filter:hover {
+  text-decoration: none;
+  filter: brightness(1.06);
+}
+
+.kpi-filter.active {
+  border-color: rgba(108, 163, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(114, 165, 255, 0.35), var(--shadow);
+}
+
 .kpi .label {
   font-size: 12px;
   font-weight: 800;
@@ -320,8 +341,8 @@ select:focus {
 
 .admin-home-shell {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 214px minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
 }
 
@@ -1150,6 +1171,27 @@ body.client-ui {
 }
 
 .cp-category-form {
+  margin: 0;
+}
+
+.cp-archive-form {
+  margin: 0;
+}
+
+.cp-archive-toggle {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #39578a;
+  cursor: pointer;
+}
+
+.cp-archive-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
   margin: 0;
 }
 

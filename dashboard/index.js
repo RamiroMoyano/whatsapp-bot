@@ -282,23 +282,18 @@ async function fetchCompanyOrders(companyId, filterFrom, filterTo, limit = 500) 
   return Array.isArray(data) ? data : [];
 }
 
-function classifyClientOrder(order) {
-  const normalizeCategory = (value) => {
-    const raw = String(value || "").trim().toLowerCase();
-    if (!raw) return "";
-    if (raw.includes("archiv")) return "archived";
-    if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
-    if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
-    if (raw.includes("pend")) return "pending";
-    return "";
-  };
+function normalizeClientOrderState(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
+  if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
+  if (raw.includes("pend")) return "pending";
+  return "";
+}
 
-  const explicitCategory = normalizeCategory(order?.category || order?.orderCategory);
-  if (explicitCategory) return explicitCategory;
-
+function inferClientOrderState(order) {
   const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
   const paymentStatus = String(order?.paymentStatus || "").trim().toLowerCase();
-  if (["archived", "archivado"].some((v) => orderStatus.includes(v))) return "archived";
   if (
     ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderStatus.includes(v)) ||
     ["failed", "voided", "refunded", "chargeback"].some((v) => paymentStatus.includes(v))
@@ -311,8 +306,38 @@ function classifyClientOrder(order) {
   return "pending";
 }
 
+function extractClientOrderWorkflow(order) {
+  const rawCategory = String(order?.category || order?.orderCategory || "").trim().toLowerCase();
+  let archived = false;
+  let state = "";
+  if (rawCategory) {
+    if (rawCategory.includes("archiv")) {
+      archived = true;
+      const stripped = rawCategory
+        .replaceAll("archived", "")
+        .replaceAll("archivado", "")
+        .replaceAll(":", " ")
+        .replaceAll("|", " ")
+        .replaceAll("-", " ")
+        .trim();
+      state = normalizeClientOrderState(stripped);
+    } else {
+      state = normalizeClientOrderState(rawCategory);
+    }
+  }
+
+  if (!archived) {
+    const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
+    if (["archived", "archivado"].some((v) => orderStatus.includes(v))) {
+      archived = true;
+    }
+  }
+
+  if (!state) state = inferClientOrderState(order);
+  return { state, archived };
+}
+
 function clientOrderCategoryLabel(category) {
-  if (category === "archived") return "Archivado";
   if (category === "completed") return "Completado";
   if (category === "rejected") return "Rechazado";
   return "Pendiente";
@@ -436,6 +461,8 @@ app.get("/admin/logout", (req, res) => {
 app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
     const q = String(req.query.q || "").trim().toLowerCase();
+    const viewRaw = String(req.query.view || "all").trim().toLowerCase();
+    const view = ["all", "full", "limited", "inactive"].includes(viewRaw) ? viewRaw : "all";
     const companies = await api("/api/companies");
     const flashCompany = String(req.query.company || "").trim();
     const dashboardSaved = String(req.query.dashboardSaved || "") === "1";
@@ -481,6 +508,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         <div class="admin-company-actions">
           <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/dashboard/save" class="admin-company-access-form">
             <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
+            <input type="hidden" name="view" value="${escapeHtml(view)}" />
             <div class="admin-company-access-grid">
               <div>
                 <label>Dashboard</label>
@@ -503,6 +531,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
             <a class="btn secondary small" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
             <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/delete" onsubmit="return confirm('Se eliminara la empresa y su configuracion. Continuar?')">
               <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
+              <input type="hidden" name="view" value="${escapeHtml(view)}" />
               <button class="btn danger small" type="submit">Eliminar</button>
             </form>
           </div>
@@ -512,14 +541,29 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
       return { html, searchText, dashboardAccess };
     });
 
+    const byView = rowsData.filter((row) => {
+      if (view === "full") return row.dashboardAccess.enabled && row.dashboardAccess.mode === "full";
+      if (view === "limited") return row.dashboardAccess.enabled && row.dashboardAccess.mode === "limited";
+      if (view === "inactive") return !row.dashboardAccess.enabled;
+      return true;
+    });
     const filtered = q
-      ? rowsData.filter((row) => row.searchText.includes(q))
-      : rowsData;
+      ? byView.filter((row) => row.searchText.includes(q))
+      : byView;
     const rows = filtered.map((row) => row.html).join("");
-    const enabledFiltered = filtered.filter((row) => row.dashboardAccess.enabled);
-    const fullCount = enabledFiltered.filter((row) => row.dashboardAccess.mode === "full").length;
-    const limitedCount = enabledFiltered.filter((row) => row.dashboardAccess.mode === "limited").length;
-    const disabledCount = filtered.length - enabledFiltered.length;
+    const enabledCompanies = rowsData.filter((row) => row.dashboardAccess.enabled);
+    const fullCount = enabledCompanies.filter((row) => row.dashboardAccess.mode === "full").length;
+    const limitedCount = enabledCompanies.filter((row) => row.dashboardAccess.mode === "limited").length;
+    const disabledCount = rowsData.length - enabledCompanies.length;
+    const buildAdminHref = (nextView) => {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (nextView && nextView !== "all") params.set("view", nextView);
+      const query = params.toString();
+      return query ? `/admin?${query}` : "/admin";
+    };
+    const kpiClass = (key) => `kpi kpi-filter ${view === key ? "active" : ""}`;
+    const clearSearchHref = view !== "all" ? `/admin?view=${encodeURIComponent(view)}` : "/admin";
 
     res.type("text/html").send(`
 <!doctype html>
@@ -530,12 +574,11 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <link rel="stylesheet" href="/dashboard.css" />
     <title>BabySteps - Admin</title>
   </head>
-  <body>
+  <body class="admin-home-page">
     <div class="container">
 
       <div class="admin-header admin-home-header">
         <div class="brand">
-          <img src="/img/logo.png" alt="BabySteps" />
           <div>
             <div class="title">BabySteps</div>
             <div class="subtitle">Admin Console</div>
@@ -556,38 +599,39 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
           ${flashHtml}
 
           <div class="kpis">
-            <div class="kpi">
+            <a class="${kpiClass("all")}" href="${buildAdminHref("all")}">
               <div class="label">Empresas</div>
-              <div class="value">${filtered.length}</div>
+              <div class="value">${rowsData.length}</div>
               <div class="hint">de ${companies.length} registradas</div>
-            </div>
-            <div class="kpi">
+            </a>
+            <a class="${kpiClass("full")}" href="${buildAdminHref("full")}">
               <div class="label">Dashboard completo</div>
               <div class="value">${fullCount}</div>
               <div class="hint">acceso total</div>
-            </div>
-            <div class="kpi">
+            </a>
+            <a class="${kpiClass("limited")}" href="${buildAdminHref("limited")}">
               <div class="label">Dashboard limitado</div>
               <div class="value">${limitedCount}</div>
               <div class="hint">solo catalogo/suscripcion/cuenta</div>
-            </div>
-            <div class="kpi">
+            </a>
+            <a class="${kpiClass("inactive")}" href="${buildAdminHref("inactive")}">
               <div class="label">Dashboard inactivo</div>
               <div class="value">${disabledCount}</div>
               <div class="hint">sin acceso</div>
-            </div>
+            </a>
           </div>
 
           <div class="card" id="admin-company-list">
             <form method="GET" action="/admin" class="form" style="margin-bottom:12px">
               <label>Buscar empresa</label>
+              <input type="hidden" name="view" value="${escapeHtml(view)}" />
               <div class="actions">
                 <input name="q" value="${escapeHtml(String(req.query.q || ""))}" placeholder="ID, nombre, dueno, mail, bot..." />
                 <button class="btn primary" type="submit">Buscar</button>
-                <a class="btn secondary" href="/admin">Limpiar</a>
+                <a class="btn secondary" href="${clearSearchHref}">Limpiar</a>
               </div>
             </form>
-            <h3 style="margin:0 0 12px;">Listado</h3>
+            <h3 style="margin:0 0 12px;">Listado ${view !== "all" ? `(${escapeHtml(view)})` : ""}</h3>
             <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
           </div>
         </section>
@@ -1091,10 +1135,12 @@ app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
 app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
   const q = String(req.body.q || "").trim();
+  const view = String(req.body.view || "").trim().toLowerCase();
   const dashboardEnabled = String(req.body.dashboardEnabled || "1") === "1";
   const dashboardMode = normalizeDashboardMode(req.body.dashboardMode);
   const params = new URLSearchParams();
   if (q) params.set("q", q);
+  if (["full", "limited", "inactive"].includes(view)) params.set("view", view);
   params.set("company", id);
 
   try {
@@ -1125,8 +1171,10 @@ app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, 
 app.post("/admin/company/:id/delete", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
   const q = String(req.body.q || "").trim();
+  const view = String(req.body.view || "").trim().toLowerCase();
   const params = new URLSearchParams();
   if (q) params.set("q", q);
+  if (["full", "limited", "inactive"].includes(view)) params.set("view", view);
   params.set("company", id);
 
   try {
@@ -2479,20 +2527,22 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     fetchError = e?.message || String(e);
   }
 
-  const ordersWithCategory = orders.map((order) => ({
+  const ordersWithWorkflow = orders.map((order) => ({
     ...order,
-    category: classifyClientOrder(order),
+    workflow: extractClientOrderWorkflow(order),
   }));
 
-  const completedCount = ordersWithCategory.filter((order) => order.category === "completed").length;
-  const pendingCount = ordersWithCategory.filter((order) => order.category === "pending").length;
-  const rejectedCount = ordersWithCategory.filter((order) => order.category === "rejected").length;
-  const archivedCount = ordersWithCategory.filter((order) => order.category === "archived").length;
-  const activeCount = ordersWithCategory.filter((order) => order.category !== "archived").length;
+  const completedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "completed").length;
+  const pendingCount = ordersWithWorkflow.filter((order) => order.workflow.state === "pending").length;
+  const rejectedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "rejected").length;
+  const archivedCount = ordersWithWorkflow.filter((order) => order.workflow.archived).length;
+  const activeCount = ordersWithWorkflow.filter((order) => !order.workflow.archived).length;
 
   const visibleOrders = selectedStatus === "all"
-    ? ordersWithCategory.filter((order) => order.category !== "archived")
-    : ordersWithCategory.filter((order) => order.category === selectedStatus);
+    ? ordersWithWorkflow.filter((order) => !order.workflow.archived)
+    : selectedStatus === "archived"
+      ? ordersWithWorkflow.filter((order) => order.workflow.archived)
+      : ordersWithWorkflow.filter((order) => !order.workflow.archived && order.workflow.state === selectedStatus);
 
   const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
   const paidCount = visibleOrders.filter((order) => isOrderPaid(order)).length;
@@ -2520,12 +2570,27 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
-          <select name="category" class="cp-category-select cp-status-${escapeHtml(order.category)}" onchange="this.form.submit()">
-            <option value="pending" ${order.category === "pending" ? "selected" : ""}>Pendiente</option>
-            <option value="completed" ${order.category === "completed" ? "selected" : ""}>Completado</option>
-            <option value="rejected" ${order.category === "rejected" ? "selected" : ""}>Rechazado</option>
-            <option value="archived" ${order.category === "archived" ? "selected" : ""}>Archivado</option>
+          <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" />
+          <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" onchange="this.form.submit()">
+            <option value="pending" ${order.workflow.state === "pending" ? "selected" : ""}>Pendiente</option>
+            <option value="completed" ${order.workflow.state === "completed" ? "selected" : ""}>Completado</option>
+            <option value="rejected" ${order.workflow.state === "rejected" ? "selected" : ""}>Rechazado</option>
           </select>
+        </form>
+      </td>
+      <td>
+        <form method="POST" action="/panel/pedidos/category" class="cp-archive-form">
+          <input type="hidden" name="orderId" value="${escapeHtml(order.id || "")}" />
+          <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
+          <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
+          <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
+          <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <input type="hidden" name="state" value="${escapeHtml(order.workflow.state)}" />
+          <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" class="cp-archive-hidden" />
+          <label class="cp-archive-toggle">
+            <input type="checkbox" class="cp-archive-checkbox" ${order.workflow.archived ? "checked" : ""} />
+            <span>${order.workflow.archived ? "Si" : "No"}</span>
+          </label>
         </form>
       </td>
     </tr>
@@ -2595,8 +2660,8 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
         <table class="cp-table">
-          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7">Sin pedidos para este filtro.</td></tr>`}</tbody>
+          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th><th>Archivado</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
         </table>
       </article>
     </section>
@@ -2611,6 +2676,19 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         };
         range.addEventListener("change", sync);
         sync();
+
+        const archiveForms = Array.from(document.querySelectorAll(".cp-archive-form"));
+        archiveForms.forEach((form) => {
+          const checkbox = form.querySelector(".cp-archive-checkbox");
+          const hidden = form.querySelector(".cp-archive-hidden");
+          const label = form.querySelector(".cp-archive-toggle span");
+          if (!checkbox || !hidden || !label) return;
+          checkbox.addEventListener("change", () => {
+            hidden.value = checkbox.checked ? "1" : "0";
+            label.textContent = checkbox.checked ? "Si" : "No";
+            form.submit();
+          });
+        });
       })();
     </script>
   `;
@@ -2627,10 +2705,11 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
 app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   const orderId = String(req.body.orderId || "").trim();
-  const rawCategory = String(req.body.category || "").trim().toLowerCase();
-  const category = ["pending", "completed", "rejected", "archived"].includes(rawCategory)
-    ? rawCategory
-    : "";
+  const rawState = String(req.body.state || req.body.category || "").trim().toLowerCase();
+  const normalizedState = normalizeClientOrderState(rawState);
+  const state = ["pending", "completed", "rejected"].includes(normalizedState) ? normalizedState : "";
+  const archived = String(req.body.archived || "").trim() === "1";
+  const category = state ? (archived ? `archived:${state}` : state) : "";
 
   const redirectParams = new URLSearchParams();
   const range = String(req.body.range || "").trim();
@@ -2649,7 +2728,7 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
 
   if (!orderId || !category) {
     const next = redirectBase();
-    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar categoria")}`);
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar pedido")}`);
   }
 
   try {
@@ -2685,13 +2764,15 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
 
   try {
     const orders = await fetchCompanyOrders(company.id, filterFrom, filterTo, 5000);
-    const ordersWithCategory = orders.map((order) => ({
+    const ordersWithWorkflow = orders.map((order) => ({
       ...order,
-      category: classifyClientOrder(order),
+      workflow: extractClientOrderWorkflow(order),
     }));
     const visibleOrders = selectedStatus === "all"
-      ? ordersWithCategory.filter((order) => order.category !== "archived")
-      : ordersWithCategory.filter((order) => order.category === selectedStatus);
+      ? ordersWithWorkflow.filter((order) => !order.workflow.archived)
+      : selectedStatus === "archived"
+        ? ordersWithWorkflow.filter((order) => order.workflow.archived)
+        : ordersWithWorkflow.filter((order) => !order.workflow.archived && order.workflow.state === selectedStatus);
 
     const exportRows = visibleOrders.map((order) => ({
       ID: String(order.id || ""),
@@ -2700,7 +2781,8 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
       Total: toNumber(order.total),
       Pago: clientPaymentLabel(order),
       "Medio de pago": clientPaymentMethodLabel(order),
-      Estado: clientOrderCategoryLabel(order.category),
+      Estado: clientOrderCategoryLabel(order.workflow.state),
+      Archivado: order.workflow.archived ? "Si" : "No",
     }));
 
     const dateStamp = new Date().toISOString().slice(0, 10);
@@ -2714,7 +2796,7 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
       return res.send(xlsxBuffer);
     }
 
-    const csvHeaders = ["ID", "Fecha", "Cliente", "Total", "Pago", "Medio de pago", "Estado"];
+    const csvHeaders = ["ID", "Fecha", "Cliente", "Total", "Pago", "Medio de pago", "Estado", "Archivado"];
     const csvRows = exportRows.map((row) => [
       row.ID,
       row.Fecha,
@@ -2723,6 +2805,7 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
       row.Pago,
       row["Medio de pago"],
       row.Estado,
+      row.Archivado,
     ]);
     const csv = toCsvRows(csvHeaders, csvRows);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
