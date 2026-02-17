@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import * as XLSX from "xlsx";
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ app.get("/c", (req, res) => res.redirect("/panel"));
 app.get("/c/logout", (req, res) => res.redirect("/panel/logout"));
 app.get("/c/catalogo", (req, res) => res.redirect("/panel/catalogo"));
 app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
+app.get("/c/pedidos/export", (req, res) => res.redirect("/panel/pedidos/export"));
 app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
 app.get("/c/cuenta", (req, res) => res.redirect("/panel/cuenta"));
 
@@ -185,6 +187,120 @@ function toCsv(rows) {
     );
   }
   return lines.join("\n");
+}
+
+function toCsvRows(headers, rows) {
+  const esc = (v) => `"${String(v ?? "").replaceAll('"', '""')}"`;
+  const out = [headers.map(esc).join(",")];
+  for (const row of rows) {
+    out.push((Array.isArray(row) ? row : []).map(esc).join(","));
+  }
+  return out.join("\n");
+}
+
+function parseClientOrdersFilters(query) {
+  const selectedRangeRaw = String(query?.range || "month").trim().toLowerCase();
+  const selectedStatusRaw = String(query?.status || "all").trim().toLowerCase();
+  const selectedRange = ["today", "week", "month", "3months", "custom"].includes(selectedRangeRaw)
+    ? selectedRangeRaw
+    : "month";
+  const selectedStatus = ["all", "completed", "pending", "rejected"].includes(selectedStatusRaw)
+    ? selectedStatusRaw
+    : "all";
+
+  const dayStart = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  const dayEnd = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+  const parseDateInput = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const date = new Date(`${raw}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const toYmd = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+    const yy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  const now = new Date();
+  let filterFrom = null;
+  let filterTo = null;
+
+  if (selectedRange === "today") {
+    filterFrom = dayStart(now);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "week") {
+    const from = new Date(now);
+    from.setDate(from.getDate() - 6);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "month") {
+    const from = new Date(now);
+    from.setMonth(from.getMonth() - 1);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else if (selectedRange === "3months") {
+    const from = new Date(now);
+    from.setMonth(from.getMonth() - 3);
+    filterFrom = dayStart(from);
+    filterTo = dayEnd(now);
+  } else {
+    const rawFrom = parseDateInput(query?.from);
+    const rawTo = parseDateInput(query?.to);
+    if (rawFrom) filterFrom = dayStart(rawFrom);
+    if (rawTo) filterTo = dayEnd(rawTo);
+    if (filterFrom && filterTo && filterFrom.getTime() > filterTo.getTime()) {
+      const tmp = filterFrom;
+      filterFrom = filterTo;
+      filterTo = tmp;
+    }
+  }
+
+  const rangeLabel = (() => {
+    if (selectedRange === "today") return "hoy";
+    if (selectedRange === "week") return "ultimos 7 dias";
+    if (selectedRange === "3months") return "ultimos 3 meses";
+    if (selectedRange === "custom") return "rango personalizado";
+    return "ultimo mes";
+  })();
+
+  const fromInput = String(query?.from || "").trim() || (selectedRange !== "custom" ? toYmd(filterFrom) : "");
+  const toInput = String(query?.to || "").trim() || (selectedRange !== "custom" ? toYmd(filterTo) : "");
+
+  return { selectedRange, selectedStatus, filterFrom, filterTo, rangeLabel, fromInput, toInput };
+}
+
+async function fetchCompanyOrders(companyId, filterFrom, filterTo, limit = 500) {
+  const params = new URLSearchParams();
+  params.set("companyId", String(companyId));
+  params.set("limit", String(Math.max(1, Math.min(5000, Number(limit) || 500))));
+  if (filterFrom) params.set("from", filterFrom.toISOString());
+  if (filterTo) params.set("to", filterTo.toISOString());
+  const data = await api(`/api/orders?${params.toString()}`);
+  return Array.isArray(data) ? data : [];
+}
+
+function classifyClientOrder(order) {
+  const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
+  const paymentStatus = String(order?.paymentStatus || "").trim().toLowerCase();
+  if (
+    ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderStatus.includes(v)) ||
+    ["failed", "voided", "refunded", "chargeback"].some((v) => paymentStatus.includes(v))
+  ) {
+    return "rejected";
+  }
+  if (["delivered", "completed", "done", "entregado", "finalizado", "cerrado"].some((v) => orderStatus.includes(v))) {
+    return "completed";
+  }
+  return "pending";
+}
+
+function clientOrderCategoryLabel(category) {
+  if (category === "completed") return "Completado";
+  if (category === "rejected") return "Rechazado";
+  return "Pendiente";
 }
 
 // ================= LOGIN =================
@@ -2134,100 +2250,25 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
-  const selectedRangeRaw = String(req.query.range || "month").trim().toLowerCase();
-  const selectedStatusRaw = String(req.query.status || "all").trim().toLowerCase();
-  const selectedRange = ["today", "week", "month", "3months", "custom"].includes(selectedRangeRaw)
-    ? selectedRangeRaw
-    : "month";
-  const selectedStatus = ["all", "completed", "pending", "rejected"].includes(selectedStatusRaw)
-    ? selectedStatusRaw
-    : "all";
-
-  const dayStart = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-  const dayEnd = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
-  const parseDateInput = (value) => {
-    const raw = String(value || "").trim();
-    if (!raw) return null;
-    const date = new Date(`${raw}T00:00:00`);
-    return Number.isNaN(date.getTime()) ? null : date;
-  };
-  const toYmd = (date) => {
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
-    const yy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    return `${yy}-${mm}-${dd}`;
-  };
-
-  const now = new Date();
-  let filterFrom = null;
-  let filterTo = null;
-
-  if (selectedRange === "today") {
-    filterFrom = dayStart(now);
-    filterTo = dayEnd(now);
-  } else if (selectedRange === "week") {
-    const from = new Date(now);
-    from.setDate(from.getDate() - 6);
-    filterFrom = dayStart(from);
-    filterTo = dayEnd(now);
-  } else if (selectedRange === "month") {
-    const from = new Date(now);
-    from.setMonth(from.getMonth() - 1);
-    filterFrom = dayStart(from);
-    filterTo = dayEnd(now);
-  } else if (selectedRange === "3months") {
-    const from = new Date(now);
-    from.setMonth(from.getMonth() - 3);
-    filterFrom = dayStart(from);
-    filterTo = dayEnd(now);
-  } else {
-    const rawFrom = parseDateInput(req.query.from);
-    const rawTo = parseDateInput(req.query.to);
-    if (rawFrom) filterFrom = dayStart(rawFrom);
-    if (rawTo) filterTo = dayEnd(rawTo);
-    if (filterFrom && filterTo && filterFrom.getTime() > filterTo.getTime()) {
-      const tmp = filterFrom;
-      filterFrom = filterTo;
-      filterTo = tmp;
-    }
-  }
+  const {
+    selectedRange,
+    selectedStatus,
+    filterFrom,
+    filterTo,
+    rangeLabel,
+    fromInput,
+    toInput,
+  } = parseClientOrdersFilters(req.query);
 
   try {
-    const params = new URLSearchParams();
-    params.set("companyId", String(company.id));
-    params.set("limit", "500");
-    if (filterFrom) params.set("from", filterFrom.toISOString());
-    if (filterTo) params.set("to", filterTo.toISOString());
-    const data = await api(`/api/orders?${params.toString()}`);
-    orders = Array.isArray(data) ? data : [];
+    orders = await fetchCompanyOrders(company.id, filterFrom, filterTo, 500);
   } catch (e) {
     fetchError = e?.message || String(e);
   }
 
-  const classifyOrder = (order) => {
-    const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
-    const paymentStatus = String(order?.paymentStatus || "").trim().toLowerCase();
-    if (
-      ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderStatus.includes(v)) ||
-      ["failed", "voided", "refunded", "chargeback"].some((v) => paymentStatus.includes(v))
-    ) {
-      return "rejected";
-    }
-    if (["delivered", "completed", "done", "entregado", "finalizado", "cerrado"].some((v) => orderStatus.includes(v))) {
-      return "completed";
-    }
-    return "pending";
-  };
-  const categoryLabel = (category) => {
-    if (category === "completed") return "Completado";
-    if (category === "rejected") return "Rechazado";
-    return "Pendiente";
-  };
-
   const ordersWithCategory = orders.map((order) => ({
     ...order,
-    category: classifyOrder(order),
+    category: classifyClientOrder(order),
   }));
 
   const completedCount = ordersWithCategory.filter((order) => order.category === "completed").length;
@@ -2241,13 +2282,13 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
   const paidCount = visibleOrders.filter((order) => String(order.paymentStatus || "").toLowerCase() === "paid").length;
 
-  const rangeLabel = (() => {
-    if (selectedRange === "today") return "hoy";
-    if (selectedRange === "week") return "ultimos 7 dias";
-    if (selectedRange === "3months") return "ultimos 3 meses";
-    if (selectedRange === "custom") return "rango personalizado";
-    return "ultimo mes";
-  })();
+  const exportParams = new URLSearchParams();
+  exportParams.set("range", selectedRange);
+  exportParams.set("status", selectedStatus);
+  if (fromInput) exportParams.set("from", fromInput);
+  if (toInput) exportParams.set("to", toInput);
+  const exportCsvHref = `/panel/pedidos/export?format=csv&${exportParams.toString()}`;
+  const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
 
   const rows = visibleOrders.map((order) => `
     <tr>
@@ -2258,7 +2299,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
       <td>${escapeHtml(order.paymentStatus || "-")}</td>
       <td>${escapeHtml(order.orderStatus || "-")}</td>
       <td>
-        <span class="cp-status-badge cp-status-${escapeHtml(order.category)}">${escapeHtml(categoryLabel(order.category))}</span>
+        <span class="cp-status-badge cp-status-${escapeHtml(order.category)}">${escapeHtml(clientOrderCategoryLabel(order.category))}</span>
       </td>
     </tr>
   `).join("");
@@ -2302,17 +2343,19 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
           <div id="ordersCustomRange" class="cp-grid-2 ${selectedRange === "custom" ? "" : "cp-hidden"}">
             <div>
               <label>Desde</label>
-              <input type="date" name="from" value="${escapeHtml(String(req.query.from || toYmd(filterFrom)))}" />
+              <input type="date" name="from" value="${escapeHtml(fromInput)}" />
             </div>
             <div>
               <label>Hasta</label>
-              <input type="date" name="to" value="${escapeHtml(String(req.query.to || toYmd(filterTo)))}" />
+              <input type="date" name="to" value="${escapeHtml(toInput)}" />
             </div>
           </div>
 
           <div class="cp-actions">
             <button class="cp-btn primary" type="submit">Aplicar filtros</button>
             <a class="cp-btn" href="/panel/pedidos">Limpiar</a>
+            <a class="cp-btn" href="${exportCsvHref}">Exportar CSV</a>
+            <a class="cp-btn" href="${exportXlsxHref}">Exportar XLSX</a>
           </div>
         </form>
       </article>
@@ -2348,6 +2391,65 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
     subtitle: `${company.name || company.id} - seguimiento operativo`,
     bodyHtml,
   }));
+});
+
+app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const format = String(req.query.format || "csv").trim().toLowerCase();
+  const {
+    selectedStatus,
+    filterFrom,
+    filterTo,
+  } = parseClientOrdersFilters(req.query);
+
+  try {
+    const orders = await fetchCompanyOrders(company.id, filterFrom, filterTo, 5000);
+    const ordersWithCategory = orders.map((order) => ({
+      ...order,
+      category: classifyClientOrder(order),
+    }));
+    const visibleOrders = selectedStatus === "all"
+      ? ordersWithCategory
+      : ordersWithCategory.filter((order) => order.category === selectedStatus);
+
+    const exportRows = visibleOrders.map((order) => ({
+      ID: String(order.id || ""),
+      Fecha: formatDateLabel(order.createdAt),
+      Cliente: String(order.name || order.contact || "-"),
+      Total: toNumber(order.total),
+      Pago: String(order.paymentStatus || "-"),
+      Estado: String(order.orderStatus || "-"),
+      Categoria: clientOrderCategoryLabel(order.category),
+    }));
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    if (format === "xlsx") {
+      const sheet = XLSX.utils.json_to_sheet(exportRows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, "Pedidos");
+      const xlsxBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename=\"pedidos_${company.id}_${dateStamp}.xlsx\"`);
+      return res.send(xlsxBuffer);
+    }
+
+    const csvHeaders = ["ID", "Fecha", "Cliente", "Total", "Pago", "Estado", "Categoria"];
+    const csvRows = exportRows.map((row) => [
+      row.ID,
+      row.Fecha,
+      row.Cliente,
+      row.Total,
+      row.Pago,
+      row.Estado,
+      row.Categoria,
+    ]);
+    const csv = toCsvRows(csvHeaders, csvRows);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename=\"pedidos_${company.id}_${dateStamp}.csv\"`);
+    return res.send(csv);
+  } catch (e) {
+    return res.status(500).send(`No se pudo exportar pedidos: ${escapeHtml(e?.message || e)}`);
+  }
 });
 
 app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
