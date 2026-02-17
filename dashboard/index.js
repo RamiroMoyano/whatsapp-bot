@@ -307,6 +307,12 @@ function inferClientOrderState(order) {
 }
 
 function extractClientOrderWorkflow(order) {
+  const explicitState = normalizeClientOrderState(order?.workflowState || order?.state);
+  const explicitArchived = order?.archived === true || order?.archived === 1 || String(order?.archived || "").trim() === "1";
+  if (explicitState) {
+    return { state: explicitState, archived: explicitArchived };
+  }
+
   const rawCategory = String(order?.category || order?.orderCategory || "").trim().toLowerCase();
   let archived = false;
   let state = "";
@@ -2742,7 +2748,7 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
 
     await api(`/api/orders/${encodeURIComponent(orderId)}/category`, {
       method: "POST",
-      body: { category },
+      body: { state, archived: archived ? 1 : 0, category },
     });
 
     const next = redirectBase();

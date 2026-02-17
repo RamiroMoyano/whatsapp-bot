@@ -123,12 +123,29 @@ CREATE TABLE IF NOT EXISTS orders (
   paymentStatus TEXT,
   paymentMethod TEXT,
   orderStatus TEXT,
-  deliveredAt TEXT
+  deliveredAt TEXT,
+  category TEXT,
+  workflowState TEXT,
+  archived INTEGER DEFAULT 0,
+  archivedAt TEXT,
+  archiveReason TEXT
 );
 `);
 
 try {
   db.prepare(`ALTER TABLE orders ADD COLUMN category TEXT`).run();
+} catch {}
+try {
+  db.prepare(`ALTER TABLE orders ADD COLUMN workflowState TEXT`).run();
+} catch {}
+try {
+  db.prepare(`ALTER TABLE orders ADD COLUMN archived INTEGER DEFAULT 0`).run();
+} catch {}
+try {
+  db.prepare(`ALTER TABLE orders ADD COLUMN archivedAt TEXT`).run();
+} catch {}
+try {
+  db.prepare(`ALTER TABLE orders ADD COLUMN archiveReason TEXT`).run();
 } catch {}
 
 // ================= DEFAULT COMPANIES =================
@@ -624,6 +641,121 @@ function syncRulesSubscription({
   return nextRules;
 }
 
+function normalizeOrderWorkflowState(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
+  if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
+  if (raw.includes("pend")) return "pending";
+  return "";
+}
+
+function normalizeArchivedFlag(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "si" || raw === "on";
+}
+
+function parseLegacyOrderCategory(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return { state: "", archived: false };
+  if (raw.includes("archiv")) {
+    const stripped = raw
+      .replaceAll("archived", "")
+      .replaceAll("archivado", "")
+      .replaceAll(":", " ")
+      .replaceAll("|", " ")
+      .replaceAll("-", " ")
+      .trim();
+    return { state: normalizeOrderWorkflowState(stripped), archived: true };
+  }
+  return { state: normalizeOrderWorkflowState(raw), archived: false };
+}
+
+function inferOrderWorkflowStateFromStatus(orderStatus, paymentStatus) {
+  const orderRaw = String(orderStatus || "").trim().toLowerCase();
+  const paymentRaw = String(paymentStatus || "").trim().toLowerCase();
+  if (
+    ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderRaw.includes(v)) ||
+    ["failed", "voided", "refunded", "chargeback"].some((v) => paymentRaw.includes(v))
+  ) {
+    return "rejected";
+  }
+  if (["delivered", "completed", "done", "entregado", "finalizado", "cerrado"].some((v) => orderRaw.includes(v))) {
+    return "completed";
+  }
+  return "pending";
+}
+
+function deriveOrderWorkflowFromRow(row) {
+  const explicitState = normalizeOrderWorkflowState(row?.workflowState);
+  const explicitArchived = row?.archived === 1 || row?.archived === true || String(row?.archived || "").trim() === "1";
+  let state = explicitState;
+  let archived = explicitArchived;
+
+  if (!state || !explicitArchived) {
+    const legacy = parseLegacyOrderCategory(row?.category);
+    if (!state && legacy.state) state = legacy.state;
+    if (!archived && legacy.archived) archived = true;
+  }
+
+  if (!archived) {
+    const orderRaw = String(row?.orderStatus || "").trim().toLowerCase();
+    if (["archived", "archivado"].some((v) => orderRaw.includes(v))) archived = true;
+  }
+  if (!state) {
+    state = inferOrderWorkflowStateFromStatus(row?.orderStatus, row?.paymentStatus);
+  }
+  return { state, archived };
+}
+
+function backfillOrdersWorkflowColumns() {
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
+    const columns = new Set((Array.isArray(tableInfo) ? tableInfo : []).map((row) => String(row?.name || "")));
+    if (!columns.has("workflowState") || !columns.has("archived")) return;
+
+    const rows = db.prepare(`
+      SELECT id, workflowState, archived, category, orderStatus, paymentStatus, archivedAt, archiveReason, createdAt
+      FROM orders
+    `).all();
+    if (!Array.isArray(rows) || !rows.length) return;
+
+    const stmt = db.prepare(`
+      UPDATE orders
+      SET workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+      WHERE id=?
+    `);
+
+    for (const row of rows) {
+      const hasState = String(row?.workflowState || "").trim().length > 0;
+      const hasArchived = row?.archived === 0 || row?.archived === 1 || String(row?.archived || "").trim() !== "";
+      if (hasState && hasArchived) continue;
+
+      const workflow = deriveOrderWorkflowFromRow(row);
+      const archivedAt = workflow.archived
+        ? String(row?.archivedAt || row?.createdAt || new Date().toISOString())
+        : null;
+      const archiveReason = workflow.archived
+        ? String(row?.archiveReason || workflow.state || "")
+        : "";
+      const legacyCategory = workflow.archived ? `archived:${workflow.state}` : workflow.state;
+
+      stmt.run(
+        workflow.state || "pending",
+        workflow.archived ? 1 : 0,
+        archivedAt,
+        archiveReason,
+        legacyCategory,
+        row.id
+      );
+    }
+  } catch (e) {
+    console.error("Workflow backfill error:", e?.message || e);
+  }
+}
+
+backfillOrdersWorkflowColumns();
+
 // ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÍ ==================
 // ===== API: Companies =====
 app.get("/api/companies", requireApiAuth, (req, res) => {
@@ -812,6 +944,10 @@ app.get("/api/orders", requireApiAuth, (req, res) => {
       "orderStatus",
       "deliveredAt",
       "category",
+      "workflowState",
+      "archived",
+      "archivedAt",
+      "archiveReason",
     ].filter(has);
 
     const where = [];
@@ -853,23 +989,37 @@ app.get("/api/orders", requireApiAuth, (req, res) => {
     `;
 
     const rows = db.prepare(sql).all(...params, limit);
-    const normalized = rows.map((row) => ({
-      id: row?.id ?? "",
-      createdAt: row?.createdAt ?? "",
-      fromNumber: row?.fromNumber ?? "",
-      companyId: row?.companyId ?? "",
-      name: row?.name ?? "",
-      contact: row?.contact ?? "",
-      notes: row?.notes ?? "",
-      itemsJson: row?.itemsJson ?? "[]",
-      itemsDetailedJson: row?.itemsDetailedJson ?? "[]",
-      total: Number(row?.total || 0),
-      paymentStatus: row?.paymentStatus ?? "",
-      paymentMethod: row?.paymentMethod ?? "",
-      orderStatus: row?.orderStatus ?? "",
-      deliveredAt: row?.deliveredAt ?? null,
-      category: row?.category ?? "",
-    }));
+    const normalized = rows.map((row) => {
+      const workflow = deriveOrderWorkflowFromRow(row);
+      const archivedAt = workflow.archived
+        ? (row?.archivedAt || row?.deliveredAt || row?.createdAt || null)
+        : null;
+      const archiveReason = workflow.archived
+        ? String(row?.archiveReason || workflow.state || "")
+        : "";
+      const legacyCategory = workflow.archived ? `archived:${workflow.state}` : workflow.state;
+      return {
+        id: row?.id ?? "",
+        createdAt: row?.createdAt ?? "",
+        fromNumber: row?.fromNumber ?? "",
+        companyId: row?.companyId ?? "",
+        name: row?.name ?? "",
+        contact: row?.contact ?? "",
+        notes: row?.notes ?? "",
+        itemsJson: row?.itemsJson ?? "[]",
+        itemsDetailedJson: row?.itemsDetailedJson ?? "[]",
+        total: Number(row?.total || 0),
+        paymentStatus: row?.paymentStatus ?? "",
+        paymentMethod: row?.paymentMethod ?? "",
+        orderStatus: row?.orderStatus ?? "",
+        deliveredAt: row?.deliveredAt ?? null,
+        category: row?.category ?? legacyCategory,
+        workflowState: workflow.state,
+        archived: workflow.archived,
+        archivedAt,
+        archiveReason,
+      };
+    });
     res.json(normalized);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
@@ -881,28 +1031,62 @@ app.post("/api/orders/:id/category", requireApiAuth, (req, res) => {
     const orderId = String(req.params.id || "").trim();
     if (!orderId) return res.status(400).json({ error: "orderId requerido" });
 
-    const normalizeCategory = (value) => {
-      const raw = String(value || "").trim().toLowerCase();
-      if (!raw) return "";
-      if (raw.includes("archiv")) return "archived";
-      if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
-      if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
-      if (raw.includes("pend")) return "pending";
-      return "";
-    };
+    const current = db.prepare(`
+      SELECT id, workflowState, archived, category, orderStatus, paymentStatus, archivedAt, archiveReason
+      FROM orders
+      WHERE id=?
+    `).get(orderId);
+    if (!current) return res.status(404).json({ error: "Pedido no encontrado" });
 
-    const category = normalizeCategory(req.body.category);
-    if (!category) return res.status(400).json({ error: "Categoria invalida" });
+    const stateInput = normalizeOrderWorkflowState(req.body.state);
+    const legacy = parseLegacyOrderCategory(req.body.category);
+    const hasArchivedInput = req.body.archived !== undefined && req.body.archived !== null && String(req.body.archived).trim() !== "";
+    const archived = hasArchivedInput ? normalizeArchivedFlag(req.body.archived) : legacy.archived;
+    const currentWorkflow = deriveOrderWorkflowFromRow(current);
+    const state = stateInput || legacy.state || currentWorkflow.state;
+    if (!state) return res.status(400).json({ error: "Estado invalido" });
+    const archiveReasonInput = String(req.body.archiveReason || "").trim();
 
     const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
     const columns = new Set((Array.isArray(tableInfo) ? tableInfo : []).map((row) => String(row?.name || "")));
-    if (!columns.has("category")) {
-      return res.status(500).json({ error: "La tabla orders no tiene columna category" });
+
+    const updates = [];
+    const params = [];
+    if (columns.has("workflowState")) {
+      updates.push("workflowState=?");
+      params.push(state);
+    }
+    if (columns.has("archived")) {
+      updates.push("archived=?");
+      params.push(archived ? 1 : 0);
+    }
+    if (columns.has("archivedAt")) {
+      const archivedAt = archived
+        ? String(current?.archivedAt || new Date().toISOString())
+        : null;
+      updates.push("archivedAt=?");
+      params.push(archivedAt);
+    }
+    if (columns.has("archiveReason")) {
+      const archiveReason = archived
+        ? String(archiveReasonInput || current?.archiveReason || state)
+        : "";
+      updates.push("archiveReason=?");
+      params.push(archiveReason);
+    }
+    if (columns.has("category")) {
+      const legacyCategory = archived ? `archived:${state}` : state;
+      updates.push("category=?");
+      params.push(legacyCategory);
+    }
+    if (!updates.length) {
+      return res.status(500).json({ error: "La tabla orders no tiene columnas de workflow" });
     }
 
-    const result = db.prepare(`UPDATE orders SET category=? WHERE id=?`).run(category, orderId);
+    const sql = `UPDATE orders SET ${updates.join(", ")} WHERE id=?`;
+    const result = db.prepare(sql).run(...params, orderId);
     if (!result.changes) return res.status(404).json({ error: "Pedido no encontrado" });
-    return res.json({ ok: true, id: orderId, category });
+    return res.json({ ok: true, id: orderId, state, archived, category: archived ? `archived:${state}` : state });
   } catch (e) {
     return res.status(500).json({ error: e?.message || String(e) });
   }
@@ -1241,6 +1425,36 @@ app.post("/whatsapp", async (req, res) => {
       "confirmed",
       null
     );
+
+    try {
+      const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
+      const columns = new Set((Array.isArray(tableInfo) ? tableInfo : []).map((row) => String(row?.name || "")));
+      const updates = [];
+      const params = [];
+      if (columns.has("workflowState")) {
+        updates.push("workflowState=?");
+        params.push("pending");
+      }
+      if (columns.has("archived")) {
+        updates.push("archived=?");
+        params.push(0);
+      }
+      if (columns.has("archivedAt")) {
+        updates.push("archivedAt=?");
+        params.push(null);
+      }
+      if (columns.has("archiveReason")) {
+        updates.push("archiveReason=?");
+        params.push("");
+      }
+      if (columns.has("category")) {
+        updates.push("category=?");
+        params.push("pending");
+      }
+      if (updates.length) {
+        db.prepare(`UPDATE orders SET ${updates.join(", ")} WHERE id=?`).run(...params, orderId);
+      }
+    } catch {}
 
     session.cart = [];
     session.state = "MENU";
