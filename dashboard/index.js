@@ -204,7 +204,7 @@ function parseClientOrdersFilters(query) {
   const selectedRange = ["today", "week", "month", "3months", "custom"].includes(selectedRangeRaw)
     ? selectedRangeRaw
     : "month";
-  const selectedStatus = ["all", "completed", "pending", "rejected"].includes(selectedStatusRaw)
+  const selectedStatus = ["all", "completed", "pending", "rejected", "archived"].includes(selectedStatusRaw)
     ? selectedStatusRaw
     : "all";
 
@@ -283,8 +283,22 @@ async function fetchCompanyOrders(companyId, filterFrom, filterTo, limit = 500) 
 }
 
 function classifyClientOrder(order) {
+  const normalizeCategory = (value) => {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return "";
+    if (raw.includes("archiv")) return "archived";
+    if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
+    if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
+    if (raw.includes("pend")) return "pending";
+    return "";
+  };
+
+  const explicitCategory = normalizeCategory(order?.category || order?.orderCategory);
+  if (explicitCategory) return explicitCategory;
+
   const orderStatus = String(order?.orderStatus || "").trim().toLowerCase();
   const paymentStatus = String(order?.paymentStatus || "").trim().toLowerCase();
+  if (["archived", "archivado"].some((v) => orderStatus.includes(v))) return "archived";
   if (
     ["rejected", "rechazado", "cancelled", "canceled", "cancelado", "anulado"].some((v) => orderStatus.includes(v)) ||
     ["failed", "voided", "refunded", "chargeback"].some((v) => paymentStatus.includes(v))
@@ -298,6 +312,7 @@ function classifyClientOrder(order) {
 }
 
 function clientOrderCategoryLabel(category) {
+  if (category === "archived") return "Archivado";
   if (category === "completed") return "Completado";
   if (category === "rejected") return "Rechazado";
   return "Pendiente";
@@ -2250,6 +2265,8 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
+  const updatedCategory = String(req.query.updatedCategory || "") === "1";
+  const errorMsg = String(req.query.error || "").trim();
   const {
     selectedRange,
     selectedStatus,
@@ -2274,9 +2291,11 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   const completedCount = ordersWithCategory.filter((order) => order.category === "completed").length;
   const pendingCount = ordersWithCategory.filter((order) => order.category === "pending").length;
   const rejectedCount = ordersWithCategory.filter((order) => order.category === "rejected").length;
+  const archivedCount = ordersWithCategory.filter((order) => order.category === "archived").length;
+  const activeCount = ordersWithCategory.filter((order) => order.category !== "archived").length;
 
   const visibleOrders = selectedStatus === "all"
-    ? ordersWithCategory
+    ? ordersWithCategory.filter((order) => order.category !== "archived")
     : ordersWithCategory.filter((order) => order.category === selectedStatus);
 
   const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
@@ -2299,17 +2318,32 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
       <td>${escapeHtml(order.paymentStatus || "-")}</td>
       <td>${escapeHtml(order.orderStatus || "-")}</td>
       <td>
-        <span class="cp-status-badge cp-status-${escapeHtml(order.category)}">${escapeHtml(clientOrderCategoryLabel(order.category))}</span>
+        <form method="POST" action="/panel/pedidos/category" class="cp-category-form">
+          <input type="hidden" name="orderId" value="${escapeHtml(order.id || "")}" />
+          <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
+          <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
+          <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
+          <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <select name="category" class="cp-category-select cp-status-${escapeHtml(order.category)}" onchange="this.form.submit()">
+            <option value="pending" ${order.category === "pending" ? "selected" : ""}>Pendiente</option>
+            <option value="completed" ${order.category === "completed" ? "selected" : ""}>Completado</option>
+            <option value="rejected" ${order.category === "rejected" ? "selected" : ""}>Rechazado</option>
+            <option value="archived" ${order.category === "archived" ? "selected" : ""}>Archivado</option>
+          </select>
+        </form>
       </td>
     </tr>
   `).join("");
 
   const bodyHtml = `
+    ${updatedCategory ? `<div class="cp-alert success">Categoria de pedido actualizada.</div>` : ""}
+    ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Pedidos</div><div class="cp-stat-value">${ordersWithCategory.length}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos activos</div><div class="cp-stat-value">${activeCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Completados</div><div class="cp-stat-value">${completedCount}</div><div class="cp-stat-hint">entregados/finalizados</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Pendientes</div><div class="cp-stat-value">${pendingCount}</div><div class="cp-stat-hint">en proceso</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Rechazados</div><div class="cp-stat-value">${rejectedCount}</div><div class="cp-stat-hint">cancelados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Archivados</div><div class="cp-stat-value">${archivedCount}</div><div class="cp-stat-hint">fuera de gestion activa</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Pagados</div><div class="cp-stat-value">${paidCount}</div><div class="cp-stat-hint">segun filtro</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Facturacion</div><div class="cp-stat-value">${formatMoney(totalRevenue, "USD")}</div><div class="cp-stat-hint">segun filtro</div></article>
     </section>
@@ -2336,6 +2370,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
                 <option value="completed" ${selectedStatus === "completed" ? "selected" : ""}>Completados</option>
                 <option value="pending" ${selectedStatus === "pending" ? "selected" : ""}>Pendientes</option>
                 <option value="rejected" ${selectedStatus === "rejected" ? "selected" : ""}>Rechazados</option>
+                <option value="archived" ${selectedStatus === "archived" ? "selected" : ""}>Archivados</option>
               </select>
             </div>
           </div>
@@ -2393,6 +2428,56 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   }));
 });
 
+app.post("/panel/pedidos/category", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const orderId = String(req.body.orderId || "").trim();
+  const rawCategory = String(req.body.category || "").trim().toLowerCase();
+  const category = ["pending", "completed", "rejected", "archived"].includes(rawCategory)
+    ? rawCategory
+    : "";
+
+  const redirectParams = new URLSearchParams();
+  const range = String(req.body.range || "").trim();
+  const status = String(req.body.status || "").trim();
+  const from = String(req.body.from || "").trim();
+  const to = String(req.body.to || "").trim();
+  if (range) redirectParams.set("range", range);
+  if (status) redirectParams.set("status", status);
+  if (from) redirectParams.set("from", from);
+  if (to) redirectParams.set("to", to);
+
+  const redirectBase = () => {
+    const query = redirectParams.toString();
+    return query ? `/panel/pedidos?${query}` : "/panel/pedidos";
+  };
+
+  if (!orderId || !category) {
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar categoria")}`);
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set("companyId", String(company.id));
+    params.set("q", orderId);
+    params.set("limit", "25");
+    const orders = await api(`/api/orders?${params.toString()}`);
+    const match = (Array.isArray(orders) ? orders : []).find((item) => String(item.id || "") === orderId);
+    if (!match) throw new Error("El pedido no pertenece a esta empresa");
+
+    await api(`/api/orders/${encodeURIComponent(orderId)}/category`, {
+      method: "POST",
+      body: { category },
+    });
+
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}updatedCategory=1`);
+  } catch (e) {
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
 app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
   const company = req.company;
   const format = String(req.query.format || "csv").trim().toLowerCase();
@@ -2409,7 +2494,7 @@ app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
       category: classifyClientOrder(order),
     }));
     const visibleOrders = selectedStatus === "all"
-      ? ordersWithCategory
+      ? ordersWithCategory.filter((order) => order.category !== "archived")
       : ordersWithCategory.filter((order) => order.category === selectedStatus);
 
     const exportRows = visibleOrders.map((order) => ({

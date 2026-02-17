@@ -1063,6 +1063,27 @@ body.client-ui {
   color: #a12626;
 }
 
+.cp-status-archived {
+  border-color: #d4d9e4;
+  background: #f2f4f8;
+  color: #5b6477;
+}
+
+.cp-category-form {
+  margin: 0;
+}
+
+.cp-category-select {
+  min-width: 136px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 26px 5px 10px;
+  border: 1px solid #c7d9ff;
+  background: #eef4ff;
+  color: #3d5f96;
+}
+
 .cp-info-stack {
   display: grid;
   gap: 12px;

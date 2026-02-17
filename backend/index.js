@@ -127,6 +127,10 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 `);
 
+try {
+  db.prepare(`ALTER TABLE orders ADD COLUMN category TEXT`).run();
+} catch {}
+
 // ================= DEFAULT COMPANIES =================
 db.exec(`
 INSERT OR IGNORE INTO companies VALUES
@@ -807,6 +811,7 @@ app.get("/api/orders", requireApiAuth, (req, res) => {
       "paymentMethod",
       "orderStatus",
       "deliveredAt",
+      "category",
     ].filter(has);
 
     const where = [];
@@ -863,10 +868,43 @@ app.get("/api/orders", requireApiAuth, (req, res) => {
       paymentMethod: row?.paymentMethod ?? "",
       orderStatus: row?.orderStatus ?? "",
       deliveredAt: row?.deliveredAt ?? null,
+      category: row?.category ?? "",
     }));
     res.json(normalized);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/api/orders/:id/category", requireApiAuth, (req, res) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+
+    const normalizeCategory = (value) => {
+      const raw = String(value || "").trim().toLowerCase();
+      if (!raw) return "";
+      if (raw.includes("archiv")) return "archived";
+      if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
+      if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
+      if (raw.includes("pend")) return "pending";
+      return "";
+    };
+
+    const category = normalizeCategory(req.body.category);
+    if (!category) return res.status(400).json({ error: "Categoria invalida" });
+
+    const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
+    const columns = new Set((Array.isArray(tableInfo) ? tableInfo : []).map((row) => String(row?.name || "")));
+    if (!columns.has("category")) {
+      return res.status(500).json({ error: "La tabla orders no tiene columna category" });
+    }
+
+    const result = db.prepare(`UPDATE orders SET category=? WHERE id=?`).run(category, orderId);
+    if (!result.changes) return res.status(404).json({ error: "Pedido no encontrado" });
+    return res.json({ ok: true, id: orderId, category });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
@@ -1183,7 +1221,11 @@ app.post("/whatsapp", async (req, res) => {
     });
 
     const orderId = newOrderId();
-    db.prepare(`INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    db.prepare(`
+      INSERT INTO orders(
+        id,createdAt,fromNumber,companyId,name,contact,notes,itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,orderStatus,deliveredAt
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
       orderId,
       new Date().toISOString(),
       from,
