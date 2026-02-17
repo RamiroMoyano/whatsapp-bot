@@ -135,7 +135,7 @@ function escapeHtml(s) {
 function layout({ title, active, body }) {
   const nav = `
     <a class="btn ${active === "companies" ? "primary" : "secondary"}" href="/admin">Empresas</a>
-    <a class="btn ${active === "orders" ? "primary" : "secondary"}" href="/admin/orders">Pedidos</a>
+    <a class="btn ${active === "new-company" ? "primary" : "secondary"}" href="/admin/company/new">Nueva empresa</a>
     <a class="btn ${active === "assign" ? "primary" : "secondary"}" href="/admin/assign">Asignar clientes</a>
   `;
 
@@ -437,11 +437,28 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   try {
     const q = String(req.query.q || "").trim().toLowerCase();
     const companies = await api("/api/companies");
+    const flashCompany = String(req.query.company || "").trim();
+    const dashboardSaved = String(req.query.dashboardSaved || "") === "1";
+    const deleted = String(req.query.deleted || "") === "1";
+    const dashboardError = String(req.query.dashboardError || "").trim();
+    const deleteError = String(req.query.deleteError || "").trim();
+    const flashHtml = [
+      dashboardSaved ? `<div class="card"><b>Dashboard actualizado:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
+      deleted ? `<div class="card"><b>Empresa eliminada:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
+      dashboardError ? `<div class="card"><b>Error guardando dashboard:</b> ${escapeHtml(dashboardError)}</div>` : "",
+      deleteError ? `<div class="card"><b>Error eliminando empresa:</b> ${escapeHtml(deleteError)}</div>` : "",
+    ].join("");
 
     const rowsData = companies.map((c) => {
       const rules = parseJsonSafe(c.rulesJson || "{}", {});
       const plan = extractPlanInfo(c, rules);
       const profile = extractCompanyProfile(rules);
+      const dashboardAccess = extractDashboardAccessFromRules(rules);
+      const accessLabel = !dashboardAccess.enabled
+        ? "Desactivado"
+        : dashboardAccess.mode === "limited"
+          ? "Limitado"
+          : "Completo";
       const searchText = [
         c.id,
         c.name,
@@ -451,25 +468,58 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         profile.ownerPhone,
         plan.botClass,
         plan.fullLabel,
+        accessLabel,
       ].map((value) => String(value || "").toLowerCase()).join(" ");
       const html = `
       <div class="company-item">
-        <div>
+        <div class="admin-company-meta">
           <div><b>${c.id}</b> - ${c.name || ""}</div>
           <div class="muted">Creada: ${c.createdAt || "-"}</div>
           <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | Email: ${escapeHtml(profile.ownerEmail || "-")}</div>
-          <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)}</div>
+          <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)} | Dashboard: ${accessLabel}</div>
         </div>
-        <a class="btn secondary" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
+        <div class="admin-company-actions">
+          <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/dashboard/save" class="admin-company-access-form">
+            <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
+            <div class="admin-company-access-grid">
+              <div>
+                <label>Dashboard</label>
+                <select name="dashboardEnabled">
+                  <option value="1" ${dashboardAccess.enabled ? "selected" : ""}>Activo</option>
+                  <option value="0" ${dashboardAccess.enabled ? "" : "selected"}>Inactivo</option>
+                </select>
+              </div>
+              <div>
+                <label>Visualizacion</label>
+                <select name="dashboardMode">
+                  <option value="full" ${dashboardAccess.mode === "full" ? "selected" : ""}>Completo</option>
+                  <option value="limited" ${dashboardAccess.mode === "limited" ? "selected" : ""}>Limitado</option>
+                </select>
+              </div>
+              <button class="btn secondary small" type="submit">Guardar</button>
+            </div>
+          </form>
+          <div class="admin-company-inline-actions">
+            <a class="btn secondary small" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
+            <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/delete" onsubmit="return confirm('Se eliminara la empresa y su configuracion. Continuar?')">
+              <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
+              <button class="btn danger small" type="submit">Eliminar</button>
+            </form>
+          </div>
+        </div>
       </div>
     `;
-      return { html, searchText };
+      return { html, searchText, dashboardAccess };
     });
 
     const filtered = q
       ? rowsData.filter((row) => row.searchText.includes(q))
       : rowsData;
     const rows = filtered.map((row) => row.html).join("");
+    const enabledFiltered = filtered.filter((row) => row.dashboardAccess.enabled);
+    const fullCount = enabledFiltered.filter((row) => row.dashboardAccess.mode === "full").length;
+    const limitedCount = enabledFiltered.filter((row) => row.dashboardAccess.mode === "limited").length;
+    const disabledCount = filtered.length - enabledFiltered.length;
 
     res.type("text/html").send(`
 <!doctype html>
@@ -483,7 +533,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   <body>
     <div class="container">
 
-      <div class="admin-header">
+      <div class="admin-header admin-home-header">
         <div class="brand">
           <img src="/img/logo.png" alt="BabySteps" />
           <div>
@@ -491,50 +541,56 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
             <div class="subtitle">Admin Console</div>
           </div>
         </div>
+        <a class="btn secondary" href="/admin/logout">Logout</a>
+      </div>
 
-        <div class="nav-tabs">
-          <a class="btn primary" href="/admin">Empresas</a>
-          <a class="btn secondary" href="/admin/company/new">Nueva empresa</a>
-          <a class="btn secondary" href="/admin/orders">Pedidos</a>
+      <div class="admin-home-shell">
+        <aside class="card admin-side-menu">
+          <h3 style="margin:0">Menu</h3>
+          <a class="btn primary" href="/admin/company/new">Agregar +</a>
+          <a class="btn secondary" href="#admin-company-list">Eliminar</a>
           <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
-          <a class="btn secondary" href="/admin/logout">Logout</a>
-        </div>
-      </div>
+        </aside>
 
-      <div class="kpis">
-        <div class="kpi">
-          <div class="label">Empresas</div>
-          <div class="value">${filtered.length}</div>
-          <div class="hint">de ${companies.length} activas</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Pedidos hoy</div>
-          <div class="value">-</div>
-          <div class="hint">Luego conectamos</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Clientes</div>
-          <div class="value">-</div>
-          <div class="hint">Luego conectamos</div>
-        </div>
-        <div class="kpi">
-          <div class="label">Bots online</div>
-          <div class="value">-</div>
-          <div class="hint">Luego conectamos</div>
-        </div>
-      </div>
+        <section class="admin-home-main">
+          ${flashHtml}
 
-      <div class="card">
-        <form method="GET" action="/admin" class="form" style="margin-bottom:12px">
-          <label>Buscar empresa</label>
-          <div class="actions">
-            <input name="q" value="${escapeHtml(String(req.query.q || ""))}" placeholder="ID, nombre, dueno, mail, bot..." />
-            <button class="btn primary" type="submit">Buscar</button>
-            <a class="btn secondary" href="/admin">Limpiar</a>
+          <div class="kpis">
+            <div class="kpi">
+              <div class="label">Empresas</div>
+              <div class="value">${filtered.length}</div>
+              <div class="hint">de ${companies.length} registradas</div>
+            </div>
+            <div class="kpi">
+              <div class="label">Dashboard completo</div>
+              <div class="value">${fullCount}</div>
+              <div class="hint">acceso total</div>
+            </div>
+            <div class="kpi">
+              <div class="label">Dashboard limitado</div>
+              <div class="value">${limitedCount}</div>
+              <div class="hint">solo catalogo/suscripcion/cuenta</div>
+            </div>
+            <div class="kpi">
+              <div class="label">Dashboard inactivo</div>
+              <div class="value">${disabledCount}</div>
+              <div class="hint">sin acceso</div>
+            </div>
           </div>
-        </form>
-        <h3 style="margin:0 0 12px;">Listado</h3>
-        <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
+
+          <div class="card" id="admin-company-list">
+            <form method="GET" action="/admin" class="form" style="margin-bottom:12px">
+              <label>Buscar empresa</label>
+              <div class="actions">
+                <input name="q" value="${escapeHtml(String(req.query.q || ""))}" placeholder="ID, nombre, dueno, mail, bot..." />
+                <button class="btn primary" type="submit">Buscar</button>
+                <a class="btn secondary" href="/admin">Limpiar</a>
+              </div>
+            </form>
+            <h3 style="margin:0 0 12px;">Listado</h3>
+            <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
+          </div>
+        </section>
       </div>
 
     </div>
@@ -1032,6 +1088,57 @@ app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
   res.redirect(`/admin/company/${encodeURIComponent(id)}`);
 });
 
+app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const q = String(req.body.q || "").trim();
+  const dashboardEnabled = String(req.body.dashboardEnabled || "1") === "1";
+  const dashboardMode = normalizeDashboardMode(req.body.dashboardMode);
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  params.set("company", id);
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+    rules.dashboardEnabled = dashboardEnabled;
+    rules.dashboardMode = dashboardMode;
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    params.set("dashboardSaved", "1");
+    return res.redirect(`/admin?${params.toString()}`);
+  } catch (e) {
+    params.set("dashboardError", String(e?.message || e));
+    return res.redirect(`/admin?${params.toString()}`);
+  }
+});
+
+app.post("/admin/company/:id/delete", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const q = String(req.body.q || "").trim();
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  params.set("company", id);
+
+  try {
+    await api(`/api/companies/${encodeURIComponent(id)}/delete`, { method: "POST" });
+    params.set("deleted", "1");
+    return res.redirect(`/admin?${params.toString()}`);
+  } catch (e) {
+    params.set("deleteError", String(e?.message || e));
+    return res.redirect(`/admin?${params.toString()}`);
+  }
+});
+
 app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
 
@@ -1093,6 +1200,8 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
 
   try {
     const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    const providerCompany = await getBotCatalogProviderCompany(company);
+    const providerForPricing = providerCompany || company;
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
 
@@ -1468,8 +1577,15 @@ async function handleClientLogin(req, res) {
       return res.status(401).send("Credenciales incorrectas");
     }
 
+    const access = extractDashboardAccessFromRules(rules);
+    const nextPath = canAccessClientSection(access, "inicio")
+      ? "/panel"
+      : canAccessClientSection(access, "catalogo")
+        ? "/panel/catalogo"
+        : "/panel";
+
     setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
-    return res.redirect("/panel");
+    return res.redirect(nextPath);
   } catch {
     return res.status(401).send("Credenciales incorrectas");
   }
@@ -1878,7 +1994,8 @@ function buildPriceChart(values) {
   `;
 }
 
-function renderClientPage({ company, active, title, subtitle, bodyHtml }) {
+function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess }) {
+  const access = dashboardAccess || getDashboardAccessForCompany(company);
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
@@ -1887,11 +2004,23 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml }) {
     { key: "cuenta", label: "Cuenta", href: "/panel/cuenta" },
   ];
 
-  const navHtml = nav.map((item) => `
-    <a class="cp-nav-link ${active === item.key ? "active" : ""}" href="${item.href}">
-      ${item.label}
-    </a>
-  `).join("");
+  const navHtml = nav.map((item) => {
+    const allowed = canAccessClientSection(access, item.key);
+    const classes = [
+      "cp-nav-link",
+      active === item.key ? "active" : "",
+      allowed ? "" : "locked",
+    ].filter(Boolean).join(" ");
+    const lockHtml = allowed ? "" : `<span class="cp-nav-lock" aria-hidden="true">&#128274;</span>`;
+    const href = allowed ? item.href : "#";
+    const attrs = allowed ? "" : ` aria-disabled="true" tabindex="-1"`;
+    return `
+      <a class="${classes}" href="${href}"${attrs}>
+        <span>${item.label}</span>
+        ${lockHtml}
+      </a>
+    `;
+  }).join("");
 
   return `<!doctype html>
   <html>
@@ -1927,6 +2056,74 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml }) {
   </html>`;
 }
 
+function normalizeDashboardMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "limited" ? "limited" : "full";
+}
+
+function extractDashboardAccessFromRules(rules) {
+  const enabledRaw = rules?.dashboardEnabled;
+  const mode = normalizeDashboardMode(rules?.dashboardMode);
+  const enabled = enabledRaw === undefined ? true : !!enabledRaw;
+  return { enabled, mode };
+}
+
+function getDashboardAccessForCompany(company) {
+  const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  return extractDashboardAccessFromRules(rules);
+}
+
+function canAccessClientSection(dashboardAccess, sectionKey) {
+  if (!dashboardAccess?.enabled) return false;
+  if (dashboardAccess.mode !== "limited") return true;
+  return ["catalogo", "suscripcion", "cuenta"].includes(sectionKey);
+}
+
+function renderClientAccessDeniedPage({ company, sectionKey, dashboardAccess }) {
+  const labelMap = {
+    inicio: "Resumen",
+    pedidos: "Pedidos",
+    catalogo: "Catalogo",
+    suscripcion: "Suscripcion",
+    cuenta: "Cuenta",
+  };
+  const blockedLabel = labelMap[sectionKey] || "Esta seccion";
+  const reason = dashboardAccess?.enabled
+    ? "Esta cuenta tiene acceso limitado."
+    : "El dashboard para esta empresa esta desactivado.";
+  const bodyHtml = `
+    <section class="cp-grid">
+      <article class="cp-card cp-span-3">
+        <h3>Acceso restringido</h3>
+        <p class="cp-note">${escapeHtml(reason)}</p>
+        <p class="cp-note">No puedes entrar a <b>${escapeHtml(blockedLabel)}</b> desde esta configuracion.</p>
+      </article>
+    </section>
+  `;
+  return renderClientPage({
+    company,
+    active: sectionKey,
+    title: "Acceso restringido",
+    subtitle: `${company?.name || company?.id || "Empresa"} - permisos del dashboard`,
+    bodyHtml,
+    dashboardAccess,
+  });
+}
+
+function requireClientSectionAccess(sectionKey) {
+  return (req, res, next) => {
+    const dashboardAccess = getDashboardAccessForCompany(req.company);
+    req.clientDashboardAccess = dashboardAccess;
+    if (!canAccessClientSection(dashboardAccess, sectionKey)) {
+      return res.status(403).type("text/html").send(
+        renderClientAccessDeniedPage({ company: req.company, sectionKey, dashboardAccess })
+      );
+    }
+    next();
+  };
+}
+
 app.get("/panel/login", (req, res) => {
   res.type("text/html").send(renderClientLoginPage());
 });
@@ -1937,10 +2134,11 @@ app.get("/c/login", (req, res) => {
 app.post("/panel/login", handleClientLogin);
 app.post("/c/login", handleClientLogin);
 
-app.get("/panel", requireClientAuth, async (req, res) => {
+app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const toHtmlText = (value) => escapeHtml(value).replace(/\r?\n/g, "<br/>");
+  const profile = state.profile || {};
   const brandManual = String(
     state.rules?.brandManual ||
     state.rules?.brandGuide ||
@@ -1957,77 +2155,52 @@ app.get("/panel", requireClientAuth, async (req, res) => {
     state.rules?.goal ||
     ""
   ).trim();
-  const catalogRows = state.catalog.slice(0, 6).map((item) => `
-    <tr>
-      <td>${escapeHtml(item.id)}</td>
-      <td>${escapeHtml(item.name)}</td>
-      <td>${formatMoney(item.price, state.subscription.currency)}</td>
-    </tr>
-  `).join("");
-
-  const stats = [
-    { label: "Productos", value: state.catalog.length, hint: "items en catalogo" },
-    { label: "Valor catalogo", value: formatMoney(state.totalCatalogValue, state.subscription.currency), hint: "suma precios" },
-    { label: "Precio promedio", value: formatMoney(state.avgPrice, state.subscription.currency), hint: "ticket estimado" },
-    { label: "Plan activo", value: escapeHtml(state.plan.planLabel), hint: escapeHtml(state.plan.channelLabel) },
-  ];
-
-  const statsHtml = stats.map((item) => `
-    <article class="cp-stat">
-      <div class="cp-stat-label">${item.label}</div>
-      <div class="cp-stat-value">${item.value}</div>
-      <div class="cp-stat-hint">${item.hint}</div>
-    </article>
-  `).join("");
-
   const bodyHtml = `
-    <section class="cp-stats">${statsHtml}</section>
-
-    <section class="cp-grid">
+    <section class="cp-grid cp-overview-grid">
       <article class="cp-card cp-span-2">
-        <div class="cp-card-head">
-          <h3>Informacion de la empresa</h3>
-          <span>Manual y proposito</span>
-        </div>
-        <div class="cp-info-stack">
-          <div class="cp-info-block">
-            <h4>Manual de marca</h4>
-            <p>${brandManual ? toHtmlText(brandManual) : "No definido todavia."}</p>
+        <details class="cp-company-details" open>
+          <summary>
+            <span>Informacion de la empresa</span>
+            <span class="cp-details-hint">Click para expandir o contraer</span>
+          </summary>
+          <div class="cp-company-details-body">
+            <div class="cp-info-grid">
+              <div class="cp-mini-kv"><span>Empresa</span><b>${escapeHtml(company.name || company.id)}</b></div>
+              <div class="cp-mini-kv"><span>ID</span><b>${escapeHtml(company.id)}</b></div>
+              <div class="cp-mini-kv"><span>Responsable</span><b>${escapeHtml(profile.ownerName || "-")}</b></div>
+              <div class="cp-mini-kv"><span>Email</span><b>${escapeHtml(profile.ownerEmail || "-")}</b></div>
+              <div class="cp-mini-kv"><span>Telefono</span><b>${escapeHtml(profile.ownerPhone || "-")}</b></div>
+              <div class="cp-mini-kv"><span>Ubicacion</span><b>${escapeHtml([profile.companyCity, profile.companyCountry].filter(Boolean).join(", ") || "-")}</b></div>
+            </div>
+            <div class="cp-info-stack">
+              <div class="cp-info-block">
+                <h4>Manual de marca</h4>
+                <p>${brandManual ? toHtmlText(brandManual) : "No definido todavia."}</p>
+              </div>
+              <div class="cp-info-block">
+                <h4>Objetivo / Proposito</h4>
+                <p>${companyPurpose ? toHtmlText(companyPurpose) : "No definido todavia."}</p>
+              </div>
+            </div>
           </div>
-          <div class="cp-info-block">
-            <h4>Objetivo / Proposito</h4>
-            <p>${companyPurpose ? toHtmlText(companyPurpose) : "No definido todavia."}</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="cp-card">
-        <h3>Suscripcion</h3>
-        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
-        <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
-        <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
-        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
-        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
-      </article>
-
-      <article class="cp-card cp-span-2">
-        <div class="cp-card-head">
-          <h3>Catalogo reciente</h3>
-          <a href="/panel/catalogo">Ver completo</a>
-        </div>
-        <table class="cp-table">
-          <thead><tr><th>ID</th><th>Producto</th><th>Precio</th></tr></thead>
-          <tbody>${catalogRows || `<tr><td colspan="3">Sin productos cargados.</td></tr>`}</tbody>
-        </table>
+        </details>
       </article>
 
       <article class="cp-card">
         <h3>Configuracion bot</h3>
+        <div class="cp-bot-badges">
+          <span class="cp-pill primary">${escapeHtml(state.plan.planLabel)}</span>
+          <span class="cp-pill">${escapeHtml(state.plan.channelLabel)}</span>
+          <span class="cp-pill">${escapeHtml(state.subscription.status)}</span>
+        </div>
         <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
         <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
+        <div class="cp-kv"><span>Canal principal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
+        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
         <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
-        <div class="cp-kv"><span>Tono</span><b>${escapeHtml(state.rules.tone || "No definido")}</b></div>
-        <div class="cp-kv"><span>Ultima fecha</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
+        <div class="cp-kv"><span>Fuente de precios</span><b>${escapeHtml(state.subscription.pricingSourceCompanyId || "-")}</b></div>
+        <div class="cp-kv"><span>Ultima actualizacion</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
       </article>
     </section>
   `;
@@ -2041,7 +2214,7 @@ app.get("/panel", requireClientAuth, async (req, res) => {
   }));
 });
 
-app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
+app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const saved = String(req.query.saved || "") === "1";
@@ -2259,7 +2432,7 @@ app.get("/panel/catalogo", requireClientAuth, async (req, res) => {
   }));
 });
 
-app.post("/panel/catalogo/save", requireClientAuth, async (req, res) => {
+app.post("/panel/catalogo/save", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
   const company = req.company;
   const id = company.id;
   const catalogJson = String(req.body.catalogJson || "[]");
@@ -2284,7 +2457,7 @@ app.post("/panel/catalogo/save", requireClientAuth, async (req, res) => {
   }
 });
 
-app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
+app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
@@ -2451,7 +2624,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   }));
 });
 
-app.post("/panel/pedidos/category", requireClientAuth, async (req, res) => {
+app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   const orderId = String(req.body.orderId || "").trim();
   const rawCategory = String(req.body.category || "").trim().toLowerCase();
@@ -2501,7 +2674,7 @@ app.post("/panel/pedidos/category", requireClientAuth, async (req, res) => {
   }
 });
 
-app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
+app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   const format = String(req.query.format || "csv").trim().toLowerCase();
   const {
@@ -2560,7 +2733,7 @@ app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
   }
 });
 
-app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
+app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("suscripcion"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const updated = String(req.query.updated || "") === "1";
@@ -2638,7 +2811,7 @@ app.get("/panel/suscripcion", requireClientAuth, async (req, res) => {
   }));
 });
 
-app.post("/panel/suscripcion/action", requireClientAuth, async (req, res) => {
+app.post("/panel/suscripcion/action", requireClientAuth, requireClientSectionAccess("suscripcion"), async (req, res) => {
   const company = req.company;
   const action = String(req.body.action || "").trim().toLowerCase();
   if (!["upgrade", "downgrade", "cancel"].includes(action)) {
@@ -2703,7 +2876,7 @@ app.post("/panel/suscripcion/action", requireClientAuth, async (req, res) => {
   }
 });
 
-app.get("/panel/cuenta", requireClientAuth, async (req, res) => {
+app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const saved = String(req.query.saved || "") === "1";
@@ -2777,7 +2950,7 @@ app.get("/panel/cuenta", requireClientAuth, async (req, res) => {
   }));
 });
 
-app.post("/panel/cuenta/save", requireClientAuth, async (req, res) => {
+app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cuenta"), async (req, res) => {
   const company = req.company;
   const id = company.id;
   const currentRules = parseJsonSafe(company.rulesJson || "{}", {});

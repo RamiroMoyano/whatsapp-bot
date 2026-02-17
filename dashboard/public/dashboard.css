@@ -269,13 +269,77 @@ select:focus {
 
 .company-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+.admin-company-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-company-actions {
+  width: min(430px, 100%);
+  display: grid;
+  gap: 8px;
+}
+
+.admin-company-access-form {
+  margin: 0;
+}
+
+.admin-company-access-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.admin-company-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn.small {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-home-header {
+  margin-bottom: 12px;
+}
+
+.admin-home-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.admin-home-main {
+  min-width: 0;
+}
+
+.admin-side-menu {
+  position: sticky;
+  top: 18px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-side-menu .btn {
+  justify-content: flex-start;
 }
 
 .table {
@@ -703,6 +767,10 @@ body.client-ui {
 }
 
 .cp-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid #e5ecff;
@@ -721,6 +789,18 @@ body.client-ui {
   border-color: #bfd4ff;
   background: linear-gradient(135deg, #e9f1ff, #f8fbff);
   color: #0f4cc9;
+}
+
+.cp-nav-link.locked {
+  border-style: dashed;
+  border-color: #cfdaef;
+  background: #f7f9fd;
+  color: #7f8cab;
+  pointer-events: none;
+}
+
+.cp-nav-lock {
+  opacity: 0.85;
 }
 
 .cp-logout {
@@ -1089,6 +1169,99 @@ body.client-ui {
   gap: 12px;
 }
 
+.cp-overview-grid {
+  align-items: start;
+}
+
+.cp-company-details {
+  border: 1px solid #dce8ff;
+  border-radius: 14px;
+  background: #f7faff;
+}
+
+.cp-company-details summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #12357b;
+}
+
+.cp-company-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-company-details[open] summary {
+  border-bottom: 1px solid #dce8ff;
+}
+
+.cp-details-hint {
+  font-size: 12px;
+  color: #6682b6;
+  font-weight: 600;
+}
+
+.cp-company-details-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.cp-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.cp-mini-kv {
+  border: 1px solid #dce8ff;
+  border-radius: 12px;
+  background: #f3f8ff;
+  padding: 10px 12px;
+}
+
+.cp-mini-kv span {
+  display: block;
+  color: #6f87b4;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.cp-mini-kv b {
+  color: #1a366c;
+  font-size: 14px;
+}
+
+.cp-bot-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+
+.cp-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #375889;
+  border: 1px solid #c8dbff;
+  background: #eff5ff;
+}
+
+.cp-pill.primary {
+  color: #fff;
+  border-color: #2e78ef;
+  background: linear-gradient(135deg, #2f7cf6, #1d56c6);
+}
+
 .cp-info-block {
   border: 1px solid #dce8ff;
   border-radius: 14px;
@@ -1164,6 +1337,26 @@ body.client-ui {
 }
 
 @media (max-width: 900px) {
+  .admin-home-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-side-menu {
+    position: static;
+  }
+
+  .admin-company-access-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-company-inline-actions {
+    justify-content: flex-start;
+  }
+
+  .cp-info-grid {
+    grid-template-columns: 1fr;
+  }
+
   .cp-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
