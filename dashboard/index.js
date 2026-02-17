@@ -318,6 +318,29 @@ function clientOrderCategoryLabel(category) {
   return "Pendiente";
 }
 
+function isOrderPaid(order) {
+  const raw = String(order?.paymentStatus || "").trim().toLowerCase();
+  return ["paid", "pagado", "approved", "aprobado", "settled", "cobrado"].some((v) => raw.includes(v));
+}
+
+function clientPaymentLabel(order) {
+  return isOrderPaid(order) ? "Pagado" : "No pagado";
+}
+
+function clientPaymentMethodLabel(order) {
+  const raw = String(order?.paymentMethod || "").trim().toLowerCase();
+  if (!raw || raw === "-" || raw === "null" || raw === "undefined") return "-";
+  if (raw.includes("efectivo") || raw.includes("cash")) return "Efectivo";
+  if (raw.includes("debito") || raw.includes("débito") || raw.includes("debit")) return "Debito";
+  if (raw.includes("transfer") || raw.includes("bank")) return "Transferencia";
+  if (raw.includes("credito") || raw.includes("crédito") || raw.includes("credit") || raw.includes("tarjeta")) {
+    return "Tarjeta de credito";
+  }
+  return raw
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 // ================= LOGIN =================
 app.get("/admin/login", (req, res) => {
   res.type("text/html").send(`
@@ -2299,7 +2322,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
     : ordersWithCategory.filter((order) => order.category === selectedStatus);
 
   const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
-  const paidCount = visibleOrders.filter((order) => String(order.paymentStatus || "").toLowerCase() === "paid").length;
+  const paidCount = visibleOrders.filter((order) => isOrderPaid(order)).length;
 
   const exportParams = new URLSearchParams();
   exportParams.set("range", selectedRange);
@@ -2315,8 +2338,8 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
       <td>${escapeHtml(formatDateLabel(order.createdAt))}</td>
       <td>${escapeHtml(order.name || order.contact || "-")}</td>
       <td>${formatMoney(toNumber(order.total), "USD")}</td>
-      <td>${escapeHtml(order.paymentStatus || "-")}</td>
-      <td>${escapeHtml(order.orderStatus || "-")}</td>
+      <td>${escapeHtml(clientPaymentLabel(order))}</td>
+      <td>${escapeHtml(clientPaymentMethodLabel(order))}</td>
       <td>
         <form method="POST" action="/panel/pedidos/category" class="cp-category-form">
           <input type="hidden" name="orderId" value="${escapeHtml(order.id || "")}" />
@@ -2336,7 +2359,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
   `).join("");
 
   const bodyHtml = `
-    ${updatedCategory ? `<div class="cp-alert success">Categoria de pedido actualizada.</div>` : ""}
+    ${updatedCategory ? `<div class="cp-alert success">Estado de pedido actualizado.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Pedidos activos</div><div class="cp-stat-value">${activeCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
@@ -2364,7 +2387,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
               </select>
             </div>
             <div>
-              <label>Categoria</label>
+              <label>Estado</label>
               <select name="status">
                 <option value="all" ${selectedStatus === "all" ? "selected" : ""}>Todas</option>
                 <option value="completed" ${selectedStatus === "completed" ? "selected" : ""}>Completados</option>
@@ -2399,7 +2422,7 @@ app.get("/panel/pedidos", requireClientAuth, async (req, res) => {
         <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
         <table class="cp-table">
-          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Estado</th><th>Categoria</th></tr></thead>
+          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="7">Sin pedidos para este filtro.</td></tr>`}</tbody>
         </table>
       </article>
@@ -2502,9 +2525,9 @@ app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
       Fecha: formatDateLabel(order.createdAt),
       Cliente: String(order.name || order.contact || "-"),
       Total: toNumber(order.total),
-      Pago: String(order.paymentStatus || "-"),
-      Estado: String(order.orderStatus || "-"),
-      Categoria: clientOrderCategoryLabel(order.category),
+      Pago: clientPaymentLabel(order),
+      "Medio de pago": clientPaymentMethodLabel(order),
+      Estado: clientOrderCategoryLabel(order.category),
     }));
 
     const dateStamp = new Date().toISOString().slice(0, 10);
@@ -2518,15 +2541,15 @@ app.get("/panel/pedidos/export", requireClientAuth, async (req, res) => {
       return res.send(xlsxBuffer);
     }
 
-    const csvHeaders = ["ID", "Fecha", "Cliente", "Total", "Pago", "Estado", "Categoria"];
+    const csvHeaders = ["ID", "Fecha", "Cliente", "Total", "Pago", "Medio de pago", "Estado"];
     const csvRows = exportRows.map((row) => [
       row.ID,
       row.Fecha,
       row.Cliente,
       row.Total,
       row.Pago,
+      row["Medio de pago"],
       row.Estado,
-      row.Categoria,
     ]);
     const csv = toCsvRows(csvHeaders, csvRows);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
