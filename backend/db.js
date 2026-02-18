@@ -16,6 +16,39 @@ const pool = new Pool({
   ssl,
 });
 
+const ROW_KEY_MAP = {
+  fromnumber: "fromNumber",
+  companyid: "companyId",
+  createdat: "createdAt",
+  updatedat: "updatedAt",
+  catalogjson: "catalogJson",
+  rulesjson: "rulesJson",
+  cartjson: "cartJson",
+  datajson: "dataJson",
+  lastorderid: "lastOrderId",
+  itemsjson: "itemsJson",
+  itemsdetailedjson: "itemsDetailedJson",
+  paymentstatus: "paymentStatus",
+  paymentmethod: "paymentMethod",
+  orderstatus: "orderStatus",
+  deliveredat: "deliveredAt",
+  workflowstate: "workflowState",
+  archivedat: "archivedAt",
+  archivereason: "archiveReason",
+};
+
+function normalizeRow(row) {
+  if (!row || typeof row !== "object") return row;
+  const out = { ...row };
+  for (const [rawKey, value] of Object.entries(row)) {
+    const mapped = ROW_KEY_MAP[String(rawKey || "").toLowerCase()];
+    if (mapped && out[mapped] === undefined) {
+      out[mapped] = value;
+    }
+  }
+  return out;
+}
+
 function toPgSql(sql) {
   let idx = 0;
   return String(sql || "").replace(/\?/g, () => `$${++idx}`);
@@ -34,11 +67,11 @@ export const db = {
     return {
       async get(...params) {
         const res = await query(sql, params);
-        return res.rows[0];
+        return normalizeRow(res.rows[0]);
       },
       async all(...params) {
         const res = await query(sql, params);
-        return res.rows;
+        return Array.isArray(res.rows) ? res.rows.map(normalizeRow) : [];
       },
       async run(...params) {
         const res = await query(sql, params);
