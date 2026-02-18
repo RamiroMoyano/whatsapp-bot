@@ -802,8 +802,8 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
     }
 
     const providedPassword = String(req.body.clientPassword || "").trim();
-    const assignedPassword = providedPassword || rules.clientPassword || generateClientPassword();
-    rules.clientPassword = assignedPassword;
+    const assignedPassword = providedPassword || resolveClientPassword(rules, company) || generateClientPassword();
+    assignClientPassword(rules, assignedPassword);
 
     const prompt = String(req.body.prompt || "").trim() || company.prompt || "Sos el asistente de la empresa.";
 
@@ -1229,7 +1229,7 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
 
     const manualPassword = String(req.body.clientPassword || "").trim();
     if (manualPassword) {
-      rules.clientPassword = manualPassword;
+      assignClientPassword(rules, manualPassword);
     }
 
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
@@ -1320,7 +1320,7 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
     const company = await api(`/api/companies/${encodeURIComponent(id)}`);
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-    rules.clientPassword = nextPassword;
+    assignClientPassword(rules, nextPassword);
 
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
       method: "POST",
@@ -1637,7 +1637,7 @@ async function handleClientLogin(req, res) {
     const companyId = String(matched.id).trim();
     const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
     const rules = parseJsonSafe(company.rulesJson || "{}", {});
-    const expected = String(rules.clientPassword || company.clientPassword || "").trim();
+    const expected = resolveClientPassword(rules, company);
 
     if (!expected) {
       return res.status(400).send("La empresa no tiene password de cliente configurada");
@@ -1951,6 +1951,32 @@ function generateClientPassword(length = 10) {
     out += chars[Math.floor(Math.random() * chars.length)];
   }
   return out;
+}
+
+function resolveClientPassword(rules, company) {
+  const candidates = [
+    rules?.clientPassword,
+    rules?.clientPass,
+    rules?.password,
+    rules?.pass,
+    rules?.accessPassword,
+    rules?.auth?.clientPassword,
+    company?.clientPassword,
+    company?.password,
+  ];
+  for (const value of candidates) {
+    const normalized = String(value || "").trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function assignClientPassword(rules, password) {
+  const normalized = String(password || "").trim();
+  if (!normalized || !rules || typeof rules !== "object") return;
+  rules.clientPassword = normalized;
+  rules.clientPass = normalized;
+  rules.password = normalized;
 }
 
 function extractClientState(company, options = {}) {
@@ -3071,7 +3097,7 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {
-    rules.clientPassword = newPassword;
+    assignClientPassword(rules, newPassword);
   }
 
   try {

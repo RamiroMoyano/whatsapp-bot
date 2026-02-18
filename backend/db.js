@@ -133,7 +133,21 @@ CREATE TABLE IF NOT EXISTS orders (
         '{"tone":"empatico","emergencyKeywords":["urgente","accidente"],"allowHuman":true}',
         NOW()
       )
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE SET
+      name = EXCLUDED.name,
+      prompt = CASE
+        WHEN companies.prompt IS NULL OR btrim(companies.prompt) = '' THEN EXCLUDED.prompt
+        ELSE companies.prompt
+      END,
+      catalogJson = CASE
+        WHEN companies.catalogJson IS NULL OR btrim(companies.catalogJson) = '' OR btrim(companies.catalogJson) = '[]'
+          THEN EXCLUDED.catalogJson
+        ELSE companies.catalogJson
+      END,
+      rulesJson = CASE
+        WHEN companies.rulesJson IS NULL OR btrim(companies.rulesJson) = '' OR btrim(companies.rulesJson) = '{}'
+          THEN EXCLUDED.rulesJson
+        ELSE companies.rulesJson
+      END;
   `);
 }
-
