@@ -802,7 +802,8 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
     }
 
     const providedPassword = String(req.body.clientPassword || "").trim();
-    rules.clientPassword = providedPassword || rules.clientPassword || generateClientPassword();
+    const assignedPassword = providedPassword || rules.clientPassword || generateClientPassword();
+    rules.clientPassword = assignedPassword;
 
     const prompt = String(req.body.prompt || "").trim() || company.prompt || "Sos el asistente de la empresa.";
 
@@ -816,7 +817,10 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
       },
     });
 
-    res.redirect(`/admin/company/${encodeURIComponent(id)}?created=1`);
+    const flashPwd = providedPassword
+      ? "manualPwd=1"
+      : `generatedPwd=${encodeURIComponent(assignedPassword)}`;
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?created=1&${flashPwd}`);
   } catch (e) {
     res.status(500).type("text/html").send(layout({
       title: "Nueva empresa",
@@ -1615,10 +1619,22 @@ function renderClientLoginPage() {
 
 async function handleClientLogin(req, res) {
   try {
-    const companyId = (req.body.companyId || "").trim();
+    const companyInput = (req.body.companyId || "").trim();
     const pass = (req.body.pass || "").trim();
-    if (!companyId || !pass) return res.status(400).send("Faltan datos");
+    if (!companyInput || !pass) return res.status(400).send("Faltan datos");
 
+    const allCompanies = await api("/api/companies");
+    const companies = Array.isArray(allCompanies) ? allCompanies : [];
+    const lookup = companyInput.toLowerCase();
+    const matched = companies.find((c) =>
+      String(c?.id || "").trim().toLowerCase() === lookup ||
+      String(c?.name || "").trim().toLowerCase() === lookup
+    );
+    if (!matched?.id) {
+      return res.status(401).send("Empresa no encontrada o credenciales incorrectas");
+    }
+
+    const companyId = String(matched.id).trim();
     const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
     const rules = parseJsonSafe(company.rulesJson || "{}", {});
     const expected = String(rules.clientPassword || company.clientPassword || "").trim();
