@@ -2181,8 +2181,11 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
 
         <main class="cp-main">
           <header class="cp-header">
-            <h1>${escapeHtml(title)}</h1>
-            <p>${escapeHtml(subtitle || "")}</p>
+            <div class="cp-header-copy">
+              <h1>${escapeHtml(title)}</h1>
+              <p>${escapeHtml(subtitle || "")}</p>
+            </div>
+            <div class="cp-header-visual" aria-hidden="true"></div>
           </header>
           ${bodyHtml}
         </main>
