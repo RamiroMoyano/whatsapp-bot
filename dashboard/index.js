@@ -1232,11 +1232,19 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
       assignClientPassword(rules, manualPassword);
     }
 
+    const nextName = String(req.body.name || company.name || id).trim() || id;
+    const nextPrompt = buildPromptFromBrandContext({
+      companyName: nextName,
+      brandManual: rules.brandManual,
+      companyPurpose: rules.companyPurpose,
+      fallbackPrompt: company.prompt || "",
+    });
+
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
       method: "POST",
       body: {
-        name: String(req.body.name || company.name || id).trim() || id,
-        prompt: company.prompt || "",
+        name: nextName,
+        prompt: nextPrompt,
         catalogJson: company.catalogJson || "[]",
         rulesJson: JSON.stringify(rules),
       },
@@ -1977,6 +1985,37 @@ function assignClientPassword(rules, password) {
   rules.clientPassword = normalized;
   rules.clientPass = normalized;
   rules.password = normalized;
+}
+
+function buildPromptFromBrandContext({ companyName, brandManual, companyPurpose, fallbackPrompt }) {
+  const safeName = String(companyName || "").trim() || "la empresa";
+  const manual = String(brandManual || "").trim();
+  const purpose = String(companyPurpose || "").trim();
+  const fallback = String(fallbackPrompt || "").trim();
+
+  // If there is no brand context yet, keep current prompt behavior.
+  if (!manual && !purpose) {
+    return fallback || `Sos el asistente comercial de ${safeName}.`;
+  }
+
+  const lines = [
+    `Sos el asistente comercial de ${safeName}.`,
+    "Habla en espanol (Argentina), claro, directo y orientado a resolver.",
+    "",
+    "Manual de marca:",
+    manual || "No definido.",
+    "",
+    "Objetivo de la empresa:",
+    purpose || "No definido.",
+    "",
+    "Reglas:",
+    "- No inventes datos que no esten en catalogo/politicas.",
+    "- Mantene coherencia con el manual de marca.",
+    "- Si falta informacion critica, pedila en una pregunta concreta.",
+    "- Busca avanzar a una accion clara (compra, reserva, derivacion, etc.).",
+  ];
+
+  return lines.join("\n");
 }
 
 function extractClientState(company, options = {}) {
