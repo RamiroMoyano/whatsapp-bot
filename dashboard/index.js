@@ -2541,6 +2541,12 @@ function buildPriceChart(values) {
 function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
   const unreadNotifications = getClientUnreadNotificationCount(company);
+  const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  const totalMessages = extractAdminInbox(rules).length;
+  const messageCounterHtml = active === "inicio"
+    ? `<div class="cp-msg-counter"><span>Contador de mensajes</span><b>${totalMessages}</b></div>`
+    : "";
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
@@ -2596,6 +2602,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
               <p>${escapeHtml(subtitle || "")}</p>
             </div>
             <div class="cp-header-actions">
+              ${messageCounterHtml}
               ${renderNotificationBell({ href: "/panel/pedidos#cp-inbox", count: unreadNotifications, className: "cp-notify-bell", title: "Mensajes y notificaciones" })}
               <div class="cp-header-visual" aria-hidden="true"></div>
             </div>
@@ -3064,6 +3071,12 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
       ? ordersWithWorkflow.filter((order) => order.workflow.archived)
       : ordersWithWorkflow.filter((order) => !order.workflow.archived && order.workflow.state === selectedStatus);
 
+  const createdCount = ordersWithWorkflow.length;
+  const closedCount = ordersWithWorkflow.filter((order) => ["completed", "rejected"].includes(order.workflow.state)).length;
+  const closeRate = createdCount > 0 ? Math.round((closedCount / createdCount) * 100) : 0;
+  const estimatedRevenue = ordersWithWorkflow.reduce((acc, order) => acc + toNumber(order.total), 0);
+  const avgTicket = createdCount > 0 ? estimatedRevenue / createdCount : 0;
+
   const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
   const paidCount = visibleOrders.filter((order) => isOrderPaid(order)).length;
 
@@ -3139,6 +3152,11 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Pedidos activos</div><div class="cp-stat-value">${activeCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos creados</div><div class="cp-stat-value">${createdCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos cerrados</div><div class="cp-stat-value">${closedCount}</div><div class="cp-stat-hint">completados + rechazados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Tasa de cierre</div><div class="cp-stat-value">${closeRate}%</div><div class="cp-stat-hint">sobre pedidos creados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Ticket promedio</div><div class="cp-stat-value">${formatMoney(avgTicket, "USD")}</div><div class="cp-stat-hint">valor medio por pedido</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Facturacion estimada</div><div class="cp-stat-value">${formatMoney(estimatedRevenue, "USD")}</div><div class="cp-stat-hint">total del periodo</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Completados</div><div class="cp-stat-value">${completedCount}</div><div class="cp-stat-hint">entregados/finalizados</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Pendientes</div><div class="cp-stat-value">${pendingCount}</div><div class="cp-stat-hint">en proceso</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Rechazados</div><div class="cp-stat-value">${rejectedCount}</div><div class="cp-stat-hint">cancelados</div></article>

@@ -1731,6 +1731,33 @@ body.client-ui::after {
   gap: 10px;
 }
 
+.cp-msg-counter {
+  min-width: 138px;
+  border: 1px solid rgba(137, 220, 255, 0.5);
+  border-radius: 12px;
+  background: rgba(6, 35, 82, 0.66);
+  padding: 8px 10px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  line-height: 1.1;
+  box-shadow: 0 0 14px rgba(43, 159, 255, 0.2);
+}
+
+.cp-msg-counter span {
+  font-size: 11px;
+  color: #9bc2f1;
+  font-weight: 700;
+}
+
+.cp-msg-counter b {
+  margin-top: 3px;
+  font-size: 21px;
+  color: #f2f9ff;
+  letter-spacing: 0.01em;
+}
+
 .cp-notify-bell {
   border-color: rgba(137, 220, 255, 0.58);
   background: rgba(5, 43, 93, 0.64);
@@ -2119,5 +2146,14 @@ body.client-ui::after {
 
   .cp-header-visual {
     display: none;
+  }
+
+  .cp-msg-counter {
+    min-width: 116px;
+    padding: 7px 9px;
+  }
+
+  .cp-msg-counter b {
+    font-size: 18px;
   }
 }
