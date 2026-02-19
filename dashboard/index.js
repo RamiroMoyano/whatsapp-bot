@@ -1341,6 +1341,7 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
     rules.aiEnabled = planTier !== "BASICO";
     rules.channelMode = channelMode;
     rules.channels = channelsFromMode(channelMode);
+    rules.allowHuman = true;
     if (!String(rules.botClass || "").trim()) {
       rules.botClass = defaultBotClassFromMode(channelMode);
     }
@@ -1400,6 +1401,7 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
     rules.botClassUpdatedAt = new Date().toISOString();
     rules.botCatalogProviderId = providerForPricing?.id || company.id;
     rules.botCatalogProviderName = providerForPricing?.name || providerForPricing?.id || company.id;
+    rules.allowHuman = true;
 
     const catalogOptions = extractCatalogBotOptions(providerForPricing);
     const selectedCatalog = catalogOptions.find((item) => item.name.toLowerCase() === botClass.toLowerCase());
@@ -1407,18 +1409,15 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
       rules.botCatalogId = selectedCatalog.id;
     }
 
-    const syncPlan = String(req.body.syncPlan || "") === "1";
-    if (syncPlan) {
-      const inferredTier = normalizePlanTier(botClass);
-      const inferredChannel = normalizeChannelMode(botClass);
-      if (inferredTier) {
-        rules.planTier = inferredTier;
-        rules.aiEnabled = inferredTier !== "BASICO";
-      }
-      if (inferredChannel) {
-        rules.channelMode = inferredChannel;
-        rules.channels = channelsFromMode(inferredChannel);
-      }
+    const inferredTier = normalizePlanTier(botClass);
+    const inferredChannel = normalizeChannelMode(botClass);
+    if (inferredTier) {
+      rules.planTier = inferredTier;
+      rules.aiEnabled = inferredTier !== "BASICO";
+    }
+    if (inferredChannel) {
+      rules.channelMode = inferredChannel;
+      rules.channels = channelsFromMode(inferredChannel);
     }
 
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
@@ -2010,7 +2009,7 @@ function renderClientLoginPage() {
 
           <div class="login-actions">
             <button class="btn primary">Entrar</button>
-            <a class="btn secondary" href="/admin/login">Soy Admin</a>
+            <a class="btn secondary" href="/panel/forgot">Olvide mi contrasena</a>
           </div>
         </form>
       </div>
@@ -2110,7 +2109,7 @@ function normalizePlanTier(value) {
   if (!raw) return "";
   if (raw.includes("pro")) return "PRO";
   if (raw.includes("lite")) return "LITE";
-  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai")) return "BASICO";
+  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai") || raw.includes("base")) return "BASICO";
   return "";
 }
 
@@ -2302,7 +2301,9 @@ function extractPlanInfo(company, rules) {
     ""
   ).trim();
 
+  const tierFromBotClass = normalizePlanTier(botClassRaw);
   const rawTier =
+    tierFromBotClass ||
     normalizePlanTier(
       rules?.planTier ||
       rules?.botPlan ||
@@ -2430,7 +2431,8 @@ function buildPromptFromBrandContext({ companyName, brandManual, companyPurpose,
 
 function extractClientState(company, options = {}) {
   const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
-  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  const rules = rulesRaw && typeof rulesRaw === "object" ? { ...rulesRaw } : {};
+  rules.allowHuman = true;
   const plan = extractPlanInfo(company, rules);
   const profile = extractCompanyProfile(rules);
 
@@ -2692,6 +2694,41 @@ app.get("/c/login", (req, res) => {
   res.type("text/html").send(renderClientLoginPage());
 });
 
+app.get("/panel/forgot", (req, res) => {
+  res.type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Recuperar acceso</title>
+  </head>
+  <body>
+    <div class="bs-login">
+      <div class="bs-bg" style="background-image:url('/img/login-tech-bg.png')"></div>
+      <div class="bs-vignette"></div>
+      <div class="bs-card">
+        <div class="bs-brand">
+          <div class="bs-dot"></div>
+          <div>
+            <div class="bs-title">BabySteps</div>
+            <div class="bs-subtitle">Acceso clientes</div>
+          </div>
+        </div>
+        <h2 class="bs-h2">Recuperar contrasena</h2>
+        <p class="muted">Solicita restablecimiento al administrador desde el panel de admin o por soporte.</p>
+        <div class="login-actions">
+          <a class="btn secondary" href="/panel/login">Volver al login</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+  `);
+});
+app.get("/c/forgot", (req, res) => res.redirect("/panel/forgot"));
+
 app.post("/panel/login", handleClientLogin);
 app.post("/c/login", handleClientLogin);
 
@@ -2755,13 +2792,9 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
           <span class="cp-pill">${escapeHtml(state.subscription.status)}</span>
         </div>
         <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
-        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
+        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.subscription.activeBotName || state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Canal principal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
-        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
-        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
-        <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
-        <div class="cp-kv"><span>Fuente de precios</span><b>${escapeHtml(state.subscription.pricingSourceCompanyId || "-")}</b></div>
-        <div class="cp-kv"><span>Ultima actualizacion</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
+        <div class="cp-kv"><span>Precio</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
       </article>
     </section>
   `;
@@ -3049,7 +3082,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   const pendingCount = ordersWithWorkflow.filter((order) => order.workflow.state === "pending").length;
   const rejectedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "rejected").length;
   const archivedCount = ordersWithWorkflow.filter((order) => order.workflow.archived).length;
-  const activeCount = ordersWithWorkflow.filter((order) => !order.workflow.archived).length;
 
   const visibleOrders = selectedStatus === "all"
     ? ordersWithWorkflow.filter((order) => !order.workflow.archived)
@@ -3062,9 +3094,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   const closeRate = createdCount > 0 ? Math.round((closedCount / createdCount) * 100) : 0;
   const estimatedRevenue = ordersWithWorkflow.reduce((acc, order) => acc + toNumber(order.total), 0);
   const avgTicket = createdCount > 0 ? estimatedRevenue / createdCount : 0;
-
-  const totalRevenue = visibleOrders.reduce((acc, order) => acc + toNumber(order.total), 0);
-  const paidCount = visibleOrders.filter((order) => isOrderPaid(order)).length;
 
   const exportParams = new URLSearchParams();
   exportParams.set("range", selectedRange);
@@ -3119,18 +3148,14 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     ${updatedCategory ? `<div class="cp-alert success">Estado de pedido actualizado.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Pedidos activos</div><div class="cp-stat-value">${activeCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Pedidos creados</div><div class="cp-stat-value">${createdCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos pendientes</div><div class="cp-stat-value">${pendingCount}</div><div class="cp-stat-hint">en proceso</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos completados</div><div class="cp-stat-value">${completedCount}</div><div class="cp-stat-hint">entregados/finalizados</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Pedidos cerrados</div><div class="cp-stat-value">${closedCount}</div><div class="cp-stat-hint">completados + rechazados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos rechazados</div><div class="cp-stat-value">${rejectedCount}</div><div class="cp-stat-hint">cancelados</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedidos archivados</div><div class="cp-stat-value">${archivedCount}</div><div class="cp-stat-hint">fuera de gestion activa</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Tasa de cierre</div><div class="cp-stat-value">${closeRate}%</div><div class="cp-stat-hint">sobre pedidos creados</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Ticket promedio</div><div class="cp-stat-value">${formatMoney(avgTicket, "USD")}</div><div class="cp-stat-hint">valor medio por pedido</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Facturacion estimada</div><div class="cp-stat-value">${formatMoney(estimatedRevenue, "USD")}</div><div class="cp-stat-hint">total del periodo</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Completados</div><div class="cp-stat-value">${completedCount}</div><div class="cp-stat-hint">entregados/finalizados</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Pendientes</div><div class="cp-stat-value">${pendingCount}</div><div class="cp-stat-hint">en proceso</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Rechazados</div><div class="cp-stat-value">${rejectedCount}</div><div class="cp-stat-hint">cancelados</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Archivados</div><div class="cp-stat-value">${archivedCount}</div><div class="cp-stat-hint">fuera de gestion activa</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Pagados</div><div class="cp-stat-value">${paidCount}</div><div class="cp-stat-hint">segun filtro</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Facturacion</div><div class="cp-stat-value">${formatMoney(totalRevenue, "USD")}</div><div class="cp-stat-hint">segun filtro</div></article>
     </section>
 
     <section class="cp-grid">
