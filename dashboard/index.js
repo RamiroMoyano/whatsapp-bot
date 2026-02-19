@@ -19,6 +19,7 @@ app.get("/c/logout", (req, res) => res.redirect("/panel/logout"));
 app.get("/c/catalogo", (req, res) => res.redirect("/panel/catalogo"));
 app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
 app.get("/c/pedidos/export", (req, res) => res.redirect("/panel/pedidos/export"));
+app.get("/c/soporte", (req, res) => res.redirect("/panel/soporte"));
 app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
 app.get("/c/cuenta", (req, res) => res.redirect("/panel/cuenta"));
 
@@ -2551,6 +2552,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
     { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
     { key: "pedidos", label: "Pedidos", href: "/panel/pedidos" },
+    { key: "soporte", label: "Soporte", href: "/panel/soporte" },
     { key: "suscripcion", label: "Suscripcion", href: "/panel/suscripcion" },
     { key: "cuenta", label: "Cuenta", href: "/panel/cuenta" },
   ];
@@ -2603,7 +2605,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
             </div>
             <div class="cp-header-actions">
               ${messageCounterHtml}
-              ${renderNotificationBell({ href: "/panel/pedidos#cp-inbox", count: unreadNotifications, className: "cp-notify-bell", title: "Mensajes y notificaciones" })}
+              ${renderNotificationBell({ href: "/panel/soporte#cp-inbox", count: unreadNotifications, className: "cp-notify-bell", title: "Mensajes y notificaciones" })}
               <div class="cp-header-visual" aria-hidden="true"></div>
             </div>
           </header>
@@ -2635,13 +2637,14 @@ function getDashboardAccessForCompany(company) {
 function canAccessClientSection(dashboardAccess, sectionKey) {
   if (!dashboardAccess?.enabled) return false;
   if (dashboardAccess.mode !== "limited") return true;
-  return ["catalogo", "suscripcion", "cuenta"].includes(sectionKey);
+  return ["catalogo", "suscripcion", "cuenta", "soporte"].includes(sectionKey);
 }
 
 function renderClientAccessDeniedPage({ company, sectionKey, dashboardAccess }) {
   const labelMap = {
     inicio: "Resumen",
     pedidos: "Pedidos",
+    soporte: "Soporte",
     catalogo: "Catalogo",
     suscripcion: "Suscripcion",
     cuenta: "Cuenta",
@@ -3020,7 +3023,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   let orders = [];
   let fetchError = "";
   const updatedCategory = String(req.query.updatedCategory || "") === "1";
-  const messageSent = String(req.query.messageSent || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const {
     selectedRange,
@@ -3032,26 +3034,10 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     toInput,
   } = parseClientOrdersFilters(req.query);
 
-  const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
-  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-  let inbox = extractAdminInbox(rules);
-
   try {
     orders = await fetchCompanyOrders(company.id, filterFrom, filterTo, 500);
   } catch (e) {
     fetchError = e?.message || String(e);
-  }
-
-  const hasUnreadAdminMessages = inbox.some((item) => item.sender === "admin" && !item.readByClient);
-  if (hasUnreadAdminMessages) {
-    inbox = inbox.map((item) => (item.sender === "admin" ? { ...item, readByClient: true } : item));
-    setAdminInbox(rules, inbox);
-    try {
-      await saveCompanyRules(company, rules);
-      company.rulesJson = JSON.stringify(rules);
-    } catch {
-      // no-op: if save fails we still render messages
-    }
   }
 
   const ordersWithWorkflow = orders.map((order) => ({
@@ -3087,7 +3073,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   if (toInput) exportParams.set("to", toInput);
   const exportCsvHref = `/panel/pedidos/export?format=csv&${exportParams.toString()}`;
   const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
-  const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
 
   const rows = visibleOrders.map((order) => `
     <tr>
@@ -3130,25 +3115,8 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     </tr>
   `).join("");
 
-  const inboxRows = inbox
-    .slice()
-    .reverse()
-    .map((item) => `
-      <article class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
-        <div class="cp-msg-head">
-          <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
-          <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
-          <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
-          ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
-        </div>
-        <p class="cp-msg-text">${toHtmlText(item.text)}</p>
-      </article>
-    `)
-    .join("");
-
   const bodyHtml = `
     ${updatedCategory ? `<div class="cp-alert success">Estado de pedido actualizado.</div>` : ""}
-    ${messageSent ? `<div class="cp-alert success">Mensaje enviado al admin.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Pedidos activos</div><div class="cp-stat-value">${activeCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
@@ -3221,36 +3189,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         </table>
       </article>
 
-      <article class="cp-card cp-span-3" id="cp-inbox">
-        <div class="cp-card-head"><h3>Buzon de mensajes con Admin</h3><span>${inbox.length} mensajes</span></div>
-        <form method="POST" action="/panel/pedidos/messages" class="cp-form">
-          <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
-          <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
-          <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
-          <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
-          <div class="cp-grid-2">
-            <div>
-              <label>Pedido (opcional)</label>
-              <input name="orderId" placeholder="Ej: PED-123ABC" />
-            </div>
-            <div>
-              <label>Estado del tema</label>
-              <select name="statusMessage">
-                <option value="open">Abierto</option>
-                <option value="resolved">Resuelto</option>
-              </select>
-            </div>
-          </div>
-          <label>Mensaje para admin</label>
-          <textarea name="messageText" rows="3" maxlength="1000" placeholder="Describe el problema, consulta o pedido de ayuda"></textarea>
-          <div class="cp-actions">
-            <button class="cp-btn primary" type="submit">Enviar mensaje</button>
-          </div>
-        </form>
-        <div class="cp-msg-list">
-          ${inboxRows || `<div class="cp-empty">Sin mensajes todavia.</div>`}
-        </div>
-      </article>
     </section>
     <script>
       (() => {
@@ -3340,7 +3278,101 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
   }
 });
 
-app.post("/panel/pedidos/messages", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
+  const company = req.company;
+  const messageSent = String(req.query.messageSent || "") === "1";
+  const errorMsg = String(req.query.error || "").trim();
+  const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
+  try {
+    const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
+    const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+    let inbox = extractAdminInbox(rules);
+
+    const hasUnreadAdminMessages = inbox.some((item) => item.sender === "admin" && !item.readByClient);
+    if (hasUnreadAdminMessages) {
+      inbox = inbox.map((item) => (item.sender === "admin" ? { ...item, readByClient: true } : item));
+      setAdminInbox(rules, inbox);
+      try {
+        await saveCompanyRules(currentCompany, rules);
+        currentCompany.rulesJson = JSON.stringify(rules);
+      } catch {
+        // no-op: keep rendering support even if read tracking fails
+      }
+    }
+
+    const openCount = inbox.filter((item) => item.status === "open").length;
+    const resolvedCount = inbox.filter((item) => item.status === "resolved").length;
+    const unreadCount = inbox.filter((item) => item.sender === "admin" && !item.readByClient).length;
+    const inboxRows = inbox
+      .slice()
+      .reverse()
+      .map((item) => `
+        <article class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
+          <div class="cp-msg-head">
+            <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
+            <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
+            <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
+            ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
+          </div>
+          <p class="cp-msg-text">${toHtmlText(item.text)}</p>
+        </article>
+      `)
+      .join("");
+
+    const bodyHtml = `
+      ${messageSent ? `<div class="cp-alert success">Mensaje enviado al admin.</div>` : ""}
+      ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
+      <section class="cp-stats">
+        <article class="cp-stat"><div class="cp-stat-label">Mensajes</div><div class="cp-stat-value">${inbox.length}</div><div class="cp-stat-hint">total historial</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Abiertos</div><div class="cp-stat-value">${openCount}</div><div class="cp-stat-hint">pendientes de gestion</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Resueltos</div><div class="cp-stat-value">${resolvedCount}</div><div class="cp-stat-hint">cerrados</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Sin leer</div><div class="cp-stat-value">${unreadCount}</div><div class="cp-stat-hint">respuestas del admin</div></article>
+      </section>
+
+      <section class="cp-grid">
+        <article class="cp-card cp-span-3" id="cp-inbox">
+          <div class="cp-card-head"><h3>Soporte con admin</h3><span>${inbox.length} mensajes</span></div>
+          <form method="POST" action="/panel/soporte/messages" class="cp-form">
+            <div class="cp-grid-2">
+              <div>
+                <label>Pedido relacionado (opcional)</label>
+                <input name="orderId" placeholder="Ej: PED-123ABC" />
+              </div>
+              <div>
+                <label>Estado del tema</label>
+                <select name="statusMessage">
+                  <option value="open">Abierto</option>
+                  <option value="resolved">Resuelto</option>
+                </select>
+              </div>
+            </div>
+            <label>Mensaje para soporte</label>
+            <textarea name="messageText" rows="3" maxlength="1000" placeholder="Describe tu consulta, incidencia o solicitud"></textarea>
+            <div class="cp-actions">
+              <button class="cp-btn primary" type="submit">Enviar a soporte</button>
+            </div>
+          </form>
+          <div class="cp-msg-list">
+            ${inboxRows || `<div class="cp-empty">Sin mensajes todavia.</div>`}
+          </div>
+        </article>
+      </section>
+    `;
+
+    return res.type("text/html").send(renderClientPage({
+      company: currentCompany,
+      active: "soporte",
+      title: "Soporte",
+      subtitle: `${currentCompany.name || currentCompany.id} - comunicacion con admin`,
+      bodyHtml,
+    }));
+  } catch (e) {
+    return res.status(500).send(`No se pudo cargar soporte: ${escapeHtml(e?.message || e)}`);
+  }
+});
+
+app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
   const company = req.company;
   const id = String(company?.id || "").trim();
   const messageText = String(req.body.messageText || "").trim();
@@ -3348,29 +3380,12 @@ app.post("/panel/pedidos/messages", requireClientAuth, requireClientSectionAcces
   const statusRaw = String(req.body.statusMessage || "").trim().toLowerCase();
   const status = statusRaw === "resolved" ? "resolved" : "open";
 
-  const redirectParams = new URLSearchParams();
-  const range = String(req.body.range || "").trim();
-  const selectedStatus = String(req.body.status || "").trim();
-  const from = String(req.body.from || "").trim();
-  const to = String(req.body.to || "").trim();
-  if (range) redirectParams.set("range", range);
-  if (selectedStatus) redirectParams.set("status", selectedStatus);
-  if (from) redirectParams.set("from", from);
-  if (to) redirectParams.set("to", to);
-
-  const redirectBase = () => {
-    const query = redirectParams.toString();
-    return query ? `/panel/pedidos?${query}` : "/panel/pedidos";
-  };
-
   if (!messageText) {
-    const next = redirectBase();
-    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Escribe un mensaje antes de enviar")}`);
+    return res.redirect(`/panel/soporte?error=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
   }
 
   if (messageText.length > 1000) {
-    const next = redirectBase();
-    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("El mensaje supera 1000 caracteres")}`);
+    return res.redirect(`/panel/soporte?error=${encodeURIComponent("El mensaje supera 1000 caracteres")}#cp-inbox`);
   }
 
   try {
@@ -3393,12 +3408,14 @@ app.post("/panel/pedidos/messages", requireClientAuth, requireClientSectionAcces
     setAdminInbox(rules, inbox);
     await saveCompanyRules(currentCompany, rules);
 
-    const next = redirectBase();
-    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}messageSent=1#cp-inbox`);
+    return res.redirect("/panel/soporte?messageSent=1#cp-inbox");
   } catch (e) {
-    const next = redirectBase();
-    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
+    return res.redirect(`/panel/soporte?error=${encodeURIComponent(e?.message || e)}#cp-inbox`);
   }
+});
+
+app.post("/panel/pedidos/messages", requireClientAuth, async (req, res) => {
+  return res.redirect("/panel/soporte");
 });
 
 app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
@@ -3467,8 +3484,7 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
 app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("suscripcion"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
-  const updated = String(req.query.updated || "") === "1";
-  const noop = String(req.query.noop || "") === "1";
+  const requested = String(req.query.requested || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const action = String(req.query.action || "").trim().toLowerCase();
   const actionLabel = action === "upgrade"
@@ -3480,7 +3496,7 @@ app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("sus
         : "Actualizacion";
 
   const bodyHtml = `
-    ${updated ? `<div class="cp-alert success">${escapeHtml(actionLabel)} aplicado correctamente${noop ? " (sin cambios de nivel)." : "."}</div>` : ""}
+    ${requested ? `<div class="cp-alert success">Solicitud de ${escapeHtml(actionLabel)} enviada al admin para revision.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div><div class="cp-stat-hint">actual</div></article>
@@ -3507,6 +3523,7 @@ app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("sus
         <div class="cp-kv"><span>Prorrateo upgrade</span><b>${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}</b></div>
         <div class="cp-kv"><span>Proxima fecha</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
         <div class="cp-kv"><span>Renovacion</span><b>${state.subscription.autoRenew ? "Automatica" : "Manual"}</b></div>
+        <p class="cp-note" style="margin-top:10px">Los botones envian una solicitud al admin. El cambio se aplica cuando el admin lo confirme.</p>
         <div class="cp-actions" style="margin-top:12px">
           <form method="POST" action="/panel/suscripcion/action">
             <input type="hidden" name="action" value="downgrade" />
@@ -3551,57 +3568,42 @@ app.post("/panel/suscripcion/action", requireClientAuth, requireClientSectionAcc
 
   try {
     const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
-    const providerCompany = await getBotCatalogProviderCompany(currentCompany);
     const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-    const currentPlan = extractPlanInfo(currentCompany, rules);
-    const currentTier = normalizePlanTier(rules.planTier || currentPlan.tier) || currentPlan.tier || "BASICO";
-    const channelMode = normalizeChannelMode(rules.channelMode || currentPlan.channelMode) || "whatsapp";
+    const { state } = await loadClientStateWithProvider(currentCompany);
+    const inbox = extractAdminInbox(rules);
+    const actionLabel = action === "upgrade"
+      ? "upgrade"
+      : action === "downgrade"
+        ? "downgrade"
+        : "cancelacion";
+    const supportText = [
+      `[Solicitud de suscripcion]`,
+      `Empresa: ${currentCompany.name || currentCompany.id} (${currentCompany.id})`,
+      `Accion solicitada: ${actionLabel}`,
+      `Plan actual: ${state.plan.fullLabel}`,
+      `Clase bot actual: ${state.plan.botClass}`,
+      `Monto actual: ${formatMoney(state.subscription.amount, state.subscription.currency)}`,
+      `Cobro siguiente: ${formatMoney(state.subscription.nextAmount, state.subscription.currency)}`,
+      `Fecha solicitud: ${new Date().toISOString()}`,
+    ].join("\n");
 
-    let nextTier = currentTier;
-    let noop = false;
-
-    if (action === "upgrade") {
-      nextTier = tierFromRank(Math.min(2, tierRank(currentTier) + 1));
-      noop = nextTier === currentTier;
-    } else if (action === "downgrade") {
-      nextTier = tierFromRank(Math.max(0, tierRank(currentTier) - 1));
-      noop = nextTier === currentTier;
-    }
-
-    if (action === "cancel") {
-      rules.subscriptionStatus = "Cancelada";
-      rules.autoRenew = false;
-      rules.subscriptionCancelledAt = new Date().toISOString();
-    } else {
-      rules.planTier = nextTier;
-      rules.aiEnabled = nextTier !== "BASICO";
-      rules.channelMode = channelMode;
-      rules.channels = channelsFromMode(channelMode);
-      rules.subscriptionStatus = "Activa";
-      rules.autoRenew = true;
-
-      const providerCatalog = extractCatalogEntriesForCompany(providerCompany || currentCompany);
-      const selected = findCatalogItemForTierAndChannel(providerCatalog, nextTier, channelMode);
-      if (selected) {
-        rules.botClass = selected.name;
-        if (selected.id) rules.botCatalogId = selected.id;
-      } else if (!String(rules.botClass || "").trim()) {
-        rules.botClass = defaultBotClassFromMode(channelMode);
-      }
-    }
-
-    await api(`/api/companies/${encodeURIComponent(company.id)}/save`, {
-      method: "POST",
-      body: {
-        name: String(currentCompany.name || company.id).trim() || company.id,
-        prompt: currentCompany.prompt || "",
-        catalogJson: currentCompany.catalogJson || "[]",
-        rulesJson: JSON.stringify(rules),
-      },
+    inbox.push({
+      id: createInboxMessageId(),
+      sender: "client",
+      text: supportText,
+      orderId: "subscription",
+      createdAt: new Date().toISOString(),
+      status: "open",
+      readByAdmin: false,
+      readByClient: true,
     });
+    rules.lastSubscriptionRequestAt = new Date().toISOString();
+    rules.lastSubscriptionRequestType = action;
+    setAdminInbox(rules, inbox);
+    await saveCompanyRules(currentCompany, rules);
 
-    res.redirect(`/panel/suscripcion?updated=1&action=${encodeURIComponent(action)}${noop ? "&noop=1" : ""}`);
+    res.redirect(`/panel/suscripcion?requested=1&action=${encodeURIComponent(action)}`);
   } catch (e) {
     res.redirect(`/panel/suscripcion?error=${encodeURIComponent(e?.message || e)}`);
   }

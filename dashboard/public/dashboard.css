@@ -1658,10 +1658,14 @@ body.client-ui::after {
 }
 
 .cp-nav-link:nth-child(4) span::before {
-  content: "\1F4B3";
+  content: "\1F6E0";
 }
 
 .cp-nav-link:nth-child(5) span::before {
+  content: "\1F4B3";
+}
+
+.cp-nav-link:nth-child(6) span::before {
   content: "\1F464";
 }
 
