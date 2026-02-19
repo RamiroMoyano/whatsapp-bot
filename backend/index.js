@@ -320,6 +320,118 @@ function channelsFromMode(mode) {
   return ["whatsapp"];
 }
 
+function aiModeFromPlanTier(tierRaw) {
+  const tier = String(tierRaw || "").trim().toUpperCase();
+  if (tier === "PRO") return "pro";
+  if (tier === "LITE") return "lite";
+  return "off";
+}
+
+function resolveAiModeFromRules(rulesRaw) {
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+
+  const tierMode = aiModeFromPlanTier(rules.planTier);
+  if (tierMode !== "off") return tierMode;
+
+  const inferredTier = normalizePlanTierFromText(
+    String(rules.botClass || rules.subscriptionPlan || rules.planName || "")
+  );
+  const inferredMode = aiModeFromPlanTier(inferredTier);
+  if (inferredMode !== "off") return inferredMode;
+
+  if (rules.aiEnabled === true) return "lite";
+  return "off";
+}
+
+function resetAiMemoryForMode(data) {
+  data.aiCount = 0;
+  data.aiCountDate = "";
+  data.aiHistory = [];
+  data.lastAiAt = 0;
+}
+
+function applyCompanyAiModeToSessionData(dataRaw, nextModeRaw, options = {}) {
+  const { force = false, source = "company-rules" } = options;
+  const data = dataRaw && typeof dataRaw === "object" ? dataRaw : {};
+
+  if (!force && data.aiModeManual === true) {
+    return { changed: false, skippedManual: true, mode: String(data.aiMode || "off").toLowerCase() };
+  }
+
+  const currentMode = ["lite", "pro"].includes(String(data.aiMode || "").toLowerCase())
+    ? String(data.aiMode || "").toLowerCase()
+    : "off";
+  const nextMode = ["lite", "pro"].includes(String(nextModeRaw || "").toLowerCase())
+    ? String(nextModeRaw || "").toLowerCase()
+    : "off";
+
+  let changed = false;
+
+  if (force && data.aiModeManual) {
+    delete data.aiModeManual;
+    changed = true;
+  }
+
+  if (data.aiModeSource !== source) {
+    data.aiModeSource = source;
+    changed = true;
+  }
+
+  if (currentMode !== nextMode) {
+    data.aiMode = nextMode;
+    resetAiMemoryForMode(data);
+    changed = true;
+  }
+
+  return { changed, skippedManual: false, mode: nextMode };
+}
+
+async function syncSessionAiModeFromCompany(session, options = {}) {
+  const company = await getCompanySafe(session);
+  const mode = resolveAiModeFromRules(company?.rules || {});
+  const result = applyCompanyAiModeToSessionData(session.data, mode, {
+    ...options,
+    source: `company:${String(company?.id || "").toLowerCase() || "unknown"}`,
+  });
+  return { ...result, companyId: String(company?.id || "").toLowerCase() };
+}
+
+async function syncCompanySessionsAiMode(companyIdRaw, rulesRaw, options = {}) {
+  const { force = false } = options;
+  const companyId = String(companyIdRaw || "").trim().toLowerCase();
+  if (!companyId) {
+    return { mode: "off", scanned: 0, updated: 0, skippedManual: 0 };
+  }
+
+  const mode = resolveAiModeFromRules(rulesRaw || {});
+  const rows = await db.prepare(`SELECT fromNumber,dataJson FROM sessions`).all();
+  let scanned = 0;
+  let updated = 0;
+  let skippedManual = 0;
+
+  for (const row of rows) {
+    const data = parseJsonSafe(row?.dataJson || "{}", {});
+    const rowCompanyId = String(data?.companyId || "babystepsbots").trim().toLowerCase();
+    if (rowCompanyId !== companyId) continue;
+    scanned += 1;
+
+    const result = applyCompanyAiModeToSessionData(data, mode, {
+      force,
+      source: `company:${companyId}`,
+    });
+    if (result.skippedManual) {
+      skippedManual += 1;
+      continue;
+    }
+    if (!result.changed) continue;
+
+    await db.prepare(`UPDATE sessions SET dataJson=? WHERE fromNumber=?`).run(JSON.stringify(data), row.fromNumber);
+    updated += 1;
+  }
+
+  return { mode, scanned, updated, skippedManual };
+}
+
 function formatCatalogChoices(catalogItems) {
   if (!catalogItems.length) return "Sin opciones de catalogo.";
   return catalogItems
@@ -751,7 +863,8 @@ app.post("/api/companies/:id/save", requireApiAuth, async (req, res) => {
     id
   );
 
-  res.json({ ok: true });
+  const syncResult = await syncCompanySessionsAiMode(id, syncedRules, { force: true });
+  res.json({ ok: true, aiSync: syncResult });
 });
 
 app.post("/api/companies/:id/delete", requireApiAuth, async (req, res) => {
@@ -803,6 +916,8 @@ app.post("/api/assignments", requireApiAuth, async (req, res) => {
     if (s) {
       const data = JSON.parse(s.dataJson || "{}");
       data.companyId = companyId;
+      const tempSession = { data };
+      await syncSessionAiModeFromCompany(tempSession, { force: true });
       await db.prepare(`UPDATE sessions SET dataJson=? WHERE fromNumber=?`).run(JSON.stringify(data), fromNumber);
     }
 
@@ -973,10 +1088,20 @@ app.post("/whatsapp", async (req, res) => {
   if (from && !cmd.startsWith("admin")) await setSetting("last_customer", from);
 
   const session = await getSession(from);
+  let sessionDirty = false;
 
   const map = await db.prepare(`SELECT companyId FROM customer_company WHERE fromNumber=?`).get(from);
-  if (map?.companyId) {
+  if (map?.companyId && session.data.companyId !== map.companyId) {
     session.data.companyId = map.companyId;
+    sessionDirty = true;
+  }
+
+  const sessionModeSync = await syncSessionAiModeFromCompany(session);
+  if (sessionModeSync.changed) {
+    sessionDirty = true;
+  }
+
+  if (sessionDirty) {
     await saveSession(session);
   }
 
@@ -1052,6 +1177,7 @@ app.post("/whatsapp", async (req, res) => {
 
       const s2 = await getSession(target);
       s2.data.companyId = companyId;
+      await syncSessionAiModeFromCompany(s2, { force: true });
       await saveSession(s2);
 
       return respond(res, `Empresa para ${target}: ${row.id} (${row.name}) OK`);
@@ -1156,10 +1282,11 @@ app.post("/whatsapp", async (req, res) => {
       syncedRules.botCatalogProviderName = catalogCtx.sourceName;
 
       await db.prepare(`UPDATE companies SET rulesJson=? WHERE id=?`).run(JSON.stringify(syncedRules), row.id);
+      const aiSync = await syncCompanySessionsAiMode(row.id, syncedRules, { force: true });
 
       return respond(
         res,
-        `OK Bot actualizado para ${row.id}\nProveedor catalogo: ${catalogCtx.sourceId}\nClase: ${selected.name}\nPlan: ${syncedRules.planTier || "-"}\nCanal: ${syncedRules.channelMode || "-"}\nProximo cobro: $${roundMoney(syncedRules.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(syncedRules.subscriptionProrationDueNow || 0)}`
+        `OK Bot actualizado para ${row.id}\nProveedor catalogo: ${catalogCtx.sourceId}\nClase: ${selected.name}\nPlan: ${syncedRules.planTier || "-"}\nCanal: ${syncedRules.channelMode || "-"}\nProximo cobro: $${roundMoney(syncedRules.subscriptionNextAmount || 0)}\nProrrateo ahora: $${roundMoney(syncedRules.subscriptionProrationDueNow || 0)}\nIA sincronizada en ${aiSync.updated}/${aiSync.scanned} sesiones`
       );
     }
 
@@ -1175,6 +1302,8 @@ app.post("/whatsapp", async (req, res) => {
 
       const s2 = await getSession(target);
       s2.data.aiMode = mAi[1].toLowerCase();
+      s2.data.aiModeManual = true;
+      s2.data.aiModeSource = "admin-manual";
       await saveSession(s2);
       return respond(res, `IA ${mAi[1].toUpperCase()} para ${target}`);
     }
