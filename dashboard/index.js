@@ -3484,7 +3484,7 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   const rows = visibleOrders.map((order) => {
     const safeOrderId = escapeHtml(order.id || "");
     return `
-    <tr class="cp-order-row" data-order-id="${safeOrderId}">
+    <tr class="cp-order-row" data-order-id="${safeOrderId}" tabindex="0" role="button" aria-expanded="false">
       <td>${escapeHtml(order.id || "-")}</td>
       <td>${escapeHtml(formatDateLabel(order.createdAt))}</td>
       <td>${escapeHtml(order.name || order.contact || "-")}</td>
@@ -3596,9 +3596,9 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
       <article class="cp-card cp-span-3">
         <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
-        <table class="cp-table">
+        <table class="cp-table cp-orders-table">
           <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th><th>Archivado</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
+          <tbody class="cp-orders-body">${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
         </table>
       </article>
 
@@ -3704,63 +3704,94 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         };
 
         const detailCache = new Map();
-        const rowList = Array.from(document.querySelectorAll(".cp-order-row[data-order-id]"));
-        rowList.forEach((row) => {
-          row.addEventListener("click", async (event) => {
+        const ordersBody = document.querySelector(".cp-orders-body");
+
+        const closeOtherOrderDetails = (exceptOrderId) => {
+          document.querySelectorAll(".cp-order-detail-row").forEach((detailRow) => {
+            const rowOrderId = String(detailRow.getAttribute("data-order-detail") || "").trim();
+            if (exceptOrderId && rowOrderId === exceptOrderId) return;
+            detailRow.classList.add("cp-hidden");
+          });
+          document.querySelectorAll(".cp-order-row").forEach((row) => {
+            const rowOrderId = String(row.getAttribute("data-order-id") || "").trim();
+            if (exceptOrderId && rowOrderId === exceptOrderId) return;
+            row.classList.remove("active");
+            row.setAttribute("aria-expanded", "false");
+          });
+        };
+
+        const findDetailRowForOrder = (orderId) => {
+          if (!orderId) return null;
+          const selector = '.cp-order-detail-row[data-order-detail="' + orderId + '"]';
+          return document.querySelector(selector);
+        };
+
+        const toggleOrderDetail = async (row) => {
+          if (!row) return;
+          const orderId = String(row.getAttribute("data-order-id") || "").trim();
+          if (!orderId) return;
+          const detailRow = findDetailRowForOrder(orderId);
+          if (!detailRow) return;
+          const shell = detailRow.querySelector(".cp-order-detail-shell");
+          if (!shell) return;
+
+          const isOpen = !detailRow.classList.contains("cp-hidden");
+          closeOtherOrderDetails(orderId);
+
+          if (isOpen) {
+            detailRow.classList.add("cp-hidden");
+            row.classList.remove("active");
+            row.setAttribute("aria-expanded", "false");
+            return;
+          }
+
+          detailRow.classList.remove("cp-hidden");
+          row.classList.add("active");
+          row.setAttribute("aria-expanded", "true");
+
+          if (detailCache.has(orderId)) {
+            shell.innerHTML = renderDetail(detailCache.get(orderId));
+            return;
+          }
+
+          shell.innerHTML = '<div class="cp-order-detail-loading">Cargando detalle...</div>';
+          try {
+            const response = await fetch('/panel/pedidos/' + encodeURIComponent(orderId) + '/detail', {
+              headers: { Accept: "application/json" },
+              credentials: "same-origin",
+            });
+            if (!response.ok) {
+              const text = await response.text();
+              throw new Error(text || ("Error " + response.status));
+            }
+            const payload = await response.json();
+            detailCache.set(orderId, payload);
+            shell.innerHTML = renderDetail(payload);
+          } catch (err) {
+            const errText = err && err.message ? err.message : String(err);
+            shell.innerHTML = '<div class="cp-empty">No se pudo cargar el detalle: ' + escapeHtml(errText) + '</div>';
+          }
+        };
+
+        if (ordersBody) {
+          ordersBody.addEventListener("click", (event) => {
             const target = event.target;
             if (!(target instanceof Element)) return;
             if (target.closest("form,button,input,select,label,a,[data-no-toggle='1']")) return;
-
-            const orderId = String(row.dataset.orderId || "").trim();
-            if (!orderId) return;
-            const detailRow = row.nextElementSibling && row.nextElementSibling.classList.contains("cp-order-detail-row")
-              ? row.nextElementSibling
-              : null;
-            if (!detailRow) return;
-            const shell = detailRow.querySelector(".cp-order-detail-shell");
-            if (!shell) return;
-
-            const isOpen = !detailRow.classList.contains("cp-hidden");
-            document.querySelectorAll(".cp-order-detail-row").forEach((el) => {
-              if (el !== detailRow) el.classList.add("cp-hidden");
-            });
-            document.querySelectorAll(".cp-order-row").forEach((el) => {
-              if (el !== row) el.classList.remove("active");
-            });
-
-            if (isOpen) {
-              detailRow.classList.add("cp-hidden");
-              row.classList.remove("active");
-              return;
-            }
-
-            detailRow.classList.remove("cp-hidden");
-            row.classList.add("active");
-
-            if (detailCache.has(orderId)) {
-              shell.innerHTML = renderDetail(detailCache.get(orderId));
-              return;
-            }
-
-            shell.innerHTML = '<div class="cp-order-detail-loading">Cargando detalle...</div>';
-            try {
-              const response = await fetch('/panel/pedidos/' + encodeURIComponent(orderId) + '/detail', {
-                headers: { Accept: "application/json" },
-                credentials: "same-origin",
-              });
-              if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || ("Error " + response.status));
-              }
-              const payload = await response.json();
-              detailCache.set(orderId, payload);
-              shell.innerHTML = renderDetail(payload);
-            } catch (err) {
-              const errText = err && err.message ? err.message : String(err);
-              shell.innerHTML = '<div class="cp-empty">No se pudo cargar el detalle: ' + escapeHtml(errText) + '</div>';
-            }
+            const row = target.closest(".cp-order-row");
+            if (!row) return;
+            toggleOrderDetail(row);
           });
-        });
+
+          ordersBody.addEventListener("keydown", (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            if (!target.classList.contains("cp-order-row")) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            toggleOrderDetail(target);
+          });
+        }
 
         const archiveForms = Array.from(document.querySelectorAll(".cp-archive-form"));
         archiveForms.forEach((form) => {
