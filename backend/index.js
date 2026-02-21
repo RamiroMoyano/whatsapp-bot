@@ -248,6 +248,7 @@ Reglas:
 - Tono: ${(c.rules || {}).tone || "neutral"}
 - No inventar datos
 - Siempre cerrar con pregunta
+- Si el cliente quiere comprar, guialo al flujo operativo: catalogo -> numero de producto -> checkout -> nombre -> contacto -> notas/observaciones -> confirmar
 `;
 
   const history = normalizeAiHistory(session.data.aiHistory || []);
@@ -1759,6 +1760,19 @@ app.post("/whatsapp", async (req, res) => {
   if (session.state === "MENU") {
     const buyIntent = ["comprar", "compra", "adquirir", "quiero un bot", "quiero bot"].some((token) => text.includes(token));
     if (buyIntent) {
+      const aiMode = String(session.data.aiMode || "").toLowerCase();
+      if (["lite", "pro"].includes(aiMode)) {
+        const ai = await aiReply(session, from, body);
+        if (ai) {
+          return respondAndLog(
+            `${ai}\n\n` +
+            `Para seguir el proceso de compra:\n` +
+            `1) Escribi: catalogo\n` +
+            `2) Elegi producto con el numero (ej: 1)\n` +
+            `3) Escribi: checkout`
+          );
+        }
+      }
       return respondAndLog(
         "Perfecto. Vamos por el flujo directo para evitar confusiones:\n" +
         "1) Escribi: catalogo\n" +
@@ -1789,9 +1803,25 @@ app.post("/whatsapp", async (req, res) => {
 
   if (session.state === "ASK_CONTACT" && !isReserved(text)) {
     session.data.contact = body;
+    session.state = "ASK_NOTES";
+    await saveSession(session);
+    return respondAndLog(
+      "Perfecto. Ultimo paso: agrega notas u observaciones para este pedido (opcional).\n" +
+      "Si no queres agregar nada, responde con: -"
+    );
+  }
+
+  if (session.state === "ASK_NOTES" && !isReserved(text)) {
+    const rawNotes = String(body || "").trim();
+    const normalized = rawNotes.toLowerCase();
+    const skipNotes = ["-", "ninguna", "ninguno", "sin", "sin notas", "no"].includes(normalized);
+    session.data.notes = skipNotes ? "" : rawNotes;
     session.state = "READY";
     await saveSession(session);
-    return respondAndLog(`Resumen:\n${await cartText(session)}\nConfirmar: confirmar`);
+    const notesLabel = session.data.notes ? session.data.notes : "Sin notas";
+    return respondAndLog(
+      `Resumen:\n${await cartText(session)}\nNotas/observaciones: ${notesLabel}\nConfirmar: confirmar`
+    );
   }
 
   if (text === "confirmar" && session.state === "READY") {
@@ -1824,7 +1854,7 @@ app.post("/whatsapp", async (req, res) => {
       company.id,
       session.data.name || "",
       session.data.contact || "",
-      "",
+      String(session.data.notes || "").trim(),
       JSON.stringify(items),
       JSON.stringify(itemsDetailed),
       total,
@@ -1842,6 +1872,9 @@ app.post("/whatsapp", async (req, res) => {
     session.cart = [];
     session.state = "MENU";
     session.lastOrderId = orderId;
+    session.data.name = "";
+    session.data.contact = "";
+    session.data.notes = "";
     await saveSession(session);
 
     return respondAndLog(
