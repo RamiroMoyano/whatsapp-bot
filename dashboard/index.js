@@ -3617,11 +3617,11 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         }
 
         const escapeHtml = (value) => String(value || "")
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#039;");
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
 
         const formatDateTime = (value) => {
           if (!value) return "-";
@@ -3640,13 +3640,15 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         };
 
         const renderDetail = (payload) => {
-          const order = payload?.order || {};
-          const items = Array.isArray(payload?.itemsDetailed) ? payload.itemsDetailed : [];
-          const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+          const order = payload && payload.order ? payload.order : {};
+          const items = payload && Array.isArray(payload.itemsDetailed) ? payload.itemsDetailed : [];
+          const messages = payload && Array.isArray(payload.messages) ? payload.messages : [];
           const itemsHtml = items.length
             ? '<ul class="cp-order-items">' + items.map((item) => (
               '<li><span>' + escapeHtml(item.name || ("Producto " + item.id)) + '</span>' +
-              '<span>x' + escapeHtml(item.qty || 1) + ' - ' + formatMoney(item.subtotal ?? item.unit ?? 0) + '</span></li>'
+              '<span>x' + escapeHtml(item.qty || 1) + ' - ' + formatMoney(
+                typeof item.subtotal !== "undefined" ? item.subtotal : (typeof item.unit !== "undefined" ? item.unit : 0)
+              ) + '</span></li>'
             )).join("") + "</ul>"
             : '<div class="cp-empty">Sin items detallados.</div>';
 
@@ -3711,7 +3713,9 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
 
             const orderId = String(row.dataset.orderId || "").trim();
             if (!orderId) return;
-            const detailRow = document.querySelector('.cp-order-detail-row[data-order-detail="' + orderId.replace(/"/g, '\\"') + '"]');
+            const detailRow = row.nextElementSibling && row.nextElementSibling.classList.contains("cp-order-detail-row")
+              ? row.nextElementSibling
+              : null;
             if (!detailRow) return;
             const shell = detailRow.querySelector(".cp-order-detail-shell");
             if (!shell) return;
@@ -3752,7 +3756,8 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
               detailCache.set(orderId, payload);
               shell.innerHTML = renderDetail(payload);
             } catch (err) {
-              shell.innerHTML = '<div class="cp-empty">No se pudo cargar el detalle: ' + escapeHtml(err?.message || String(err)) + '</div>';
+              const errText = err && err.message ? err.message : String(err);
+              shell.innerHTML = '<div class="cp-empty">No se pudo cargar el detalle: ' + escapeHtml(errText) + '</div>';
             }
           });
         });

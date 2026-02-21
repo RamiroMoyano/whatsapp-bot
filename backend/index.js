@@ -1473,8 +1473,8 @@ app.post("/whatsapp", async (req, res) => {
     }
 
     return respondAndLog(
-      `Recibimos tu comprobante${orderId ? ` para ${orderId}` : ""}. La validacion es manual y no bloquea tu pedido.\n\n` +
-      `${paymentMethodsReplyText(company, { orderId })}`,
+      `Recibimos tu comprobante${orderId ? ` para ${orderId}` : ""}. La validacion es manual y no bloquea tu pedido.\n` +
+      `Te avisamos por este chat cuando quede validado.`,
       { orderId: orderId || null }
     );
   }
@@ -1729,6 +1729,18 @@ app.post("/whatsapp", async (req, res) => {
     );
   }
 
+  const hasActiveOrder = String(session.lastOrderId || "").trim().length > 0;
+  const looksLikePaymentReady =
+    ["listo", "ok", "ya", "hecho", "transferi", "ya transferi", "pague", "ya pague"].includes(text) ||
+    text.includes("ya transfer") ||
+    text.includes("comprobante");
+  if (session.state === "MENU" && hasActiveOrder && !hasMedia && looksLikePaymentReady) {
+    return respondAndLog(
+      `Perfecto. Para avanzar con la validacion del pedido ${session.lastOrderId}, envia el comprobante cuando lo tengas.\n` +
+      `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`
+    );
+  }
+
   if (text === "carrito") return respondAndLog(await cartText(session));
 
   const mAdd = text.match(/^agregar\s+(\d+)$/);
@@ -1742,6 +1754,18 @@ app.post("/whatsapp", async (req, res) => {
     session.cart.push(id);
     await saveSession(session);
     return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
+  }
+
+  if (session.state === "MENU") {
+    const buyIntent = ["comprar", "compra", "adquirir", "quiero un bot", "quiero bot"].some((token) => text.includes(token));
+    if (buyIntent) {
+      return respondAndLog(
+        "Perfecto. Vamos por el flujo directo para evitar confusiones:\n" +
+        "1) Escribi: catalogo\n" +
+        "2) Elegi producto enviando el numero (ej: 3)\n" +
+        "3) Escribi: checkout"
+      );
+    }
   }
 
   if (["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase()) && session.state === "MENU" && !isReserved(text)) {
