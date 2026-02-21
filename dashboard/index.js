@@ -2414,6 +2414,66 @@ function extractCompanyProfile(rules) {
   };
 }
 
+function toCheckedFlag(value) {
+  if (value === true) return true;
+  const raw = String(value || "").trim().toLowerCase();
+  return ["1", "true", "on", "si", "yes"].includes(raw);
+}
+
+function extractPaymentSettings(rulesRaw) {
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  const methods = rules.paymentMethods && typeof rules.paymentMethods === "object"
+    ? rules.paymentMethods
+    : {};
+  const transferRaw = rules.paymentTransfer && typeof rules.paymentTransfer === "object"
+    ? rules.paymentTransfer
+    : {};
+
+  const payment = {
+    cash: toCheckedFlag(methods.cash ?? methods.efectivo ?? rules.paymentCash ?? rules.paymentEfectivo),
+    debit: toCheckedFlag(methods.debit ?? methods.debito ?? rules.paymentDebit ?? rules.paymentDebito),
+    transfer: toCheckedFlag(
+      methods.transfer ??
+      methods.transferencia ??
+      rules.paymentTransferEnabled ??
+      rules.paymentTransfer
+    ),
+    credit: toCheckedFlag(methods.credit ?? methods.credito ?? rules.paymentCredit ?? rules.paymentCredito),
+    transferBankName: String(transferRaw.bankName || rules.paymentTransferBankName || rules.paymentTransferBank || "").trim(),
+    transferAccountHolder: String(
+      transferRaw.accountHolder ||
+      rules.paymentTransferAccountHolder ||
+      rules.razonSocial ||
+      rules.businessName ||
+      ""
+    ).trim(),
+    transferTaxId: String(
+      transferRaw.taxId ||
+      rules.paymentTransferTaxId ||
+      rules.paymentTransferCuit ||
+      rules.cuit ||
+      rules.taxId ||
+      ""
+    ).trim(),
+    transferCbu: String(transferRaw.cbu || rules.paymentTransferCbu || rules.cbu || "").trim(),
+    transferAlias: String(transferRaw.alias || rules.paymentTransferAlias || rules.alias || "").trim(),
+    transferAccountType: String(transferRaw.accountType || rules.paymentTransferAccountType || "").trim(),
+    transferNote: String(transferRaw.note || rules.paymentTransferNote || "").trim(),
+    instructions: String(rules.paymentInstructions || rules.paymentPublicNote || "").trim(),
+  };
+
+  if (
+    payment.transferCbu ||
+    payment.transferAlias ||
+    payment.transferAccountHolder ||
+    payment.transferBankName
+  ) {
+    payment.transfer = true;
+  }
+
+  return payment;
+}
+
 function generateClientPassword(length = 10) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$!";
   let out = "";
@@ -3690,6 +3750,7 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
   const { state } = await loadClientStateWithProvider(company);
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
+  const payment = extractPaymentSettings(state.rules || {});
 
   const bodyHtml = `
     ${saved ? `<div class="cp-alert success">Datos de cuenta actualizados.</div>` : ""}
@@ -3733,6 +3794,51 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
           <label>Nueva contrasena de acceso (opcional)</label>
           <input name="clientPassword" type="password" placeholder="Dejar vacio para no cambiar" />
 
+          <hr style="border:0;border-top:1px solid rgba(120,150,220,.25);margin:16px 0" />
+          <h4 style="margin:0 0 8px 0">Medio de pagos</h4>
+          <p class="cp-note" style="margin-top:0">Configura los medios para que el bot los ofrezca al cliente. El comprobante de transferencia es opcional.</p>
+
+          <div class="cp-grid-2">
+            <label><input type="checkbox" name="paymentCash" value="1" ${payment.cash ? "checked" : ""} /> Efectivo</label>
+            <label><input type="checkbox" name="paymentDebit" value="1" ${payment.debit ? "checked" : ""} /> Debito</label>
+            <label><input type="checkbox" name="paymentTransfer" value="1" ${payment.transfer ? "checked" : ""} /> Transferencia</label>
+            <label><input type="checkbox" name="paymentCredit" value="1" ${payment.credit ? "checked" : ""} /> Tarjeta de credito</label>
+          </div>
+
+          <h5 style="margin:8px 0 4px 0">Datos para transferencia</h5>
+          <div class="cp-grid-2">
+            <div>
+              <label>Banco</label>
+              <input name="paymentTransferBankName" value="${escapeHtml(payment.transferBankName)}" />
+            </div>
+            <div>
+              <label>Tipo de cuenta</label>
+              <input name="paymentTransferAccountType" value="${escapeHtml(payment.transferAccountType)}" placeholder="Caja de ahorro / Cuenta corriente" />
+            </div>
+            <div>
+              <label>Razon social / Titular</label>
+              <input name="paymentTransferAccountHolder" value="${escapeHtml(payment.transferAccountHolder)}" />
+            </div>
+            <div>
+              <label>CUIT/CUIL</label>
+              <input name="paymentTransferTaxId" value="${escapeHtml(payment.transferTaxId)}" />
+            </div>
+            <div>
+              <label>CBU</label>
+              <input name="paymentTransferCbu" value="${escapeHtml(payment.transferCbu)}" />
+            </div>
+            <div>
+              <label>Alias</label>
+              <input name="paymentTransferAlias" value="${escapeHtml(payment.transferAlias)}" />
+            </div>
+          </div>
+
+          <label>Nota para transferencia (opcional)</label>
+          <input name="paymentTransferNote" value="${escapeHtml(payment.transferNote)}" placeholder="Ej: enviar comprobante por este chat" />
+
+          <label>Instrucciones generales de pago</label>
+          <textarea name="paymentInstructions" rows="3" placeholder="Ej: horario de caja, aclaraciones, etc.">${escapeHtml(payment.instructions)}</textarea>
+
           <div class="cp-actions">
             <button class="cp-btn primary" type="submit">Guardar datos</button>
           </div>
@@ -3772,6 +3878,37 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
   rules.companyAddress = String(req.body.companyAddress || "").trim();
   rules.companyCity = String(req.body.companyCity || "").trim();
   rules.companyCountry = String(req.body.companyCountry || "").trim();
+
+  const asBool = (value) => {
+    const raw = String(value || "").trim().toLowerCase();
+    return ["1", "true", "on", "si", "yes"].includes(raw);
+  };
+
+  const paymentMethods = {
+    cash: asBool(req.body.paymentCash),
+    debit: asBool(req.body.paymentDebit),
+    transfer: asBool(req.body.paymentTransfer),
+    credit: asBool(req.body.paymentCredit),
+  };
+
+  const paymentTransfer = {
+    bankName: String(req.body.paymentTransferBankName || "").trim(),
+    accountType: String(req.body.paymentTransferAccountType || "").trim(),
+    accountHolder: String(req.body.paymentTransferAccountHolder || "").trim(),
+    taxId: String(req.body.paymentTransferTaxId || "").trim(),
+    cbu: String(req.body.paymentTransferCbu || "").trim(),
+    alias: String(req.body.paymentTransferAlias || "").trim(),
+    note: String(req.body.paymentTransferNote || "").trim(),
+  };
+
+  if (paymentTransfer.cbu || paymentTransfer.alias || paymentTransfer.accountHolder || paymentTransfer.bankName) {
+    paymentMethods.transfer = true;
+  }
+
+  rules.paymentMethods = paymentMethods;
+  rules.paymentTransfer = paymentTransfer;
+  rules.paymentTransferEnabled = paymentMethods.transfer;
+  rules.paymentInstructions = String(req.body.paymentInstructions || "").trim();
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {

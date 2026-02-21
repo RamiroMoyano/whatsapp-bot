@@ -237,6 +237,7 @@ async function aiReply(session, from, text) {
   }
 
   const c = await getCompanySafe(session);
+  const paymentPrompt = paymentMethodsPromptText(c);
   const prompt = `
 ${c.prompt || ""}
 
@@ -259,7 +260,7 @@ Reglas:
   const resp = await openai.responses.create({
     model: "gpt-4o-mini",
     input: inputMessages,
-    instructions: prompt,
+    instructions: `${prompt}\nMEDIOS DE PAGO:\n${paymentPrompt}`,
   });
 
   const answer = (resp.output_text || "").trim();
@@ -293,6 +294,138 @@ function parseJsonSafe(raw, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function isTruthyFlag(value) {
+  if (value === true) return true;
+  const raw = String(value || "").trim().toLowerCase();
+  return ["1", "true", "on", "si", "yes"].includes(raw);
+}
+
+function extractCompanyPaymentConfig(rulesRaw) {
+  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+  const methodsRaw = rules.paymentMethods && typeof rules.paymentMethods === "object"
+    ? rules.paymentMethods
+    : {};
+  const transferRaw = rules.paymentTransfer && typeof rules.paymentTransfer === "object"
+    ? rules.paymentTransfer
+    : {};
+
+  const transfer = {
+    bankName: String(transferRaw.bankName || rules.paymentTransferBankName || rules.paymentTransferBank || "").trim(),
+    accountHolder: String(
+      transferRaw.accountHolder ||
+      rules.paymentTransferAccountHolder ||
+      rules.razonSocial ||
+      rules.businessName ||
+      ""
+    ).trim(),
+    taxId: String(
+      transferRaw.taxId ||
+      rules.paymentTransferTaxId ||
+      rules.paymentTransferCuit ||
+      rules.cuit ||
+      rules.taxId ||
+      ""
+    ).trim(),
+    cbu: String(transferRaw.cbu || rules.paymentTransferCbu || rules.cbu || "").trim(),
+    alias: String(transferRaw.alias || rules.paymentTransferAlias || rules.alias || "").trim(),
+    accountType: String(transferRaw.accountType || rules.paymentTransferAccountType || "").trim(),
+    note: String(transferRaw.note || rules.paymentTransferNote || "").trim(),
+  };
+
+  const enabled = {
+    cash: isTruthyFlag(methodsRaw.cash ?? methodsRaw.efectivo ?? rules.paymentCash ?? rules.paymentEfectivo),
+    debit: isTruthyFlag(methodsRaw.debit ?? methodsRaw.debito ?? rules.paymentDebit ?? rules.paymentDebito),
+    transfer: isTruthyFlag(
+      methodsRaw.transfer ??
+      methodsRaw.transferencia ??
+      rules.paymentTransferEnabled ??
+      rules.paymentTransfer
+    ),
+    credit: isTruthyFlag(methodsRaw.credit ?? methodsRaw.credito ?? rules.paymentCredit ?? rules.paymentCredito),
+  };
+
+  if (transfer.cbu || transfer.alias || transfer.accountHolder || transfer.bankName) {
+    enabled.transfer = true;
+  }
+
+  return {
+    enabled,
+    transfer,
+    publicNote: String(rules.paymentInstructions || rules.paymentPublicNote || "").trim(),
+  };
+}
+
+function paymentMethodsPromptText(company) {
+  const payment = extractCompanyPaymentConfig(company?.rules || {});
+  const methods = [];
+  if (payment.enabled.cash) methods.push("Efectivo");
+  if (payment.enabled.debit) methods.push("Debito");
+  if (payment.enabled.transfer) methods.push("Transferencia");
+  if (payment.enabled.credit) methods.push("Tarjeta de credito");
+
+  const lines = [];
+  lines.push(methods.length ? methods.join(", ") : "No configurados");
+
+  if (payment.enabled.transfer) {
+    const transferParts = [];
+    if (payment.transfer.bankName) transferParts.push(`Banco: ${payment.transfer.bankName}`);
+    if (payment.transfer.accountHolder) transferParts.push(`Titular: ${payment.transfer.accountHolder}`);
+    if (payment.transfer.taxId) transferParts.push(`CUIT/CUIL: ${payment.transfer.taxId}`);
+    if (payment.transfer.cbu) transferParts.push(`CBU: ${payment.transfer.cbu}`);
+    if (payment.transfer.alias) transferParts.push(`Alias: ${payment.transfer.alias}`);
+    if (payment.transfer.accountType) transferParts.push(`Tipo: ${payment.transfer.accountType}`);
+    if (transferParts.length) lines.push(transferParts.join(" | "));
+  }
+
+  if (payment.publicNote) lines.push(`Notas: ${payment.publicNote}`);
+  lines.push("Comprobante de transferencia: opcional (no bloquea el pedido).");
+  return lines.join("\n");
+}
+
+function paymentMethodsReplyText(company, options = {}) {
+  const { orderId = "" } = options;
+  const payment = extractCompanyPaymentConfig(company?.rules || {});
+  const methods = [];
+  if (payment.enabled.cash) methods.push("Efectivo");
+  if (payment.enabled.debit) methods.push("Debito");
+  if (payment.enabled.transfer) methods.push("Transferencia");
+  if (payment.enabled.credit) methods.push("Tarjeta de credito");
+
+  const lines = [];
+  lines.push(`Medios de pago de ${company?.name || "la empresa"}:`);
+
+  if (!methods.length) {
+    lines.push("- Aun no hay medios de pago configurados.");
+  } else {
+    lines.push(`- Disponibles: ${methods.join(", ")}`);
+  }
+
+  if (payment.enabled.transfer) {
+    lines.push("");
+    lines.push("Datos para transferencia:");
+    if (payment.transfer.bankName) lines.push(`- Banco: ${payment.transfer.bankName}`);
+    if (payment.transfer.accountHolder) lines.push(`- Razon social / titular: ${payment.transfer.accountHolder}`);
+    if (payment.transfer.taxId) lines.push(`- CUIT/CUIL: ${payment.transfer.taxId}`);
+    if (payment.transfer.cbu) lines.push(`- CBU: ${payment.transfer.cbu}`);
+    if (payment.transfer.alias) lines.push(`- Alias: ${payment.transfer.alias}`);
+    if (payment.transfer.accountType) lines.push(`- Tipo de cuenta: ${payment.transfer.accountType}`);
+    if (payment.transfer.note) lines.push(`- Nota: ${payment.transfer.note}`);
+    lines.push("- Si queres, podes enviar comprobante (opcional).");
+  }
+
+  if (payment.publicNote) {
+    lines.push("");
+    lines.push(`Info adicional: ${payment.publicNote}`);
+  }
+
+  if (orderId) {
+    lines.push("");
+    lines.push(`Pedido asociado: ${orderId}`);
+  }
+
+  return lines.join("\n");
 }
 
 async function logIncomingWhatsappMessage({ fromNumber, companyId, text }) {
@@ -1130,6 +1263,8 @@ app.post("/whatsapp", async (req, res) => {
   const text = body.toLowerCase();
   const cmdRaw = body.replace(/\s+/g, " ").trim();
   const cmd = cmdRaw.toLowerCase();
+  const numMedia = Number(req.body.NumMedia || 0);
+  const hasMedia = Number.isFinite(numMedia) && numMedia > 0;
 
   if (from && !cmd.startsWith("admin")) await setSetting("last_customer", from);
 
@@ -1157,6 +1292,37 @@ app.post("/whatsapp", async (req, res) => {
       companyId: session?.data?.companyId || "babystepsbots",
       text: body,
     });
+  }
+
+  if (hasMedia && !cmd.startsWith("admin")) {
+    const company = await getCompanySafe(session);
+    const mediaUrl = String(req.body.MediaUrl0 || "").trim();
+    const mediaType = String(req.body.MediaContentType0 || "").trim();
+    const orderId = String(session.lastOrderId || "").trim();
+
+    if (orderId) {
+      const noteLine = `[Comprobante recibido ${new Date().toISOString()}${mediaType ? ` (${mediaType})` : ""}${mediaUrl ? ` ${mediaUrl}` : ""}]`;
+      await db.prepare(`
+        UPDATE orders
+        SET notes = COALESCE(notes, '') || ?
+        WHERE id=?
+      `).run(`\n${noteLine}`, orderId);
+    }
+
+    await sendTelegram(
+      `COMPROBANTE RECIBIDO\n` +
+      `Empresa: ${company?.name || company?.id || "-"}\n` +
+      `Cliente: ${from}\n` +
+      `Pedido: ${orderId || "-"}\n` +
+      `Tipo: ${mediaType || "-"}\n` +
+      `URL: ${mediaUrl || "-"}`
+    );
+
+    return respond(
+      res,
+      `Recibimos tu comprobante${orderId ? ` para ${orderId}` : ""}. La validacion es manual y no bloquea tu pedido.\n\n` +
+      `${paymentMethodsReplyText(company, { orderId })}`
+    );
   }
 
   let reply = "No entendi. Escribi: menu / catalogo / ayuda";
@@ -1392,6 +1558,25 @@ app.post("/whatsapp", async (req, res) => {
     return respond(res, catalogText(company));
   }
 
+  if (
+    [
+      "pago",
+      "pagar",
+      "pagado",
+      "comprobante",
+      "transferencia",
+      "medio de pago",
+      "medios de pago",
+      "medios",
+    ].includes(text)
+  ) {
+    const company = await getCompanySafe(session);
+    return respond(
+      res,
+      paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })
+    );
+  }
+
   if (text === "carrito") return respond(res, await cartText(session));
 
   const mAdd = text.match(/^agregar\s+(\d+)$/);
@@ -1481,7 +1666,11 @@ app.post("/whatsapp", async (req, res) => {
     session.lastOrderId = orderId;
     await saveSession(session);
 
-    return respond(res, `Pedido ${orderId} confirmado.\nTotal: $${total}`);
+    return respond(
+      res,
+      `Pedido ${orderId} confirmado.\nTotal: $${total}\n\n` +
+      `${paymentMethodsReplyText(company, { orderId })}`
+    );
   }
 
   await saveSession(session);
