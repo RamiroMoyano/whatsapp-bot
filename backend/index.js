@@ -428,16 +428,52 @@ function paymentMethodsReplyText(company, options = {}) {
   return lines.join("\n");
 }
 
-async function logIncomingWhatsappMessage({ fromNumber, companyId, text }) {
+async function logWhatsappMessage({
+  fromNumber,
+  companyId,
+  orderId = null,
+  direction = "in",
+  role = "user",
+  content = "",
+  mediaUrl = "",
+  mediaContentType = "",
+  twilioSid = "",
+  createdAt = "",
+}) {
   const from = String(fromNumber || "").trim();
-  const body = String(text || "").trim();
-  if (!from || !body) return;
   const cid = String(companyId || "").trim().toLowerCase() || "babystepsbots";
+  const oid = String(orderId || "").trim();
+  const dirRaw = String(direction || "").trim().toLowerCase();
+  const dir = dirRaw === "out" ? "out" : "in";
+  const roleRaw = String(role || "").trim().toLowerCase();
+  const safeRole = roleRaw === "assistant" ? "assistant" : roleRaw === "system" ? "system" : "user";
+  const body = String(content || "").trim();
+  const media = String(mediaUrl || "").trim();
+  const mediaType = String(mediaContentType || "").trim();
+  const messageSid = String(twilioSid || "").trim();
+  const at = String(createdAt || "").trim() || new Date().toISOString();
+
+  if (!from || !cid) return;
+  if (!body && !media) return;
+
   try {
     await db.prepare(`
-      INSERT INTO ai_messages(fromNumber, companyId, role, content, createdAt)
-      VALUES(?,?,?,?,?)
-    `).run(from, cid, "user", body, new Date().toISOString());
+      INSERT INTO ai_messages(
+        fromNumber, companyId, orderId, direction, role, content, mediaUrl, mediaContentType, twilioSid, createdAt
+      )
+      VALUES(?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      from,
+      cid,
+      oid || null,
+      dir,
+      safeRole,
+      body,
+      media || null,
+      mediaType || null,
+      messageSid || null,
+      at
+    );
   } catch (e) {
     console.error("ai_messages insert error:", e?.message || e);
   }
@@ -868,6 +904,39 @@ function deriveOrderWorkflowFromRow(row) {
   return { state, archived };
 }
 
+function normalizeOrderRow(row) {
+  if (!row) return null;
+  const workflow = deriveOrderWorkflowFromRow(row);
+  const archivedAt = workflow.archived
+    ? (row?.archivedAt || row?.deliveredAt || row?.createdAt || null)
+    : null;
+  const archiveReason = workflow.archived
+    ? String(row?.archiveReason || workflow.state || "")
+    : "";
+  const legacyCategory = workflow.archived ? `archived:${workflow.state}` : workflow.state;
+  return {
+    id: row?.id ?? "",
+    createdAt: row?.createdAt ?? "",
+    fromNumber: row?.fromNumber ?? "",
+    companyId: row?.companyId ?? "",
+    name: row?.name ?? "",
+    contact: row?.contact ?? "",
+    notes: row?.notes ?? "",
+    itemsJson: row?.itemsJson ?? "[]",
+    itemsDetailedJson: row?.itemsDetailedJson ?? "[]",
+    total: Number(row?.total || 0),
+    paymentStatus: row?.paymentStatus ?? "",
+    paymentMethod: row?.paymentMethod ?? "",
+    orderStatus: row?.orderStatus ?? "",
+    deliveredAt: row?.deliveredAt ?? null,
+    category: row?.category ?? legacyCategory,
+    workflowState: workflow.state,
+    archived: workflow.archived,
+    archivedAt,
+    archiveReason,
+  };
+}
+
 async function backfillOrdersWorkflowColumns() {
   try {
     const rows = await db.prepare(`
@@ -1148,40 +1217,85 @@ app.get("/api/orders", requireApiAuth, async (req, res) => {
     `;
 
     const rows = await db.prepare(sql).all(...params, limit);
-    const normalized = rows.map((row) => {
-      const workflow = deriveOrderWorkflowFromRow(row);
-      const archivedAt = workflow.archived
-        ? (row?.archivedAt || row?.deliveredAt || row?.createdAt || null)
-        : null;
-      const archiveReason = workflow.archived
-        ? String(row?.archiveReason || workflow.state || "")
-        : "";
-      const legacyCategory = workflow.archived ? `archived:${workflow.state}` : workflow.state;
-      return {
-        id: row?.id ?? "",
-        createdAt: row?.createdAt ?? "",
-        fromNumber: row?.fromNumber ?? "",
-        companyId: row?.companyId ?? "",
-        name: row?.name ?? "",
-        contact: row?.contact ?? "",
-        notes: row?.notes ?? "",
-        itemsJson: row?.itemsJson ?? "[]",
-        itemsDetailedJson: row?.itemsDetailedJson ?? "[]",
-        total: Number(row?.total || 0),
-        paymentStatus: row?.paymentStatus ?? "",
-        paymentMethod: row?.paymentMethod ?? "",
-        orderStatus: row?.orderStatus ?? "",
-        deliveredAt: row?.deliveredAt ?? null,
-        category: row?.category ?? legacyCategory,
-        workflowState: workflow.state,
-        archived: workflow.archived,
-        archivedAt,
-        archiveReason,
-      };
-    });
+    const normalized = rows.map((row) => normalizeOrderRow(row)).filter(Boolean);
     res.json(normalized);
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.get("/api/orders/:id", requireApiAuth, async (req, res) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+    const companyIdQuery = String(req.query.companyId || "").trim();
+
+    const row = await db.prepare(`
+      SELECT
+        id,createdAt,fromNumber,companyId,name,contact,notes,
+        itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,
+        orderStatus,deliveredAt,category,workflowState,archived,archivedAt,archiveReason
+      FROM orders
+      WHERE id=?
+      LIMIT 1
+    `).get(orderId);
+    if (!row) return res.status(404).json({ error: "Pedido no encontrado" });
+    if (companyIdQuery && String(row.companyId || "").trim() !== companyIdQuery) {
+      return res.status(403).json({ error: "Pedido no pertenece a esa empresa" });
+    }
+
+    return res.json(normalizeOrderRow(row));
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.get("/api/orders/:id/messages", requireApiAuth, async (req, res) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+    const companyIdQuery = String(req.query.companyId || "").trim();
+
+    const limitRaw = Number(req.query.limit || 120);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 500) : 120;
+
+    const order = await db.prepare(`SELECT id, companyId FROM orders WHERE id=?`).get(orderId);
+    if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+    if (companyIdQuery && String(order.companyId || "").trim() !== companyIdQuery) {
+      return res.status(403).json({ error: "Pedido no pertenece a esa empresa" });
+    }
+
+    const rows = await db.prepare(`
+      SELECT
+        id, fromNumber, companyId, orderId, direction, role, content, mediaUrl, mediaContentType, twilioSid, createdAt
+      FROM ai_messages
+      WHERE orderId=?
+      ORDER BY createdAt ASC
+      LIMIT ?
+    `).all(orderId, limit);
+
+    const normalized = (Array.isArray(rows) ? rows : []).map((row) => ({
+      id: Number(row?.id || 0),
+      fromNumber: String(row?.fromNumber || ""),
+      companyId: String(row?.companyId || ""),
+      orderId: String(row?.orderId || ""),
+      direction: String(row?.direction || "").toLowerCase() === "out" ? "out" : "in",
+      role: String(row?.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
+      content: String(row?.content || ""),
+      mediaUrl: String(row?.mediaUrl || ""),
+      mediaContentType: String(row?.mediaContentType || ""),
+      twilioSid: String(row?.twilioSid || ""),
+      createdAt: row?.createdAt || "",
+    }));
+
+    return res.json({
+      orderId,
+      companyId: String(order.companyId || ""),
+      count: normalized.length,
+      messages: normalized,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
@@ -1265,6 +1379,7 @@ app.post("/whatsapp", async (req, res) => {
   const cmd = cmdRaw.toLowerCase();
   const numMedia = Number(req.body.NumMedia || 0);
   const hasMedia = Number.isFinite(numMedia) && numMedia > 0;
+  const twilioSid = String(req.body.MessageSid || "").trim();
 
   if (from && !cmd.startsWith("admin")) await setSetting("last_customer", from);
 
@@ -1286,42 +1401,81 @@ app.post("/whatsapp", async (req, res) => {
     await saveSession(session);
   }
 
-  if (!cmd.startsWith("admin")) {
-    await logIncomingWhatsappMessage({
+  const respondAndLog = async (textOut, options = {}) => {
+    const message = String(textOut || "");
+    if (!cmd.startsWith("admin")) {
+      await logWhatsappMessage({
+        fromNumber: from,
+        companyId: session?.data?.companyId || "babystepsbots",
+        orderId: options.orderId ?? session?.lastOrderId ?? null,
+        direction: "out",
+        role: "assistant",
+        content: message,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return respond(res, message);
+  };
+
+  if (!cmd.startsWith("admin") && body) {
+    await logWhatsappMessage({
       fromNumber: from,
       companyId: session?.data?.companyId || "babystepsbots",
-      text: body,
+      orderId: session?.lastOrderId || null,
+      direction: "in",
+      role: "user",
+      content: body,
+      twilioSid,
+      createdAt: new Date().toISOString(),
     });
   }
 
   if (hasMedia && !cmd.startsWith("admin")) {
     const company = await getCompanySafe(session);
-    const mediaUrl = String(req.body.MediaUrl0 || "").trim();
-    const mediaType = String(req.body.MediaContentType0 || "").trim();
     const orderId = String(session.lastOrderId || "").trim();
+    const mediaCount = Math.max(1, Math.min(10, numMedia));
 
-    if (orderId) {
-      const noteLine = `[Comprobante recibido ${new Date().toISOString()}${mediaType ? ` (${mediaType})` : ""}${mediaUrl ? ` ${mediaUrl}` : ""}]`;
-      await db.prepare(`
-        UPDATE orders
-        SET notes = COALESCE(notes, '') || ?
-        WHERE id=?
-      `).run(`\n${noteLine}`, orderId);
+    for (let i = 0; i < mediaCount; i += 1) {
+      const mediaUrl = String(req.body[`MediaUrl${i}`] || "").trim();
+      const mediaType = String(req.body[`MediaContentType${i}`] || "").trim();
+      if (!mediaUrl) continue;
+
+      await logWhatsappMessage({
+        fromNumber: from,
+        companyId: session?.data?.companyId || "babystepsbots",
+        orderId: orderId || null,
+        direction: "in",
+        role: "user",
+        content: `[Adjunto recibido${mediaType ? `: ${mediaType}` : ""}]`,
+        mediaUrl,
+        mediaContentType: mediaType,
+        twilioSid,
+        createdAt: new Date().toISOString(),
+      });
+
+      if (orderId) {
+        const noteLine = `[Comprobante recibido ${new Date().toISOString()}${mediaType ? ` (${mediaType})` : ""}${mediaUrl ? ` ${mediaUrl}` : ""}]`;
+        await db.prepare(`
+          UPDATE orders
+          SET notes = COALESCE(notes, '') || ?
+          WHERE id=?
+        `).run(`\n${noteLine}`, orderId);
+      }
+
+      await sendTelegram(
+        `COMPROBANTE RECIBIDO\n` +
+        `Empresa: ${company?.name || company?.id || "-"}\n` +
+        `Cliente: ${from}\n` +
+        `Pedido: ${orderId || "-"}\n` +
+        `Tipo: ${mediaType || "-"}\n` +
+        `URL: ${mediaUrl || "-"}`
+      );
     }
 
-    await sendTelegram(
-      `COMPROBANTE RECIBIDO\n` +
-      `Empresa: ${company?.name || company?.id || "-"}\n` +
-      `Cliente: ${from}\n` +
-      `Pedido: ${orderId || "-"}\n` +
-      `Tipo: ${mediaType || "-"}\n` +
-      `URL: ${mediaUrl || "-"}`
-    );
-
-    return respond(
-      res,
+    return respondAndLog(
       `Recibimos tu comprobante${orderId ? ` para ${orderId}` : ""}. La validacion es manual y no bloquea tu pedido.\n\n` +
-      `${paymentMethodsReplyText(company, { orderId })}`
+      `${paymentMethodsReplyText(company, { orderId })}`,
+      { orderId: orderId || null }
     );
   }
 
@@ -1340,8 +1494,7 @@ app.post("/whatsapp", async (req, res) => {
       `Mensaje: ${body}`
     );
 
-    return respond(
-      res,
+    return respondAndLog(
       "Listo. Un asesor fue notificado y te va a responder en breve.\n\nMientras tanto podes escribir *menu* para volver al bot."
     );
   }
@@ -1351,11 +1504,11 @@ app.post("/whatsapp", async (req, res) => {
     session.data.humanNotified = false;
     await saveSession(session);
     const company = await getCompanySafe(session);
-    return respond(res, menuText(company));
+    return respondAndLog(menuText(company));
   }
 
   if (session.state === "HUMAN" && !cmd.startsWith("admin")) {
-    return respond(res, "Un asesor ya fue notificado. Escribi *menu* para volver.");
+    return respondAndLog("Un asesor ya fue notificado. Escribi *menu* para volver.");
   }
 
   if (cmd.startsWith("admin")) {
@@ -1550,12 +1703,12 @@ app.post("/whatsapp", async (req, res) => {
     session.data.humanNotified = false;
     await saveSession(session);
     const company = await getCompanySafe(session);
-    return respond(res, menuText(company));
+    return respondAndLog(menuText(company));
   }
 
   if (text === "catalogo") {
     const company = await getCompanySafe(session);
-    return respond(res, catalogText(company));
+    return respondAndLog(catalogText(company));
   }
 
   if (
@@ -1571,49 +1724,48 @@ app.post("/whatsapp", async (req, res) => {
     ].includes(text)
   ) {
     const company = await getCompanySafe(session);
-    return respond(
-      res,
+    return respondAndLog(
       paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })
     );
   }
 
-  if (text === "carrito") return respond(res, await cartText(session));
+  if (text === "carrito") return respondAndLog(await cartText(session));
 
   const mAdd = text.match(/^agregar\s+(\d+)$/);
   if (mAdd) {
     const id = Number(mAdd[1]);
     const company = await getCompanySafe(session);
     const p = (company.catalog || []).find((x) => Number(x.id) === id);
-    if (!p) return respond(res, "Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
+    if (!p) return respondAndLog("Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
     session.cart.push(id);
     await saveSession(session);
-    return respond(res, `Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
+    return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
   }
 
   if (["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase()) && session.state === "MENU" && !isReserved(text)) {
     const ai = await aiReply(session, from, body);
-    if (ai) return respond(res, ai);
+    if (ai) return respondAndLog(ai);
   }
 
   if (text === "checkout") {
-    if (!session.cart.length) return respond(res, "Carrito vacio.");
+    if (!session.cart.length) return respondAndLog("Carrito vacio.");
     session.state = "ASK_NAME";
     await saveSession(session);
-    return respond(res, "A nombre de quien va el pedido?");
+    return respondAndLog("A nombre de quien va el pedido?");
   }
 
   if (session.state === "ASK_NAME" && !isReserved(text)) {
     session.data.name = body;
     session.state = "ASK_CONTACT";
     await saveSession(session);
-    return respond(res, "Pasame un contacto.");
+    return respondAndLog("Pasame un contacto.");
   }
 
   if (session.state === "ASK_CONTACT" && !isReserved(text)) {
     session.data.contact = body;
     session.state = "READY";
     await saveSession(session);
-    return respond(res, `Resumen:\n${await cartText(session)}\nConfirmar: confirmar`);
+    return respondAndLog(`Resumen:\n${await cartText(session)}\nConfirmar: confirmar`);
   }
 
   if (text === "confirmar" && session.state === "READY") {
@@ -1666,15 +1818,15 @@ app.post("/whatsapp", async (req, res) => {
     session.lastOrderId = orderId;
     await saveSession(session);
 
-    return respond(
-      res,
+    return respondAndLog(
       `Pedido ${orderId} confirmado.\nTotal: $${total}\n\n` +
-      `${paymentMethodsReplyText(company, { orderId })}`
+      `${paymentMethodsReplyText(company, { orderId })}`,
+      { orderId }
     );
   }
 
   await saveSession(session);
-  return respond(res, reply);
+  return respondAndLog(reply);
 });
 // ================= RESPUESTA =================
 function respond(res, text) {

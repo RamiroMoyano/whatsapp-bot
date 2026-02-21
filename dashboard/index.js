@@ -3481,8 +3481,10 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   const exportCsvHref = `/panel/pedidos/export?format=csv&${exportParams.toString()}`;
   const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
 
-  const rows = visibleOrders.map((order) => `
-    <tr>
+  const rows = visibleOrders.map((order) => {
+    const safeOrderId = escapeHtml(order.id || "");
+    return `
+    <tr class="cp-order-row" data-order-id="${safeOrderId}">
       <td>${escapeHtml(order.id || "-")}</td>
       <td>${escapeHtml(formatDateLabel(order.createdAt))}</td>
       <td>${escapeHtml(order.name || order.contact || "-")}</td>
@@ -3490,8 +3492,8 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
       <td>${escapeHtml(clientPaymentLabel(order))}</td>
       <td>${escapeHtml(clientPaymentMethodLabel(order))}</td>
       <td>
-        <form method="POST" action="/panel/pedidos/category" class="cp-category-form">
-          <input type="hidden" name="orderId" value="${escapeHtml(order.id || "")}" />
+        <form method="POST" action="/panel/pedidos/category" class="cp-category-form" data-no-toggle="1">
+          <input type="hidden" name="orderId" value="${safeOrderId}" />
           <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
@@ -3505,8 +3507,8 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         </form>
       </td>
       <td>
-        <form method="POST" action="/panel/pedidos/category" class="cp-archive-form">
-          <input type="hidden" name="orderId" value="${escapeHtml(order.id || "")}" />
+        <form method="POST" action="/panel/pedidos/category" class="cp-archive-form" data-no-toggle="1">
+          <input type="hidden" name="orderId" value="${safeOrderId}" />
           <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
@@ -3520,7 +3522,15 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
         </form>
       </td>
     </tr>
-  `).join("");
+    <tr class="cp-order-detail-row cp-hidden" data-order-detail="${safeOrderId}">
+      <td colspan="8">
+        <div class="cp-order-detail-shell">
+          <div class="cp-order-detail-loading">Click en el pedido para ver detalle y conversacion.</div>
+        </div>
+      </td>
+    </tr>
+  `;
+  }).join("");
 
   const bodyHtml = `
     ${updatedCategory ? `<div class="cp-alert success">Estado de pedido actualizado.</div>` : ""}
@@ -3597,13 +3607,155 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
       (() => {
         const range = document.getElementById("ordersRangeSelect");
         const custom = document.getElementById("ordersCustomRange");
-        if (!range || !custom) return;
-        const sync = () => {
-          if (range.value === "custom") custom.classList.remove("cp-hidden");
-          else custom.classList.add("cp-hidden");
+        if (range && custom) {
+          const sync = () => {
+            if (range.value === "custom") custom.classList.remove("cp-hidden");
+            else custom.classList.add("cp-hidden");
+          };
+          range.addEventListener("change", sync);
+          sync();
+        }
+
+        const escapeHtml = (value) => String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+
+        const formatDateTime = (value) => {
+          if (!value) return "-";
+          const d = new Date(value);
+          if (Number.isNaN(d.getTime())) return String(value);
+          return d.toLocaleString("es-AR");
         };
-        range.addEventListener("change", sync);
-        sync();
+
+        const formatMoney = (value) => {
+          const amount = Number(value || 0);
+          try {
+            return new Intl.NumberFormat("es-AR", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
+          } catch {
+            return "$" + Math.round(amount || 0);
+          }
+        };
+
+        const renderDetail = (payload) => {
+          const order = payload?.order || {};
+          const items = Array.isArray(payload?.itemsDetailed) ? payload.itemsDetailed : [];
+          const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+          const itemsHtml = items.length
+            ? '<ul class="cp-order-items">' + items.map((item) => (
+              '<li><span>' + escapeHtml(item.name || ("Producto " + item.id)) + '</span>' +
+              '<span>x' + escapeHtml(item.qty || 1) + ' - ' + formatMoney(item.subtotal ?? item.unit ?? 0) + '</span></li>'
+            )).join("") + "</ul>"
+            : '<div class="cp-empty">Sin items detallados.</div>';
+
+          const messagesHtml = messages.length
+            ? '<div class="cp-order-chat">' + messages.map((msg) => {
+              const isOut = String(msg.direction || "").toLowerCase() === "out";
+              const bubbleClass = isOut ? "out" : "in";
+              const mediaType = String(msg.mediaContentType || "").trim();
+              const mediaUrl = String(msg.mediaUrl || "").trim();
+              const hasImage = mediaUrl && mediaType.toLowerCase().startsWith("image/");
+              return (
+                '<article class="cp-order-msg ' + bubbleClass + '">' +
+                  '<div class="cp-order-msg-meta">' +
+                    '<span>' + (isOut ? "Bot" : "Cliente") + "</span>" +
+                    '<span>' + escapeHtml(formatDateTime(msg.createdAt)) + "</span>" +
+                  "</div>" +
+                  (msg.content ? ('<p class="cp-order-msg-text">' + escapeHtml(msg.content).replace(/\r?\n/g, "<br/>") + "</p>") : "") +
+                  (mediaUrl
+                    ? ('<div class="cp-order-msg-media">' +
+                        '<span>' + escapeHtml(mediaType || "adjunto") + "</span>" +
+                        '<a href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener noreferrer">Abrir adjunto</a>' +
+                        (hasImage ? ('<img src="' + escapeHtml(mediaUrl) + '" alt="Adjunto pedido" loading="lazy" />') : "") +
+                      "</div>")
+                    : "") +
+                "</article>"
+              );
+            }).join("") + "</div>"
+            : '<div class="cp-empty">Sin conversacion para este pedido.</div>';
+
+          return (
+            '<div class="cp-order-detail-grid">' +
+              '<section class="cp-order-detail-card">' +
+                '<h4>Datos del pedido</h4>' +
+                '<div class="cp-kv"><span>ID</span><b>' + escapeHtml(order.id || "-") + '</b></div>' +
+                '<div class="cp-kv"><span>Fecha</span><b>' + escapeHtml(formatDateTime(order.createdAt)) + '</b></div>' +
+                '<div class="cp-kv"><span>Cliente</span><b>' + escapeHtml(order.name || order.contact || "-") + '</b></div>' +
+                '<div class="cp-kv"><span>Total</span><b>' + formatMoney(order.total || 0) + '</b></div>' +
+                '<div class="cp-kv"><span>Pago</span><b>' + escapeHtml(order.paymentStatus || "-") + '</b></div>' +
+                '<div class="cp-kv"><span>Medio de pago</span><b>' + escapeHtml(order.paymentMethod || "-") + '</b></div>' +
+                '<div class="cp-kv"><span>Estado</span><b>' + escapeHtml(order.workflowState || order.orderStatus || "-") + '</b></div>' +
+                '<div class="cp-kv"><span>Notas</span><b>' + escapeHtml(order.notes || "-") + '</b></div>' +
+              '</section>' +
+              '<section class="cp-order-detail-card">' +
+                '<h4>Items</h4>' +
+                itemsHtml +
+              '</section>' +
+              '<section class="cp-order-detail-card cp-order-chat-card">' +
+                '<h4>Conversacion</h4>' +
+                messagesHtml +
+              '</section>' +
+            '</div>'
+          );
+        };
+
+        const detailCache = new Map();
+        const rowList = Array.from(document.querySelectorAll(".cp-order-row[data-order-id]"));
+        rowList.forEach((row) => {
+          row.addEventListener("click", async (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            if (target.closest("form,button,input,select,label,a,[data-no-toggle='1']")) return;
+
+            const orderId = String(row.dataset.orderId || "").trim();
+            if (!orderId) return;
+            const detailRow = document.querySelector('.cp-order-detail-row[data-order-detail="' + orderId.replace(/"/g, '\\"') + '"]');
+            if (!detailRow) return;
+            const shell = detailRow.querySelector(".cp-order-detail-shell");
+            if (!shell) return;
+
+            const isOpen = !detailRow.classList.contains("cp-hidden");
+            document.querySelectorAll(".cp-order-detail-row").forEach((el) => {
+              if (el !== detailRow) el.classList.add("cp-hidden");
+            });
+            document.querySelectorAll(".cp-order-row").forEach((el) => {
+              if (el !== row) el.classList.remove("active");
+            });
+
+            if (isOpen) {
+              detailRow.classList.add("cp-hidden");
+              row.classList.remove("active");
+              return;
+            }
+
+            detailRow.classList.remove("cp-hidden");
+            row.classList.add("active");
+
+            if (detailCache.has(orderId)) {
+              shell.innerHTML = renderDetail(detailCache.get(orderId));
+              return;
+            }
+
+            shell.innerHTML = '<div class="cp-order-detail-loading">Cargando detalle...</div>';
+            try {
+              const response = await fetch('/panel/pedidos/' + encodeURIComponent(orderId) + '/detail', {
+                headers: { Accept: "application/json" },
+                credentials: "same-origin",
+              });
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || ("Error " + response.status));
+              }
+              const payload = await response.json();
+              detailCache.set(orderId, payload);
+              shell.innerHTML = renderDetail(payload);
+            } catch (err) {
+              shell.innerHTML = '<div class="cp-empty">No se pudo cargar el detalle: ' + escapeHtml(err?.message || String(err)) + '</div>';
+            }
+          });
+        });
 
         const archiveForms = Array.from(document.querySelectorAll(".cp-archive-form"));
         archiveForms.forEach((form) => {
@@ -3628,6 +3780,80 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     subtitle: `${company.name || company.id} - seguimiento operativo`,
     bodyHtml,
   }));
+});
+
+app.get("/panel/pedidos/:id/detail", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+  const company = req.company;
+  const orderId = String(req.params.id || "").trim();
+  if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+
+  try {
+    const companyIdParam = encodeURIComponent(String(company.id || ""));
+    const order = await api(`/api/orders/${encodeURIComponent(orderId)}?companyId=${companyIdParam}`);
+    if (!order || String(order.companyId || "").trim() !== String(company.id || "").trim()) {
+      return res.status(403).json({ error: "Pedido no pertenece a esta empresa" });
+    }
+
+    let itemsDetailed = parseJsonSafe(order.itemsDetailedJson || "[]", []);
+    if (!Array.isArray(itemsDetailed)) itemsDetailed = [];
+    if (!itemsDetailed.length) {
+      const rawItems = parseJsonSafe(order.itemsJson || "[]", []);
+      const grouped = {};
+      (Array.isArray(rawItems) ? rawItems : []).forEach((rawId) => {
+        const key = String(rawId || "").trim();
+        if (!key) return;
+        grouped[key] = (grouped[key] || 0) + 1;
+      });
+      itemsDetailed = Object.entries(grouped).map(([id, qty]) => ({
+        id,
+        name: `Producto ${id}`,
+        qty,
+        unit: 0,
+        subtotal: 0,
+      }));
+    }
+
+    let messages = [];
+    try {
+      const history = await api(`/api/orders/${encodeURIComponent(orderId)}/messages?companyId=${companyIdParam}&limit=120`);
+      messages = Array.isArray(history?.messages) ? history.messages : [];
+    } catch {
+      messages = [];
+    }
+
+    return res.json({
+      order: {
+        id: String(order.id || ""),
+        createdAt: order.createdAt || "",
+        fromNumber: String(order.fromNumber || ""),
+        companyId: String(order.companyId || ""),
+        name: String(order.name || ""),
+        contact: String(order.contact || ""),
+        notes: String(order.notes || ""),
+        total: toNumber(order.total),
+        paymentStatus: String(order.paymentStatus || ""),
+        paymentMethod: String(order.paymentMethod || ""),
+        orderStatus: String(order.orderStatus || ""),
+        workflowState: String(order.workflowState || ""),
+        archived: !!order.archived,
+      },
+      itemsDetailed,
+      messages: messages.map((msg) => ({
+        id: Number(msg?.id || 0),
+        createdAt: msg?.createdAt || "",
+        direction: String(msg?.direction || "").toLowerCase() === "out" ? "out" : "in",
+        role: String(msg?.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
+        content: String(msg?.content || ""),
+        mediaUrl: String(msg?.mediaUrl || ""),
+        mediaContentType: String(msg?.mediaContentType || ""),
+        twilioSid: String(msg?.twilioSid || ""),
+      })),
+    });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (msg.includes("404")) return res.status(404).json({ error: "Pedido no encontrado" });
+    return res.status(500).json({ error: msg });
+  }
 });
 
 app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {

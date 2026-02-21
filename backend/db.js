@@ -19,6 +19,11 @@ const pool = new Pool({
 const ROW_KEY_MAP = {
   fromnumber: "fromNumber",
   companyid: "companyId",
+  orderid: "orderId",
+  direction: "direction",
+  mediaurl: "mediaUrl",
+  mediacontenttype: "mediaContentType",
+  twiliosid: "twilioSid",
   createdat: "createdAt",
   updatedat: "updatedAt",
   catalogjson: "catalogJson",
@@ -97,8 +102,14 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
 CREATE TABLE IF NOT EXISTS ai_messages (
   id BIGSERIAL PRIMARY KEY,
   fromNumber TEXT,
+  companyId TEXT,
+  orderId TEXT,
+  direction TEXT,
   role TEXT,
   content TEXT,
+  mediaUrl TEXT,
+  mediaContentType TEXT,
+  twilioSid TEXT,
   createdAt TIMESTAMPTZ
 );
 
@@ -149,8 +160,15 @@ CREATE TABLE IF NOT EXISTS orders (
 
   await db.exec(`
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS companyId TEXT;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS orderId TEXT;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS direction TEXT;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS mediaUrl TEXT;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS mediaContentType TEXT;
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS twilioSid TEXT;
     CREATE INDEX IF NOT EXISTS idx_ai_messages_company_created ON ai_messages(companyId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_messages_from_created ON ai_messages(fromNumber, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_order_created ON ai_messages(orderId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_company_order_created ON ai_messages(companyId, orderId, createdAt DESC);
   `);
 
   await db.exec(`
