@@ -1732,8 +1732,10 @@ app.post("/whatsapp", async (req, res) => {
   if (text === "carrito") return respondAndLog(await cartText(session));
 
   const mAdd = text.match(/^agregar\s+(\d+)$/);
-  if (mAdd) {
-    const id = Number(mAdd[1]);
+  const mCatalogNumber = session.state === "MENU" ? text.match(/^(\d+)$/) : null;
+  const selectedCatalogId = mAdd?.[1] || mCatalogNumber?.[1] || "";
+  if (selectedCatalogId) {
+    const id = Number(selectedCatalogId);
     const company = await getCompanySafe(session);
     const p = (company.catalog || []).find((x) => Number(x.id) === id);
     if (!p) return respondAndLog("Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
