@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 dotenv.config();
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "public")));
@@ -148,12 +148,14 @@ function normalizeInboxMessage(item, index = 0) {
   const sender = senderRaw === "admin" ? "admin" : "client";
   const text = String(item.text || item.message || "").trim();
   if (!text) return null;
+  const subject = String(item.subject || "").trim();
   const createdAt = String(item.createdAt || item.at || new Date().toISOString());
   const statusRaw = String(item.status || "").trim().toLowerCase();
   const status = statusRaw === "resolved" ? "resolved" : "open";
   return {
     id: String(item.id || `msg_${index + 1}`),
     sender,
+    subject,
     text,
     orderId: String(item.orderId || "").trim(),
     createdAt,
@@ -2134,6 +2136,130 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizeCatalogHeader(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function parseCatalogPrice(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+  const cleaned = raw.replace(/[^\d,.-]/g, "");
+  if (!cleaned) return 0;
+
+  const lastComma = cleaned.lastIndexOf(",");
+  const lastDot = cleaned.lastIndexOf(".");
+  let normalized = cleaned;
+  if (lastComma > lastDot) {
+    normalized = cleaned.replace(/\./g, "").replace(",", ".");
+  } else {
+    normalized = cleaned.replace(/,/g, "");
+  }
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : NaN;
+}
+
+function getCatalogFieldByHeader(row, aliases) {
+  if (!row || typeof row !== "object") return "";
+  const entries = Object.entries(row);
+  for (const [key, value] of entries) {
+    const normalizedKey = normalizeCatalogHeader(key);
+    if (aliases.some((alias) => normalizedKey === alias || normalizedKey.includes(alias))) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function extractCatalogItemsFromSheet(sheet) {
+  const aliases = {
+    id: ["id", "codigo", "codigoproducto", "sku", "code"],
+    name: ["producto", "nombre", "name", "item", "descripcion"],
+    price: ["precio", "price", "monto", "valor", "importe"],
+    stock: ["stock", "cantidad", "existencia", "qty"],
+    category: ["categoria", "category", "rubro", "tipo"],
+  };
+
+  const rowsAsObjects = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+  const items = [];
+
+  for (let idx = 0; idx < rowsAsObjects.length; idx += 1) {
+    const row = rowsAsObjects[idx];
+    const idRaw = String(getCatalogFieldByHeader(row, aliases.id) || "").trim();
+    const nameRaw = String(getCatalogFieldByHeader(row, aliases.name) || "").trim();
+    const priceRaw = getCatalogFieldByHeader(row, aliases.price);
+    const stockRaw = String(getCatalogFieldByHeader(row, aliases.stock) || "").trim();
+    const categoryRaw = String(getCatalogFieldByHeader(row, aliases.category) || "").trim();
+    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryRaw;
+    if (!hasData) continue;
+
+    const price = parseCatalogPrice(priceRaw);
+    if (!Number.isFinite(price) || price < 0) {
+      throw new Error(`Precio invalido en fila ${idx + 2}`);
+    }
+
+    items.push({
+      id: idRaw,
+      name: nameRaw,
+      price,
+      stock: stockRaw || "-",
+      category: categoryRaw || "-",
+    });
+  }
+
+  if (items.length) return items;
+
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  if (!Array.isArray(matrix) || !matrix.length) return [];
+
+  const flatAliases = new Set(Object.values(aliases).flat());
+  const firstRow = Array.isArray(matrix[0]) ? matrix[0] : [];
+  const looksLikeHeader = firstRow.some((cell) => flatAliases.has(normalizeCatalogHeader(cell)));
+  const dataRows = matrix.slice(looksLikeHeader ? 1 : 0);
+  const fallbackItems = [];
+
+  for (let idx = 0; idx < dataRows.length; idx += 1) {
+    const row = Array.isArray(dataRows[idx]) ? dataRows[idx] : [];
+    const idRaw = String(row[0] || "").trim();
+    const nameRaw = String(row[1] || "").trim();
+    const priceRaw = row[2];
+    const stockRaw = String(row[3] || "").trim();
+    const categoryRaw = String(row[4] || "").trim();
+    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryRaw;
+    if (!hasData) continue;
+
+    const price = parseCatalogPrice(priceRaw);
+    if (!Number.isFinite(price) || price < 0) {
+      throw new Error(`Precio invalido en fila ${idx + 1 + (looksLikeHeader ? 2 : 1)}`);
+    }
+
+    fallbackItems.push({
+      id: idRaw,
+      name: nameRaw,
+      price,
+      stock: stockRaw || "-",
+      category: categoryRaw || "-",
+    });
+  }
+  return fallbackItems;
+}
+
+function buildSupportMessageSubject(item) {
+  const explicit = String(item?.subject || "").trim();
+  if (explicit) return explicit;
+  const firstLine = String(item?.text || "").split(/\r?\n/)[0].trim();
+  const shortLine = firstLine ? firstLine.slice(0, 100) : "";
+  const orderId = String(item?.orderId || "").trim();
+  if (orderId && shortLine) return `Pedido ${orderId}: ${shortLine}`;
+  if (orderId) return `Consulta sobre pedido ${orderId}`;
+  if (shortLine) return shortLine;
+  return item?.sender === "admin" ? "Respuesta del admin" : "Consulta de soporte";
+}
+
 function formatMoney(value, currency = "USD") {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "-";
@@ -2963,43 +3089,72 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
     </section>
 
     <section class="cp-grid">
-      <article class="cp-card cp-span-3">
-        <div class="cp-card-head">
-          <h3>Catalogo completo</h3>
-          <div class="cp-actions">
-            <span>${state.catalog.length} filas</span>
-            <a class="cp-btn" href="#editar-catalogo">Modificar catalogo</a>
-          </div>
+      <details class="cp-card cp-span-3 cp-card-toggle" id="catalogo-completo">
+        <summary>
+          <span>Catalogo completo</span>
+          <span class="cp-details-hint">${state.catalog.length} filas</span>
+        </summary>
+        <div class="cp-card-toggle-body">
+          <table class="cp-table">
+            <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
+          </table>
         </div>
-        <table class="cp-table">
-          <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
-        </table>
-      </article>
+      </details>
 
-      <article class="cp-card cp-span-3" id="editar-catalogo">
-        <div class="cp-card-head"><h3>Editar catalogo (simple)</h3><span>Sin escribir JSON</span></div>
-        <form id="catalogEditorForm" method="POST" action="/panel/catalogo/save" class="cp-form">
-          <p class="cp-note">Edita los productos en tabla. Al guardar, el sistema lo convierte a JSON automaticamente.</p>
-          <input id="catalogJsonInput" type="hidden" name="catalogJson" value="${escapeHtml(initialCatalogJson)}" />
-          <div class="cp-table-wrap">
-            <table class="cp-table cp-edit-table">
-              <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th><th>Accion</th></tr></thead>
-              <tbody id="catalogEditorBody">${editorRows}</tbody>
-            </table>
-          </div>
-          <div id="catalogEditorStatus" class="cp-note" aria-live="polite"></div>
-          <div class="cp-actions">
-            <button class="cp-btn" type="button" id="catalogAddRowBtn">Agregar producto</button>
-            <span id="catalogEditorCount">${state.catalog.length} filas</span>
-            <button class="cp-btn primary" type="submit">Guardar catalogo</button>
-          </div>
-          <noscript>
-            <label>Modo sin JavaScript (Catalog JSON)</label>
-            <textarea name="catalogJson" rows="10">${escapeHtml(company.catalogJson || "[]")}</textarea>
-          </noscript>
-        </form>
-      </article>
+      <details class="cp-card cp-span-3 cp-card-toggle" id="importar-catalogo">
+        <summary>
+          <span>Importar catalogo (Excel)</span>
+          <span class="cp-details-hint">Carga masiva</span>
+        </summary>
+        <div class="cp-card-toggle-body">
+          <form id="catalogImportForm" method="POST" action="/panel/catalogo/import" class="cp-form">
+            <p class="cp-note">Sube un archivo .xlsx, .xls o .csv. Se detectan columnas por encabezado (ID, producto, precio, stock, categoria).</p>
+            <label>Archivo Excel</label>
+            <input id="catalogExcelFile" type="file" accept=".xlsx,.xls,.csv" required />
+            <input id="catalogExcelBase64" type="hidden" name="excelBase64" value="" />
+            <input id="catalogExcelName" type="hidden" name="excelFileName" value="" />
+            <label>Modo de importacion</label>
+            <select name="importMode">
+              <option value="replace">Reemplazar catalogo actual</option>
+              <option value="append">Agregar al catalogo actual</option>
+            </select>
+            <div id="catalogImportStatus" class="cp-note" aria-live="polite"></div>
+            <div class="cp-actions">
+              <button class="cp-btn primary" type="submit">Importar catalogo</button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      <details class="cp-card cp-span-3 cp-card-toggle" id="editar-catalogo">
+        <summary>
+          <span>Editar catalogo manual</span>
+          <span class="cp-details-hint">Sin escribir JSON</span>
+        </summary>
+        <div class="cp-card-toggle-body">
+          <form id="catalogEditorForm" method="POST" action="/panel/catalogo/save" class="cp-form">
+            <p class="cp-note">Edita los productos en tabla. Al guardar, el sistema lo convierte a JSON automaticamente.</p>
+            <input id="catalogJsonInput" type="hidden" name="catalogJson" value="${escapeHtml(initialCatalogJson)}" />
+            <div class="cp-table-wrap">
+              <table class="cp-table cp-edit-table">
+                <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th><th>Accion</th></tr></thead>
+                <tbody id="catalogEditorBody">${editorRows}</tbody>
+              </table>
+            </div>
+            <div id="catalogEditorStatus" class="cp-note" aria-live="polite"></div>
+            <div class="cp-actions">
+              <button class="cp-btn" type="button" id="catalogAddRowBtn">Agregar producto</button>
+              <span id="catalogEditorCount">${state.catalog.length} filas</span>
+              <button class="cp-btn primary" type="submit">Guardar catalogo</button>
+            </div>
+            <noscript>
+              <label>Modo sin JavaScript (Catalog JSON)</label>
+              <textarea name="catalogJson" rows="10">${escapeHtml(company.catalogJson || "[]")}</textarea>
+            </noscript>
+          </form>
+        </div>
+      </details>
     </section>
 
     <script>
@@ -3010,120 +3165,165 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
         const addBtn = document.getElementById("catalogAddRowBtn");
         const status = document.getElementById("catalogEditorStatus");
         const counter = document.getElementById("catalogEditorCount");
-        if (!form || !body || !hidden || !addBtn || !status || !counter) return;
-
-        function getRows() {
-          return Array.from(body.querySelectorAll("tr"));
-        }
-
-        function setStatus(message, isError) {
-          status.textContent = message || "";
-          status.classList.toggle("error", !!isError);
-        }
-
-        function updateCount() {
-          counter.textContent = getRows().length + " filas";
-        }
-
-        function addRow(data) {
-          const row = document.createElement("tr");
-          row.className = "cp-edit-row";
-          row.innerHTML =
-            '<td><input type="text" data-field="id" placeholder="ID" /></td>' +
-            '<td><input type="text" data-field="name" placeholder="Producto" /></td>' +
-            '<td><input type="number" step="0.01" min="0" data-field="price" placeholder="0" /></td>' +
-            '<td><input type="text" data-field="stock" placeholder="Stock" /></td>' +
-            '<td><input type="text" data-field="category" placeholder="Categoria" /></td>' +
-            '<td class="cp-edit-actions"><button class="cp-btn danger cp-row-remove" type="button">Quitar</button></td>';
-          body.appendChild(row);
-
-          row.querySelector('[data-field="id"]').value = String(data?.id || "");
-          row.querySelector('[data-field="name"]').value = String(data?.name || "");
-          row.querySelector('[data-field="price"]').value = String(data?.price ?? "");
-          row.querySelector('[data-field="stock"]').value = String(data?.stock || "");
-          row.querySelector('[data-field="category"]').value = String(data?.category || "");
-          updateCount();
-        }
-
-        function ensureAtLeastOneRow() {
-          if (!getRows().length) {
-            addRow({ id: "", name: "", price: "", stock: "", category: "" });
+        if (form && body && hidden && addBtn && status && counter) {
+          function getRows() {
+            return Array.from(body.querySelectorAll("tr"));
           }
-        }
 
-        function serializeRows() {
-          const items = [];
-          const rows = getRows();
-          for (let idx = 0; idx < rows.length; idx += 1) {
-            const row = rows[idx];
-            const idRaw = String(row.querySelector('[data-field="id"]')?.value || "").trim();
-            const nameRaw = String(row.querySelector('[data-field="name"]')?.value || "").trim();
-            const priceRaw = String(row.querySelector('[data-field="price"]')?.value || "").trim();
-            const stockRaw = String(row.querySelector('[data-field="stock"]')?.value || "").trim();
-            const categoryRaw = String(row.querySelector('[data-field="category"]')?.value || "").trim();
+          function setStatus(message, isError) {
+            status.textContent = message || "";
+            status.classList.toggle("error", !!isError);
+          }
 
-            const hasData = idRaw || nameRaw || priceRaw || stockRaw || categoryRaw;
-            if (!hasData) continue;
+          function updateCount() {
+            counter.textContent = getRows().length + " filas";
+          }
 
-            const normalizedPrice = Number(priceRaw.replace(",", "."));
-            if (!Number.isFinite(normalizedPrice) || normalizedPrice < 0) {
-              throw new Error("Precio invalido en fila " + (idx + 1));
+          function addRow(data) {
+            const row = document.createElement("tr");
+            row.className = "cp-edit-row";
+            row.innerHTML =
+              '<td><input type="text" data-field="id" placeholder="ID" /></td>' +
+              '<td><input type="text" data-field="name" placeholder="Producto" /></td>' +
+              '<td><input type="number" step="0.01" min="0" data-field="price" placeholder="0" /></td>' +
+              '<td><input type="text" data-field="stock" placeholder="Stock" /></td>' +
+              '<td><input type="text" data-field="category" placeholder="Categoria" /></td>' +
+              '<td class="cp-edit-actions"><button class="cp-btn danger cp-row-remove" type="button">Quitar</button></td>';
+            body.appendChild(row);
+
+            row.querySelector('[data-field="id"]').value = String(data?.id || "");
+            row.querySelector('[data-field="name"]').value = String(data?.name || "");
+            row.querySelector('[data-field="price"]').value = String(data?.price ?? "");
+            row.querySelector('[data-field="stock"]').value = String(data?.stock || "");
+            row.querySelector('[data-field="category"]').value = String(data?.category || "");
+            updateCount();
+          }
+
+          function ensureAtLeastOneRow() {
+            if (!getRows().length) {
+              addRow({ id: "", name: "", price: "", stock: "", category: "" });
+            }
+          }
+
+          function serializeRows() {
+            const items = [];
+            const rows = getRows();
+            for (let idx = 0; idx < rows.length; idx += 1) {
+              const row = rows[idx];
+              const idRaw = String(row.querySelector('[data-field="id"]')?.value || "").trim();
+              const nameRaw = String(row.querySelector('[data-field="name"]')?.value || "").trim();
+              const priceRaw = String(row.querySelector('[data-field="price"]')?.value || "").trim();
+              const stockRaw = String(row.querySelector('[data-field="stock"]')?.value || "").trim();
+              const categoryRaw = String(row.querySelector('[data-field="category"]')?.value || "").trim();
+
+              const hasData = idRaw || nameRaw || priceRaw || stockRaw || categoryRaw;
+              if (!hasData) continue;
+
+              const normalizedPrice = Number(priceRaw.replace(",", "."));
+              if (!Number.isFinite(normalizedPrice) || normalizedPrice < 0) {
+                throw new Error("Precio invalido en fila " + (idx + 1));
+              }
+
+              items.push({
+                id: idRaw || String(items.length + 1),
+                name: nameRaw || ("Producto " + (items.length + 1)),
+                price: Math.round(normalizedPrice * 100) / 100,
+                stock: stockRaw || "-",
+                category: categoryRaw || "-",
+              });
             }
 
-            items.push({
-              id: idRaw || String(items.length + 1),
-              name: nameRaw || ("Producto " + (items.length + 1)),
-              price: Math.round(normalizedPrice * 100) / 100,
-              stock: stockRaw || "-",
-              category: categoryRaw || "-",
-            });
+            hidden.value = JSON.stringify(items);
+            updateCount();
+            return items;
           }
 
-          hidden.value = JSON.stringify(items);
-          updateCount();
-          return items;
-        }
-
-        function safeSerialize() {
-          try {
-            serializeRows();
-            setStatus("", false);
-          } catch (err) {
-            setStatus(err?.message || String(err), true);
+          function safeSerialize() {
+            try {
+              serializeRows();
+              setStatus("", false);
+            } catch (err) {
+              setStatus(err?.message || String(err), true);
+            }
           }
-        }
 
-        body.addEventListener("click", (event) => {
-          const target = event.target;
-          if (!(target instanceof HTMLElement)) return;
-          if (!target.classList.contains("cp-row-remove")) return;
-          const row = target.closest("tr");
-          if (row) row.remove();
+          body.addEventListener("click", (event) => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) return;
+            if (!target.classList.contains("cp-row-remove")) return;
+            const row = target.closest("tr");
+            if (row) row.remove();
+            ensureAtLeastOneRow();
+            safeSerialize();
+          });
+
+          body.addEventListener("input", () => {
+            safeSerialize();
+          });
+
+          addBtn.addEventListener("click", () => {
+            addRow({ id: "", name: "", price: "", stock: "", category: "" });
+            safeSerialize();
+          });
+
+          form.addEventListener("submit", (event) => {
+            try {
+              const items = serializeRows();
+              if (!items.length) setStatus("Se guardara un catalogo vacio.", false);
+            } catch (err) {
+              event.preventDefault();
+              setStatus(err?.message || String(err), true);
+            }
+          });
+
           ensureAtLeastOneRow();
           safeSerialize();
-        });
+        }
 
-        body.addEventListener("input", () => {
-          safeSerialize();
-        });
-
-        addBtn.addEventListener("click", () => {
-          addRow({ id: "", name: "", price: "", stock: "", category: "" });
-          safeSerialize();
-        });
-
-        form.addEventListener("submit", (event) => {
-          try {
-            const items = serializeRows();
-            if (!items.length) setStatus("Se guardara un catalogo vacio.", false);
-          } catch (err) {
-            event.preventDefault();
-            setStatus(err?.message || String(err), true);
+        const importForm = document.getElementById("catalogImportForm");
+        const importFile = document.getElementById("catalogExcelFile");
+        const importBase64 = document.getElementById("catalogExcelBase64");
+        const importName = document.getElementById("catalogExcelName");
+        const importStatus = document.getElementById("catalogImportStatus");
+        if (importForm && importFile && importBase64 && importName && importStatus) {
+          function setImportStatus(message, isError) {
+            importStatus.textContent = message || "";
+            importStatus.classList.toggle("error", !!isError);
           }
-        });
 
-        ensureAtLeastOneRow();
-        safeSerialize();
+          importFile.addEventListener("change", () => {
+            const file = importFile.files && importFile.files[0];
+            importBase64.value = "";
+            importName.value = "";
+            if (!file) {
+              setImportStatus("", false);
+              return;
+            }
+            importName.value = String(file.name || "");
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result || "");
+              const base64 = result.includes(",") ? result.split(",").pop() : "";
+              if (!base64) {
+                setImportStatus("No se pudo leer el archivo.", true);
+                return;
+              }
+              importBase64.value = base64;
+              setImportStatus("Archivo listo para importar: " + (file.name || "archivo"), false);
+            };
+            reader.onerror = () => {
+              setImportStatus("No se pudo leer el archivo seleccionado.", true);
+            };
+            reader.readAsDataURL(file);
+          });
+
+          importForm.addEventListener("submit", (event) => {
+            if (!importBase64.value) {
+              event.preventDefault();
+              setImportStatus("Selecciona un archivo Excel antes de importar.", true);
+            }
+          });
+        }
       })();
     </script>
   `;
@@ -3159,6 +3359,73 @@ app.post("/panel/catalogo/save", requireClientAuth, requireClientSectionAccess("
     res.redirect("/panel/catalogo?saved=1");
   } catch (e) {
     res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/panel/catalogo/import", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
+  const company = req.company;
+  const id = company.id;
+  const excelBase64 = String(req.body.excelBase64 || "").trim();
+  const importMode = String(req.body.importMode || "replace").trim().toLowerCase() === "append" ? "append" : "replace";
+
+  if (!excelBase64) {
+    return res.redirect(`/panel/catalogo?error=${encodeURIComponent("Selecciona un archivo Excel para importar")}`);
+  }
+
+  try {
+    const buffer = Buffer.from(excelBase64, "base64");
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const firstSheetName = Array.isArray(workbook.SheetNames) ? workbook.SheetNames[0] : "";
+    if (!firstSheetName) throw new Error("El archivo no tiene hojas");
+
+    const sheet = workbook.Sheets[firstSheetName];
+    const importedItemsRaw = extractCatalogItemsFromSheet(sheet);
+    if (!importedItemsRaw.length) {
+      throw new Error("No se detectaron filas validas para importar");
+    }
+
+    const importedItems = importedItemsRaw.map((item, idx) => ({
+      id: String(item.id || idx + 1).trim() || String(idx + 1),
+      name: String(item.name || "").trim() || `Producto ${idx + 1}`,
+      price: toNumber(item.price),
+      stock: String(item.stock || "-").trim() || "-",
+      category: String(item.category || "-").trim() || "-",
+    }));
+
+    const existingCatalog = parseJsonSafe(company.catalogJson || "[]", []);
+    const existingItems = (Array.isArray(existingCatalog) ? existingCatalog : []).map((item, idx) => ({
+      id: String(item?.id || idx + 1).trim() || String(idx + 1),
+      name: String(item?.name || "").trim() || `Producto ${idx + 1}`,
+      price: toNumber(item?.price),
+      stock: String(item?.stock || "-").trim() || "-",
+      category: String(item?.category || "-").trim() || "-",
+    }));
+
+    const merged = importMode === "append"
+      ? [...existingItems, ...importedItems]
+      : importedItems;
+
+    const normalized = merged.map((item, idx) => ({
+      id: item.id || String(idx + 1),
+      name: item.name || `Producto ${idx + 1}`,
+      price: toNumber(item.price),
+      stock: item.stock || "-",
+      category: item.category || "-",
+    }));
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: JSON.stringify(normalized),
+        rulesJson: company.rulesJson || "{}",
+      },
+    });
+
+    return res.redirect("/panel/catalogo?saved=1");
+  } catch (e) {
+    return res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
   }
 });
 
@@ -3442,18 +3709,28 @@ app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte
     const unreadCount = inbox.filter((item) => item.sender === "admin" && !item.readByClient).length;
     const inboxRows = inbox
       .slice()
-      .reverse()
-      .map((item) => `
-        <article class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
-          <div class="cp-msg-head">
-            <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
-            <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
-            <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
-            ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
+      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
+      .map((item) => {
+        const subject = buildSupportMessageSubject(item);
+        return `
+        <details class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
+          <summary class="cp-msg-summary">
+            <span class="cp-msg-subject" title="${escapeHtml(subject)}">${escapeHtml(subject)}</span>
+            <span class="cp-msg-meta">
+              <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
+              <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
+            </span>
+          </summary>
+          <div class="cp-msg-body">
+            <div class="cp-msg-head">
+              <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
+              ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
+            </div>
+            <p class="cp-msg-text">${toHtmlText(item.text)}</p>
           </div>
-          <p class="cp-msg-text">${toHtmlText(item.text)}</p>
-        </article>
-      `)
+        </details>
+      `;
+      })
       .join("");
 
     const bodyHtml = `
@@ -3471,6 +3748,10 @@ app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte
           <div class="cp-card-head"><h3>Soporte con admin</h3><span>${inbox.length} mensajes</span></div>
           <form method="POST" action="/panel/soporte/messages" class="cp-form">
             <div class="cp-grid-2">
+              <div>
+                <label>Asunto</label>
+                <input name="messageSubject" maxlength="120" placeholder="Ej: Cambio de plan / Error de pedidos" />
+              </div>
               <div>
                 <label>Pedido relacionado (opcional)</label>
                 <input name="orderId" placeholder="Ej: PED-123ABC" />
@@ -3511,10 +3792,15 @@ app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte
 app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
   const company = req.company;
   const id = String(company?.id || "").trim();
+  const messageSubject = String(req.body.messageSubject || "").trim();
   const messageText = String(req.body.messageText || "").trim();
   const orderId = String(req.body.orderId || "").trim();
   const statusRaw = String(req.body.statusMessage || "").trim().toLowerCase();
   const status = statusRaw === "resolved" ? "resolved" : "open";
+
+  if (messageSubject.length > 120) {
+    return res.redirect(`/panel/soporte?error=${encodeURIComponent("El asunto supera 120 caracteres")}#cp-inbox`);
+  }
 
   if (!messageText) {
     return res.redirect(`/panel/soporte?error=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
@@ -3533,6 +3819,7 @@ app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAcces
     inbox.push({
       id: createInboxMessageId(),
       sender: "client",
+      subject: messageSubject,
       text: messageText,
       orderId,
       createdAt: new Date().toISOString(),
@@ -3757,102 +4044,138 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
 
     <section class="cp-grid">
-      <article class="cp-card cp-span-2">
-        <div class="cp-card-head"><h3>Datos de cuenta</h3><span>${escapeHtml(company.id)}</span></div>
-        <form method="POST" action="/panel/cuenta/save" class="cp-form">
-          <label>Nombre del responsable</label>
-          <input name="ownerName" value="${escapeHtml(state.profile.ownerName)}" />
+      <details class="cp-card cp-span-2 cp-card-toggle">
+        <summary>
+          <span>Datos de cuenta</span>
+          <span class="cp-details-hint">${escapeHtml(company.id)}</span>
+        </summary>
+        <div class="cp-card-toggle-body">
+          <form method="POST" action="/panel/cuenta/save" class="cp-form cp-form-sections">
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Contacto principal</span><span class="cp-details-hint">Responsable</span></summary>
+              <div class="cp-company-details-body">
+                <label>Nombre del responsable</label>
+                <input name="ownerName" value="${escapeHtml(state.profile.ownerName)}" />
 
-          <label>Cargo</label>
-          <input name="ownerRole" value="${escapeHtml(state.profile.ownerRole)}" />
+                <label>Cargo</label>
+                <input name="ownerRole" value="${escapeHtml(state.profile.ownerRole)}" />
 
-          <div class="cp-grid-2">
-            <div>
-              <label>Email</label>
-              <input name="ownerEmail" value="${escapeHtml(state.profile.ownerEmail)}" />
+                <div class="cp-grid-2">
+                  <div>
+                    <label>Email</label>
+                    <input name="ownerEmail" value="${escapeHtml(state.profile.ownerEmail)}" />
+                  </div>
+                  <div>
+                    <label>Telefono</label>
+                    <input name="ownerPhone" value="${escapeHtml(state.profile.ownerPhone)}" />
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Ubicacion</span><span class="cp-details-hint">Empresa</span></summary>
+              <div class="cp-company-details-body">
+                <label>Direccion</label>
+                <input name="companyAddress" value="${escapeHtml(state.profile.companyAddress)}" />
+
+                <div class="cp-grid-2">
+                  <div>
+                    <label>Ciudad</label>
+                    <input name="companyCity" value="${escapeHtml(state.profile.companyCity)}" />
+                  </div>
+                  <div>
+                    <label>Pais</label>
+                    <input name="companyCountry" value="${escapeHtml(state.profile.companyCountry)}" />
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Acceso</span><span class="cp-details-hint">Seguridad</span></summary>
+              <div class="cp-company-details-body">
+                <label>Nueva contrasena de acceso (opcional)</label>
+                <input name="clientPassword" type="password" placeholder="Dejar vacio para no cambiar" />
+              </div>
+            </details>
+
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Medios de pago</span><span class="cp-details-hint">Opciones para clientes</span></summary>
+              <div class="cp-company-details-body">
+                <p class="cp-note" style="margin-top:0">Configura los medios para que el bot los ofrezca al cliente. El comprobante de transferencia es opcional.</p>
+                <div class="cp-grid-2">
+                  <label><input type="checkbox" name="paymentCash" value="1" ${payment.cash ? "checked" : ""} /> Efectivo</label>
+                  <label><input type="checkbox" name="paymentDebit" value="1" ${payment.debit ? "checked" : ""} /> Debito</label>
+                  <label><input type="checkbox" name="paymentTransfer" value="1" ${payment.transfer ? "checked" : ""} /> Transferencia</label>
+                  <label><input type="checkbox" name="paymentCredit" value="1" ${payment.credit ? "checked" : ""} /> Tarjeta de credito</label>
+                </div>
+              </div>
+            </details>
+
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Datos para transferencia</span><span class="cp-details-hint">CBU / Alias / Titular</span></summary>
+              <div class="cp-company-details-body">
+                <div class="cp-grid-2">
+                  <div>
+                    <label>Banco</label>
+                    <input name="paymentTransferBankName" value="${escapeHtml(payment.transferBankName)}" />
+                  </div>
+                  <div>
+                    <label>Tipo de cuenta</label>
+                    <input name="paymentTransferAccountType" value="${escapeHtml(payment.transferAccountType)}" placeholder="Caja de ahorro / Cuenta corriente" />
+                  </div>
+                  <div>
+                    <label>Razon social / Titular</label>
+                    <input name="paymentTransferAccountHolder" value="${escapeHtml(payment.transferAccountHolder)}" />
+                  </div>
+                  <div>
+                    <label>CUIT/CUIL</label>
+                    <input name="paymentTransferTaxId" value="${escapeHtml(payment.transferTaxId)}" />
+                  </div>
+                  <div>
+                    <label>CBU</label>
+                    <input name="paymentTransferCbu" value="${escapeHtml(payment.transferCbu)}" />
+                  </div>
+                  <div>
+                    <label>Alias</label>
+                    <input name="paymentTransferAlias" value="${escapeHtml(payment.transferAlias)}" />
+                  </div>
+                </div>
+
+                <label>Nota para transferencia (opcional)</label>
+                <input name="paymentTransferNote" value="${escapeHtml(payment.transferNote)}" placeholder="Ej: enviar comprobante por este chat" />
+              </div>
+            </details>
+
+            <details class="cp-company-details cp-form-section">
+              <summary><span>Instrucciones generales</span><span class="cp-details-hint">Texto para el bot</span></summary>
+              <div class="cp-company-details-body">
+                <label>Instrucciones generales de pago</label>
+                <textarea name="paymentInstructions" rows="3" placeholder="Ej: horario de caja, aclaraciones, etc.">${escapeHtml(payment.instructions)}</textarea>
+              </div>
+            </details>
+
+            <div class="cp-actions">
+              <button class="cp-btn primary" type="submit">Guardar datos</button>
             </div>
-            <div>
-              <label>Telefono</label>
-              <input name="ownerPhone" value="${escapeHtml(state.profile.ownerPhone)}" />
-            </div>
-          </div>
+          </form>
+        </div>
+      </details>
 
-          <label>Direccion</label>
-          <input name="companyAddress" value="${escapeHtml(state.profile.companyAddress)}" />
-
-          <div class="cp-grid-2">
-            <div>
-              <label>Ciudad</label>
-              <input name="companyCity" value="${escapeHtml(state.profile.companyCity)}" />
-            </div>
-            <div>
-              <label>Pais</label>
-              <input name="companyCountry" value="${escapeHtml(state.profile.companyCountry)}" />
-            </div>
-          </div>
-
-          <label>Nueva contrasena de acceso (opcional)</label>
-          <input name="clientPassword" type="password" placeholder="Dejar vacio para no cambiar" />
-
-          <hr style="border:0;border-top:1px solid rgba(120,150,220,.25);margin:16px 0" />
-          <h4 style="margin:0 0 8px 0">Medio de pagos</h4>
-          <p class="cp-note" style="margin-top:0">Configura los medios para que el bot los ofrezca al cliente. El comprobante de transferencia es opcional.</p>
-
-          <div class="cp-grid-2">
-            <label><input type="checkbox" name="paymentCash" value="1" ${payment.cash ? "checked" : ""} /> Efectivo</label>
-            <label><input type="checkbox" name="paymentDebit" value="1" ${payment.debit ? "checked" : ""} /> Debito</label>
-            <label><input type="checkbox" name="paymentTransfer" value="1" ${payment.transfer ? "checked" : ""} /> Transferencia</label>
-            <label><input type="checkbox" name="paymentCredit" value="1" ${payment.credit ? "checked" : ""} /> Tarjeta de credito</label>
-          </div>
-
-          <h5 style="margin:8px 0 4px 0">Datos para transferencia</h5>
-          <div class="cp-grid-2">
-            <div>
-              <label>Banco</label>
-              <input name="paymentTransferBankName" value="${escapeHtml(payment.transferBankName)}" />
-            </div>
-            <div>
-              <label>Tipo de cuenta</label>
-              <input name="paymentTransferAccountType" value="${escapeHtml(payment.transferAccountType)}" placeholder="Caja de ahorro / Cuenta corriente" />
-            </div>
-            <div>
-              <label>Razon social / Titular</label>
-              <input name="paymentTransferAccountHolder" value="${escapeHtml(payment.transferAccountHolder)}" />
-            </div>
-            <div>
-              <label>CUIT/CUIL</label>
-              <input name="paymentTransferTaxId" value="${escapeHtml(payment.transferTaxId)}" />
-            </div>
-            <div>
-              <label>CBU</label>
-              <input name="paymentTransferCbu" value="${escapeHtml(payment.transferCbu)}" />
-            </div>
-            <div>
-              <label>Alias</label>
-              <input name="paymentTransferAlias" value="${escapeHtml(payment.transferAlias)}" />
-            </div>
-          </div>
-
-          <label>Nota para transferencia (opcional)</label>
-          <input name="paymentTransferNote" value="${escapeHtml(payment.transferNote)}" placeholder="Ej: enviar comprobante por este chat" />
-
-          <label>Instrucciones generales de pago</label>
-          <textarea name="paymentInstructions" rows="3" placeholder="Ej: horario de caja, aclaraciones, etc.">${escapeHtml(payment.instructions)}</textarea>
-
-          <div class="cp-actions">
-            <button class="cp-btn primary" type="submit">Guardar datos</button>
-          </div>
-        </form>
-      </article>
-
-      <article class="cp-card">
-        <h3>Plan activo</h3>
-        <div class="cp-kv"><span>Tipo</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
-        <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
-        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
-        <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
-        <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
-      </article>
+      <details class="cp-card cp-card-toggle">
+        <summary>
+          <span>Plan activo</span>
+          <span class="cp-details-hint">${escapeHtml(state.plan.planLabel)}</span>
+        </summary>
+        <div class="cp-card-toggle-body">
+          <div class="cp-kv"><span>Tipo</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
+          <div class="cp-kv"><span>Canal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
+          <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.plan.botClass)}</b></div>
+          <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
+          <div class="cp-kv"><span>Renueva</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
+        </div>
+      </details>
     </section>
   `;
 

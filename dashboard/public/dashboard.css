@@ -1103,6 +1103,47 @@ body.client-ui {
   font-weight: 700;
 }
 
+.cp-card-toggle {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cp-card-toggle > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 800;
+  color: #0b1f4a;
+}
+
+.cp-card-toggle > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-card-toggle[open] > summary {
+  border-bottom: 1px solid #dbe6ff;
+}
+
+.cp-card-toggle-body {
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.cp-form-sections {
+  display: grid;
+  gap: 10px;
+}
+
+.cp-form-section {
+  margin: 0;
+}
+
 .cp-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1819,6 +1860,14 @@ body.client-ui::after {
   color: #eef6ff;
 }
 
+.cp-card-toggle > summary {
+  color: #eef6ff;
+}
+
+.cp-card-toggle[open] > summary {
+  border-bottom-color: rgba(88, 146, 230, 0.4);
+}
+
 .cp-stat {
   position: relative;
   overflow: hidden;
@@ -1987,11 +2036,58 @@ body.client-ui::after {
   border: 1px solid rgba(94, 148, 232, 0.38);
   border-radius: 12px;
   background: rgba(7, 24, 61, 0.6);
-  padding: 10px 12px;
+  padding: 0;
+  overflow: hidden;
 }
 
 .cp-msg-item.from-admin {
   border-color: rgba(75, 211, 187, 0.5);
+}
+
+.cp-msg-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.cp-msg-summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-msg-item[open] .cp-msg-summary {
+  border-bottom: 1px solid rgba(80, 124, 201, 0.24);
+}
+
+.cp-msg-subject {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #eaf5ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cp-msg-date {
+  font-size: 12px;
+  color: #9fc0eb;
+}
+
+.cp-msg-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-msg-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .cp-msg-head {
@@ -2009,7 +2105,7 @@ body.client-ui::after {
 }
 
 .cp-msg-text {
-  margin: 8px 0 0;
+  margin: 0;
   color: #deebff;
   line-height: 1.45;
 }
