@@ -148,6 +148,12 @@ CREATE TABLE IF NOT EXISTS orders (
   `);
 
   await db.exec(`
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS companyId TEXT;
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_company_created ON ai_messages(companyId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_from_created ON ai_messages(fromNumber, createdAt DESC);
+  `);
+
+  await db.exec(`
     INSERT INTO companies(id,name,prompt,catalogJson,rulesJson,createdAt)
     VALUES
       (

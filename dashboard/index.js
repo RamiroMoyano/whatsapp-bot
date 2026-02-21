@@ -218,6 +218,20 @@ async function getAdminUnreadNotificationsTotal() {
   }
 }
 
+async function getCompanyWhatsappMessageStats(companyId) {
+  const id = String(companyId || "").trim();
+  if (!id) return { total: 0, last30Days: 0 };
+  try {
+    const data = await api(`/api/companies/${encodeURIComponent(id)}/whatsapp-messages/stats`);
+    return {
+      total: Number(data?.total || 0),
+      last30Days: Number(data?.last30Days || 0),
+    };
+  } catch {
+    return { total: 0, last30Days: 0 };
+  }
+}
+
 function renderNotificationBell({ href, count = 0, className = "", title = "Notificaciones" }) {
   const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
   const classes = `notify-bell ${className}`.trim();
@@ -1670,11 +1684,14 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
 
     const infoSaved = String(req.query.saved || "") === "1";
     const infoReplied = String(req.query.replied || "") === "1";
+    const infoReset = String(req.query.reset || "") === "1";
+    const resetUpdated = Number(req.query.updated || 0);
     const errorMsg = String(req.query.error || "").trim();
 
     const body = `
       ${infoSaved ? `<div class="card"><b>Mensaje actualizado.</b></div>` : ""}
       ${infoReplied ? `<div class="card"><b>Respuesta enviada a la empresa.</b></div>` : ""}
+      ${infoReset ? `<div class="card"><b>Contadores reseteados.</b> Empresas actualizadas: ${Number.isFinite(resetUpdated) ? resetUpdated : 0}</div>` : ""}
       ${errorMsg ? `<div class="card"><b>Error:</b> ${escapeHtml(errorMsg)}</div>` : ""}
       <div class="kpis">
         <div class="kpi"><div class="label">Mensajes</div><div class="value">${messages.length}</div><div class="hint">buzon total</div></div>
@@ -1731,6 +1748,9 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
             <button class="btn primary" type="submit">Aplicar</button>
             <a class="btn secondary" href="/admin/messages">Limpiar</a>
           </div>
+        </form>
+        <form method="POST" action="/admin/messages/reset" style="margin-top:12px;display:flex;justify-content:flex-end">
+          <button class="btn secondary" type="submit">Resetear sin leer a 0</button>
         </form>
       </div>
 
@@ -1851,6 +1871,37 @@ app.post("/admin/messages/reply", requireDashboardAuth, async (req, res) => {
   } catch (e) {
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/admin/messages/reset", requireDashboardAuth, async (req, res) => {
+  try {
+    const companies = await api("/api/companies");
+    const companyList = Array.isArray(companies) ? companies : [];
+    let updated = 0;
+
+    for (const company of companyList) {
+      const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
+      const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+      const inbox = extractAdminInbox(rules);
+      if (!inbox.length) continue;
+
+      let changed = false;
+      const normalized = inbox.map((item) => {
+        const next = { ...item, readByAdmin: true, readByClient: true };
+        if (!item.readByAdmin || !item.readByClient) changed = true;
+        return next;
+      });
+      if (!changed) continue;
+
+      setAdminInbox(rules, normalized);
+      await saveCompanyRules(company, rules);
+      updated += 1;
+    }
+
+    return res.redirect(`/admin/messages?reset=1&updated=${updated}`);
+  } catch (e) {
+    return res.redirect(`/admin/messages?error=${encodeURIComponent(e?.message || e)}`);
   }
 });
 
@@ -2541,14 +2592,12 @@ function buildPriceChart(values) {
   `;
 }
 
-function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess }) {
+function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess, whatsappMessagesTotal = 0 }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
   const unreadNotifications = getClientUnreadNotificationCount(company);
-  const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
-  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-  const totalMessages = extractAdminInbox(rules).length;
+  const totalMessages = Number.isFinite(Number(whatsappMessagesTotal)) ? Math.max(0, Number(whatsappMessagesTotal)) : 0;
   const messageCounterHtml = active === "inicio"
-    ? `<div class="cp-msg-counter"><span>Contador de mensajes</span><b>${totalMessages}</b></div>`
+    ? `<div class="cp-msg-counter"><span>Mensajes WhatsApp</span><b>${totalMessages}</b></div>`
     : "";
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
@@ -2735,6 +2784,7 @@ app.post("/c/login", handleClientLogin);
 app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
+  const whatsappStats = await getCompanyWhatsappMessageStats(company.id);
   const toHtmlText = (value) => escapeHtml(value).replace(/\r?\n/g, "<br/>");
   const profile = state.profile || {};
   const brandManual = String(
@@ -2805,6 +2855,7 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
     title: "Overview",
     subtitle: `${company.name || company.id} - resumen operativo`,
     bodyHtml,
+    whatsappMessagesTotal: whatsappStats.total,
   }));
 });
 

@@ -295,6 +295,21 @@ function parseJsonSafe(raw, fallback) {
   }
 }
 
+async function logIncomingWhatsappMessage({ fromNumber, companyId, text }) {
+  const from = String(fromNumber || "").trim();
+  const body = String(text || "").trim();
+  if (!from || !body) return;
+  const cid = String(companyId || "").trim().toLowerCase() || "babystepsbots";
+  try {
+    await db.prepare(`
+      INSERT INTO ai_messages(fromNumber, companyId, role, content, createdAt)
+      VALUES(?,?,?,?,?)
+    `).run(from, cid, "user", body, new Date().toISOString());
+  } catch (e) {
+    console.error("ai_messages insert error:", e?.message || e);
+  }
+}
+
 function normalizePlanTierFromText(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
@@ -1077,6 +1092,37 @@ app.post("/api/orders/:id/category", requireApiAuth, async (req, res) => {
   }
 });
 
+app.get("/api/companies/:id/whatsapp-messages/stats", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim().toLowerCase();
+    if (!companyId) return res.status(400).json({ error: "companyId requerido" });
+
+    const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const row = await db.prepare(`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(CASE WHEN createdAt >= ? THEN 1 ELSE 0 END), 0)::int AS last30Days
+      FROM ai_messages
+      WHERE role='user'
+        AND (
+          companyId = ?
+          OR (
+            companyId IS NULL
+            AND fromNumber IN (SELECT fromNumber FROM customer_company WHERE companyId = ?)
+          )
+        )
+    `).get(since30, companyId, companyId);
+
+    return res.json({
+      companyId,
+      total: Number(row?.total || 0),
+      last30Days: Number(row?.last30Days || 0),
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 // ================= WEBHOOK =================
 app.post("/whatsapp", async (req, res) => {
   const from = req.body.From || "unknown";
@@ -1103,6 +1149,14 @@ app.post("/whatsapp", async (req, res) => {
 
   if (sessionDirty) {
     await saveSession(session);
+  }
+
+  if (!cmd.startsWith("admin")) {
+    await logIncomingWhatsappMessage({
+      fromNumber: from,
+      companyId: session?.data?.companyId || "babystepsbots",
+      text: body,
+    });
   }
 
   let reply = "No entendi. Escribi: menu / catalogo / ayuda";
