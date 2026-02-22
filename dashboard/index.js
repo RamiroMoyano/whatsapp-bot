@@ -3773,24 +3773,40 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           }
         };
 
-        if (ordersBody) {
-          ordersBody.addEventListener("click", (event) => {
-            const target = event.target;
-            if (!(target instanceof Element)) return;
-            if (target.closest("form,button,input,select,label,a,[data-no-toggle='1']")) return;
-            const row = target.closest(".cp-order-row");
-            if (!row) return;
+        const getEventTargetElement = (event) => {
+          const target = event && event.target;
+          if (!target) return null;
+          if (target instanceof Element) return target;
+          if (typeof Node !== "undefined" && target instanceof Node) return target.parentElement || null;
+          return null;
+        };
+
+        const shouldSkipToggle = (element) => {
+          if (!element) return false;
+          return !!element.closest("form,button,input,select,label,a,[data-no-toggle='1']");
+        };
+
+        const bindOrderRow = (row) => {
+          if (!(row instanceof Element)) return;
+
+          row.addEventListener("click", (event) => {
+            const target = getEventTargetElement(event);
+            if (shouldSkipToggle(target)) return;
             toggleOrderDetail(row);
           });
 
-          ordersBody.addEventListener("keydown", (event) => {
-            const target = event.target;
-            if (!(target instanceof Element)) return;
-            if (!target.classList.contains("cp-order-row")) return;
+          row.addEventListener("keydown", (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
+            const target = getEventTargetElement(event);
+            if (shouldSkipToggle(target)) return;
             event.preventDefault();
-            toggleOrderDetail(target);
+            toggleOrderDetail(row);
           });
+        };
+
+        if (ordersBody) {
+          const orderRows = Array.from(ordersBody.querySelectorAll(".cp-order-row"));
+          orderRows.forEach((row) => bindOrderRow(row));
         }
 
         const archiveForms = Array.from(document.querySelectorAll(".cp-archive-form"));
