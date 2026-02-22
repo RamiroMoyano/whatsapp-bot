@@ -2123,13 +2123,7 @@ app.post("/whatsapp", async (req, res) => {
       if (["lite", "pro"].includes(aiMode)) {
         const ai = await aiReply(session, from, body);
         if (ai) {
-          return respondAndLog(
-            `${ai}\n\n` +
-            `Para seguir el proceso de compra:\n` +
-            `1) Escribi: catalogo\n` +
-            `2) Elegi producto con el numero (ej: 1)\n` +
-            `3) Escribi: checkout`
-          );
+          return respondAndLog(ai);
         }
       }
       return respondAndLog(
