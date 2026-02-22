@@ -248,7 +248,9 @@ Reglas:
 - Tono: ${(c.rules || {}).tone || "neutral"}
 - No inventar datos
 - Siempre cerrar con pregunta
-- Si el cliente quiere comprar, guialo al flujo operativo: catalogo -> numero de producto -> checkout -> nombre -> contacto -> notas/observaciones -> confirmar
+- Si el cliente quiere comprar, guialo al flujo operativo: catalogo -> numero de producto -> checkout -> nombre -> contacto -> notas/observaciones -> medio de pago -> detalle de pago
+- Al elegir medio de pago se registra un pedido con ID automaticamente
+- Comprobante de transferencia: opcional, nunca bloqueante
 `;
 
   const history = normalizeAiHistory(session.data.aiHistory || []);
@@ -426,6 +428,282 @@ function paymentMethodsReplyText(company, options = {}) {
     lines.push(`Pedido asociado: ${orderId}`);
   }
 
+  return lines.join("\n");
+}
+
+function normalizeTextForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizePaymentMethodInput(value) {
+  const raw = normalizeTextForMatch(value);
+  if (!raw) return "";
+  if (
+    raw.includes("transfer") ||
+    raw.includes("banco") ||
+    raw.includes("cbu") ||
+    raw.includes("alias")
+  ) {
+    return "transferencia";
+  }
+  if (raw.includes("debito") || raw.includes("debit")) return "debito";
+  if (raw.includes("credito") || raw.includes("credit") || raw.includes("tarjeta")) return "tarjeta";
+  if (raw.includes("efectivo") || raw.includes("cash")) return "efectivo";
+  return "";
+}
+
+function paymentMethodLabel(methodRaw) {
+  const method = normalizePaymentMethodInput(methodRaw);
+  if (method === "transferencia") return "Transferencia";
+  if (method === "debito") return "Debito";
+  if (method === "tarjeta") return "Tarjeta de credito";
+  if (method === "efectivo") return "Efectivo";
+  return "No definido";
+}
+
+function availablePaymentMethodKeys(company) {
+  const payment = extractCompanyPaymentConfig(company?.rules || {});
+  const methods = [];
+  if (payment.enabled.cash) methods.push("efectivo");
+  if (payment.enabled.debit) methods.push("debito");
+  if (payment.enabled.transfer) methods.push("transferencia");
+  if (payment.enabled.credit) methods.push("tarjeta");
+  return methods.length ? methods : ["efectivo", "debito", "transferencia", "tarjeta"];
+}
+
+function paymentMethodSelectionPrompt(company) {
+  const methods = availablePaymentMethodKeys(company).map((item) => paymentMethodLabel(item));
+  return (
+    `Perfecto. Ahora elegi medio de pago: ${methods.join(", ")}.\n` +
+    `Ejemplo: efectivo / transferencia / debito / tarjeta`
+  );
+}
+
+function extractCheckoutFieldsFromText(textRaw) {
+  const text = String(textRaw || "").trim();
+  const paymentMethod = normalizePaymentMethodInput(text);
+
+  const phoneMatch = text.match(/\+?\d[\d\s\-()]{6,}\d/g);
+  const contact = phoneMatch?.length
+    ? String(phoneMatch[0] || "").trim().replace(/\s+/g, " ")
+    : "";
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let name = "";
+  for (const line of lines) {
+    const normalized = normalizeTextForMatch(line);
+    if (!normalized) continue;
+    if (normalizePaymentMethodInput(line)) continue;
+    if (/\d{6,}/.test(normalized)) continue;
+    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "mañana"].includes(normalized)) continue;
+    name = line;
+    break;
+  }
+
+  if (!name && lines.length === 1) {
+    let single = lines[0];
+    if (contact) single = single.replace(contact, " ");
+    single = single
+      .replace(/efectivo/gi, " ")
+      .replace(/transferencia/gi, " ")
+      .replace(/transfer/gi, " ")
+      .replace(/debito/gi, " ")
+      .replace(/d[eé]bito/gi, " ")
+      .replace(/tarjeta/gi, " ")
+      .replace(/credito/gi, " ")
+      .replace(/cr[eé]dito/gi, " ")
+      .replace(/cash/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (/[a-zA-Z]/.test(single)) name = single;
+  }
+
+  return { name, contact, paymentMethod };
+}
+
+function buildCheckoutItemsFromSession(session, company) {
+  const items = Array.isArray(session?.cart) ? [...session.cart] : [];
+  let total = 0;
+  const grouped = {};
+  items.forEach((id) => {
+    const key = Number(id);
+    if (!Number.isFinite(key)) return;
+    grouped[key] = (grouped[key] || 0) + 1;
+  });
+
+  const itemsDetailed = Object.entries(grouped).map(([id, qty]) => {
+    const p = (company?.catalog || []).find((x) => Number(x.id) === Number(id));
+    const unit = Number(p?.price || 0);
+    const subtotal = unit * qty;
+    total += subtotal;
+    return { id: Number(id), name: p?.name || `Producto ${id}`, qty, unit, subtotal };
+  });
+
+  return { items, itemsDetailed, total };
+}
+
+function mergeCheckoutNotes(existingNotesRaw, nextNotesRaw) {
+  const existingNotes = String(existingNotesRaw || "").trim();
+  const nextNotes = String(nextNotesRaw || "").trim();
+  if (!existingNotes) return nextNotes;
+  if (!nextNotes) return existingNotes;
+  if (existingNotes.includes(nextNotes)) return existingNotes;
+  return `${existingNotes}\n${nextNotes}`;
+}
+
+async function appendOrderNote(orderIdRaw, noteRaw) {
+  const orderId = String(orderIdRaw || "").trim();
+  const note = String(noteRaw || "").trim();
+  if (!orderId || !note) return;
+  await db.prepare(`
+    UPDATE orders
+    SET notes = CASE
+      WHEN notes IS NULL OR btrim(notes) = '' THEN ?
+      ELSE notes || ?
+    END
+    WHERE id=?
+  `).run(note, `\n${note}`, orderId);
+}
+
+async function createOrUpdateCheckoutOrder(session, from, company, options = {}) {
+  const paymentMethod = normalizePaymentMethodInput(options.paymentMethod || "");
+  const fallbackMethod = normalizePaymentMethodInput(options.fallbackPaymentMethod || "");
+  const now = new Date().toISOString();
+  const snapshot = buildCheckoutItemsFromSession(session, company);
+  const orderNotes = String(session?.data?.notes || "").trim();
+  const orderName = String(session?.data?.name || "").trim();
+  const orderContact = String(session?.data?.contact || "").trim();
+
+  const sessionOrderId = String(session?.lastOrderId || "").trim();
+  let existing = null;
+  if (sessionOrderId) {
+    existing = await db.prepare(`
+      SELECT id, companyId, name, contact, notes, itemsJson, itemsDetailedJson, total,
+             paymentMethod, paymentStatus, orderStatus, workflowState, archived
+      FROM orders
+      WHERE id=?
+    `).get(sessionOrderId);
+  }
+
+  const existingWorkflow = existing ? deriveOrderWorkflowFromRow(existing) : { state: "", archived: false };
+  const canReuse = !!existing &&
+    String(existing.companyId || "").trim() === String(company?.id || "").trim() &&
+    !normalizeArchivedFlag(existing.archived) &&
+    !existingWorkflow.archived &&
+    existingWorkflow.state === "pending";
+
+  const finalMethod = paymentMethod || fallbackMethod || normalizePaymentMethodInput(existing?.paymentMethod || "");
+
+  if (canReuse) {
+    const mergedName = orderName || String(existing.name || "");
+    const mergedContact = orderContact || String(existing.contact || "");
+    const mergedNotes = mergeCheckoutNotes(existing.notes, orderNotes);
+    const hasCartItems = Array.isArray(snapshot.items) && snapshot.items.length > 0;
+    const nextItemsJson = hasCartItems ? JSON.stringify(snapshot.items) : String(existing.itemsJson || "[]");
+    const nextItemsDetailedJson = hasCartItems ? JSON.stringify(snapshot.itemsDetailed) : String(existing.itemsDetailedJson || "[]");
+    const nextTotal = hasCartItems ? Number(snapshot.total || 0) : Number(existing.total || 0);
+
+    await db.prepare(`
+      UPDATE orders
+      SET name=?, contact=?, notes=?, itemsJson=?, itemsDetailedJson=?, total=?,
+          paymentStatus=?, paymentMethod=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+      WHERE id=?
+    `).run(
+      mergedName,
+      mergedContact,
+      mergedNotes,
+      nextItemsJson,
+      nextItemsDetailedJson,
+      nextTotal,
+      "pending",
+      finalMethod,
+      "confirmed",
+      "pending",
+      false,
+      null,
+      "",
+      "pending",
+      existing.id
+    );
+
+    session.lastOrderId = existing.id;
+    if (hasCartItems) session.cart = [];
+    return { orderId: existing.id, total: nextTotal, paymentMethod: finalMethod, reused: true };
+  }
+
+  if (!snapshot.items.length) {
+    return { orderId: "", total: 0, paymentMethod: finalMethod, reused: false, missingItems: true };
+  }
+
+  const orderId = newOrderId();
+  await db.prepare(`
+    INSERT INTO orders(
+      id,createdAt,fromNumber,companyId,name,contact,notes,
+      itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,
+      orderStatus,deliveredAt,category,workflowState,archived,archivedAt,archiveReason
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    orderId,
+    now,
+    from,
+    company.id,
+    orderName,
+    orderContact,
+    orderNotes,
+    JSON.stringify(snapshot.items),
+    JSON.stringify(snapshot.itemsDetailed),
+    snapshot.total,
+    "pending",
+    finalMethod,
+    "confirmed",
+    null,
+    "pending",
+    "pending",
+    false,
+    null,
+    ""
+  );
+
+  session.lastOrderId = orderId;
+  session.cart = [];
+  return { orderId, total: snapshot.total, paymentMethod: finalMethod, reused: false };
+}
+
+function buildOrderRegisteredReply(company, orderId, total, paymentMethodRaw) {
+  const paymentMethod = normalizePaymentMethodInput(paymentMethodRaw);
+  const paymentLabel = paymentMethodLabel(paymentMethod);
+  const lines = [
+    `Pedido ${orderId} registrado.`,
+    `Total: $${Number(total || 0)}`,
+    `Medio de pago: ${paymentLabel}.`,
+    "",
+  ];
+
+  if (paymentMethod === "transferencia") {
+    lines.push(paymentMethodsReplyText(company, { orderId }));
+    lines.push("");
+    lines.push("Si queres, envia comprobante (opcional) o indica cuando realizas la transferencia.");
+    return lines.join("\n");
+  }
+
+  if (paymentMethod === "efectivo") {
+    lines.push("Perfecto. Indica lugar y horario para coordinar pago en efectivo y entrega.");
+    return lines.join("\n");
+  }
+
+  if (paymentMethod === "debito" || paymentMethod === "tarjeta") {
+    lines.push("Perfecto. Indica lugar y horario para coordinar el pago y la entrega.");
+    return lines.join("\n");
+  }
+
+  lines.push(paymentMethodsReplyText(company, { orderId }));
   return lines.join("\n");
 }
 
@@ -1712,6 +1990,8 @@ app.post("/whatsapp", async (req, res) => {
     return respondAndLog(catalogText(company));
   }
 
+  const hasActiveOrder = String(session.lastOrderId || "").trim().length > 0;
+
   if (
     [
       "pago",
@@ -1725,12 +2005,37 @@ app.post("/whatsapp", async (req, res) => {
     ].includes(text)
   ) {
     const company = await getCompanySafe(session);
+    const methodFromText = normalizePaymentMethodInput(body);
+    if (hasActiveOrder && methodFromText) {
+      await db.prepare(`
+        UPDATE orders
+        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+        WHERE id=?
+      `).run(
+        methodFromText,
+        "pending",
+        "confirmed",
+        "pending",
+        false,
+        null,
+        "",
+        "pending",
+        session.lastOrderId
+      );
+      await appendOrderNote(
+        session.lastOrderId,
+        `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(methodFromText)}`
+      );
+      return respondAndLog(
+        `Actualizado. El pedido ${session.lastOrderId} ahora figura con medio de pago: ${paymentMethodLabel(methodFromText)}.\n\n` +
+        `${paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })}`,
+        { orderId: session.lastOrderId }
+      );
+    }
     return respondAndLog(
       paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })
     );
   }
-
-  const hasActiveOrder = String(session.lastOrderId || "").trim().length > 0;
   const looksLikePaymentReady =
     ["listo", "ok", "ya", "hecho", "transferi", "ya transferi", "pague", "ya pague"].includes(text) ||
     text.includes("ya transfer") ||
@@ -1740,6 +2045,37 @@ app.post("/whatsapp", async (req, res) => {
       `Perfecto. Para avanzar con la validacion del pedido ${session.lastOrderId}, envia el comprobante cuando lo tengas.\n` +
       `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`
     );
+  }
+
+  if (session.state === "MENU" && hasActiveOrder && !hasMedia) {
+    const directMethod = normalizePaymentMethodInput(body);
+    if (directMethod) {
+      await db.prepare(`
+        UPDATE orders
+        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+        WHERE id=?
+      `).run(
+        directMethod,
+        "pending",
+        "confirmed",
+        "pending",
+        false,
+        null,
+        "",
+        "pending",
+        session.lastOrderId
+      );
+      await appendOrderNote(
+        session.lastOrderId,
+        `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(directMethod)}`
+      );
+      const company = await getCompanySafe(session);
+      return respondAndLog(
+        `Actualizado. El pedido ${session.lastOrderId} ahora figura con medio de pago: ${paymentMethodLabel(directMethod)}.\n\n` +
+        `${paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })}`,
+        { orderId: session.lastOrderId }
+      );
+    }
   }
 
   if (text === "carrito") return respondAndLog(await cartText(session));
@@ -1755,6 +2091,29 @@ app.post("/whatsapp", async (req, res) => {
     session.cart.push(id);
     await saveSession(session);
     return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
+  }
+
+  if (session.state === "MENU" && session.cart.length) {
+    const quickData = extractCheckoutFieldsFromText(body);
+    if (quickData.name && quickData.contact && quickData.paymentMethod) {
+      session.data.name = quickData.name;
+      session.data.contact = quickData.contact;
+      if (!session.data.notes) session.data.notes = "";
+      const company = await getCompanySafe(session);
+      const created = await createOrUpdateCheckoutOrder(session, from, company, {
+        paymentMethod: quickData.paymentMethod,
+      });
+      if (created.missingItems) {
+        return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
+      }
+      session.state = "ASK_PAYMENT_DETAILS";
+      delete session.data.paymentMethodHint;
+      await saveSession(session);
+      return respondAndLog(
+        buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
+        { orderId: created.orderId }
+      );
+    }
   }
 
   if (session.state === "MENU") {
@@ -1795,14 +2154,26 @@ app.post("/whatsapp", async (req, res) => {
   }
 
   if (session.state === "ASK_NAME" && !isReserved(text)) {
-    session.data.name = body;
-    session.state = "ASK_CONTACT";
+    const extracted = extractCheckoutFieldsFromText(body);
+    session.data.name = extracted.name || body;
+    if (extracted.contact) session.data.contact = extracted.contact;
+    if (extracted.paymentMethod) session.data.paymentMethodHint = extracted.paymentMethod;
+    session.state = session.data.contact ? "ASK_NOTES" : "ASK_CONTACT";
     await saveSession(session);
-    return respondAndLog("Pasame un contacto.");
+    if (session.state === "ASK_CONTACT") {
+      return respondAndLog("Pasame un contacto.");
+    }
+    return respondAndLog(
+      "Perfecto. Ultimo paso: agrega notas u observaciones para este pedido (opcional).\n" +
+      "Si no queres agregar nada, responde con: -"
+    );
   }
 
   if (session.state === "ASK_CONTACT" && !isReserved(text)) {
-    session.data.contact = body;
+    const extracted = extractCheckoutFieldsFromText(body);
+    session.data.contact = extracted.contact || String(body || "").trim();
+    if (extracted.name && !session.data.name) session.data.name = extracted.name;
+    if (extracted.paymentMethod) session.data.paymentMethodHint = extracted.paymentMethod;
     session.state = "ASK_NOTES";
     await saveSession(session);
     return respondAndLog(
@@ -1812,75 +2183,173 @@ app.post("/whatsapp", async (req, res) => {
   }
 
   if (session.state === "ASK_NOTES" && !isReserved(text)) {
+    const extracted = extractCheckoutFieldsFromText(body);
+    if (extracted.name && !session.data.name) session.data.name = extracted.name;
+    if (extracted.contact && !session.data.contact) session.data.contact = extracted.contact;
+    if (extracted.paymentMethod) session.data.paymentMethodHint = extracted.paymentMethod;
+
     const rawNotes = String(body || "").trim();
     const normalized = rawNotes.toLowerCase();
     const skipNotes = ["-", "ninguna", "ninguno", "sin", "sin notas", "no"].includes(normalized);
     session.data.notes = skipNotes ? "" : rawNotes;
-    session.state = "READY";
+
+    if (extracted.paymentMethod && session.data.name && session.data.contact) {
+      const company = await getCompanySafe(session);
+      const created = await createOrUpdateCheckoutOrder(session, from, company, {
+        paymentMethod: extracted.paymentMethod,
+      });
+      if (created.missingItems) {
+        session.state = "MENU";
+        await saveSession(session);
+        return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
+      }
+      session.state = "ASK_PAYMENT_DETAILS";
+      delete session.data.paymentMethodHint;
+      await saveSession(session);
+      return respondAndLog(
+        buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
+        { orderId: created.orderId }
+      );
+    }
+
+    session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
-    const notesLabel = session.data.notes ? session.data.notes : "Sin notas";
+    return respondAndLog(paymentMethodSelectionPrompt(await getCompanySafe(session)));
+  }
+
+  if (session.state === "ASK_PAYMENT_METHOD" && !isReserved(text)) {
+    const company = await getCompanySafe(session);
+    const selectedMethod = normalizePaymentMethodInput(body || session.data.paymentMethodHint || "");
+    if (!selectedMethod) {
+      return respondAndLog(
+        `No detecte el medio de pago.\n${paymentMethodSelectionPrompt(company)}`
+      );
+    }
+    if (!String(session.data.name || "").trim()) {
+      session.state = "ASK_NAME";
+      await saveSession(session);
+      return respondAndLog("Antes de registrar el pedido necesito tu nombre.");
+    }
+    if (!String(session.data.contact || "").trim()) {
+      session.state = "ASK_CONTACT";
+      await saveSession(session);
+      return respondAndLog("Antes de registrar el pedido necesito un contacto.");
+    }
+
+    const created = await createOrUpdateCheckoutOrder(session, from, company, {
+      paymentMethod: selectedMethod,
+      fallbackPaymentMethod: session.data.paymentMethodHint || "",
+    });
+    if (created.missingItems) {
+      session.state = "MENU";
+      await saveSession(session);
+      return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
+    }
+
+    session.state = "ASK_PAYMENT_DETAILS";
+    delete session.data.paymentMethodHint;
+    await saveSession(session);
     return respondAndLog(
-      `Resumen:\n${await cartText(session)}\nNotas/observaciones: ${notesLabel}\nConfirmar: confirmar`
+      buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
+      { orderId: created.orderId }
+    );
+  }
+
+  if (session.state === "ASK_PAYMENT_DETAILS" && !isReserved(text)) {
+    const orderId = String(session.lastOrderId || "").trim();
+    if (!orderId) {
+      session.state = "MENU";
+      await saveSession(session);
+      return respondAndLog("No encuentro el pedido activo. Escribi catalogo para iniciar una nueva compra.");
+    }
+
+    const maybeMethodChange = normalizePaymentMethodInput(body);
+    if (maybeMethodChange) {
+      await db.prepare(`
+        UPDATE orders
+        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+        WHERE id=?
+      `).run(
+        maybeMethodChange,
+        "pending",
+        "confirmed",
+        "pending",
+        false,
+        null,
+        "",
+        "pending",
+        orderId
+      );
+      await appendOrderNote(orderId, `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(maybeMethodChange)}`);
+      await saveSession(session);
+      return respondAndLog(
+        `Actualizado. El pedido ${orderId} ahora queda con medio de pago: ${paymentMethodLabel(maybeMethodChange)}.\n` +
+        `Contame lugar y horario para coordinar.`,
+        { orderId }
+      );
+    }
+
+    const paymentDetail = String(body || "").trim();
+    const normalizedDetail = normalizeTextForMatch(paymentDetail);
+    const skipDetail = ["-", "ok", "listo", "ninguno", "ninguna", "sin", "no"].includes(normalizedDetail);
+    if (!skipDetail && paymentDetail) {
+      await appendOrderNote(orderId, `[Detalle pago ${new Date().toISOString()}] ${paymentDetail}`);
+    }
+
+    session.state = "MENU";
+    session.data.name = "";
+    session.data.contact = "";
+    session.data.notes = "";
+    delete session.data.paymentMethodHint;
+    await saveSession(session);
+    return respondAndLog(
+      `Perfecto. Pedido ${orderId} en gestion.\nTe confirmamos por este chat cuando avance el pago/entrega.`,
+      { orderId }
     );
   }
 
   if (text === "confirmar" && session.state === "READY") {
     const company = await getCompanySafe(session);
-    const items = [...session.cart];
-
-    let total = 0;
-    const detailed = {};
-    items.forEach((id) => (detailed[id] = (detailed[id] || 0) + 1));
-
-    const itemsDetailed = Object.entries(detailed).map(([id, q]) => {
-      const p = (company.catalog || []).find((x) => Number(x.id) === Number(id));
-      const unit = Number(p?.price || 0);
-      const sub = unit * q;
-      total += sub;
-      return { id: Number(id), name: p?.name || "Producto", qty: q, unit, subtotal: sub };
+    const created = await createOrUpdateCheckoutOrder(session, from, company, {
+      fallbackPaymentMethod: session.data.paymentMethodHint || "",
     });
-
-    const orderId = newOrderId();
-    await db.prepare(`
-      INSERT INTO orders(
-        id,createdAt,fromNumber,companyId,name,contact,notes,
-        itemsJson,itemsDetailedJson,total,paymentStatus,paymentMethod,
-        orderStatus,deliveredAt,category,workflowState,archived,archivedAt,archiveReason
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      orderId,
-      new Date().toISOString(),
-      from,
-      company.id,
-      session.data.name || "",
-      session.data.contact || "",
-      String(session.data.notes || "").trim(),
-      JSON.stringify(items),
-      JSON.stringify(itemsDetailed),
-      total,
-      "pending",
-      "",
-      "confirmed",
-      null,
-      "pending",
-      "pending",
-      false,
-      null,
-      ""
+    if (created.missingItems) {
+      session.state = "MENU";
+      await saveSession(session);
+      return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
+    }
+    session.state = "ASK_PAYMENT_METHOD";
+    await saveSession(session);
+    return respondAndLog(
+      `Pedido ${created.orderId} registrado.\nTotal: $${created.total}\n\n` +
+      `${paymentMethodSelectionPrompt(company)}`,
+      { orderId: created.orderId }
     );
+  }
 
-    session.cart = [];
+  if (text === "confirmar" && session.state === "ASK_PAYMENT_METHOD" && hasActiveOrder) {
+    const company = await getCompanySafe(session);
+    return respondAndLog(
+      `El pedido ${session.lastOrderId} ya esta registrado.\n` +
+      `${paymentMethodSelectionPrompt(company)}`,
+      { orderId: session.lastOrderId }
+    );
+  }
+
+  if (text === "confirmar" && session.state === "ASK_PAYMENT_METHOD" && !hasActiveOrder) {
+    return respondAndLog("Antes de confirmar, elegi medio de pago: efectivo / transferencia / debito / tarjeta.");
+  }
+
+  if (text === "confirmar" && session.state === "ASK_PAYMENT_DETAILS" && hasActiveOrder) {
     session.state = "MENU";
-    session.lastOrderId = orderId;
     session.data.name = "";
     session.data.contact = "";
     session.data.notes = "";
+    delete session.data.paymentMethodHint;
     await saveSession(session);
-
     return respondAndLog(
-      `Pedido ${orderId} confirmado.\nTotal: $${total}\n\n` +
-      `${paymentMethodsReplyText(company, { orderId })}`,
-      { orderId }
+      `Perfecto. Pedido ${session.lastOrderId} en gestion.`,
+      { orderId: session.lastOrderId }
     );
   }
 
