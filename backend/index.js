@@ -1604,15 +1604,40 @@ app.post("/api/orders/:id/category", requireApiAuth, async (req, res) => {
       ? String(archiveReasonInput || current?.archiveReason || state)
       : "";
     const legacyCategory = archived ? `archived:${state}` : state;
+    const currentPaymentStatus = String(current?.paymentStatus || "").trim();
+    const normalizedPayment = currentPaymentStatus.toLowerCase();
+    const isPaid =
+      normalizedPayment.includes("paid") ||
+      normalizedPayment.includes("pagado") ||
+      normalizedPayment.includes("approved") ||
+      normalizedPayment.includes("aprobado") ||
+      normalizedPayment.includes("settled") ||
+      normalizedPayment.includes("cobrado");
+    const nextPaymentStatus = state === "completed"
+      ? (isPaid ? currentPaymentStatus : "paid")
+      : currentPaymentStatus;
+    const nextOrderStatus = state === "completed"
+      ? "completed"
+      : state === "rejected"
+        ? "rejected"
+        : "confirmed";
 
     const result = await db.prepare(`
       UPDATE orders
-      SET workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+      SET workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?, paymentStatus=?, orderStatus=?
       WHERE id=?
-    `).run(state, archived, archivedAt, archiveReason, legacyCategory, orderId);
+    `).run(state, archived, archivedAt, archiveReason, legacyCategory, nextPaymentStatus, nextOrderStatus, orderId);
 
     if (!result.changes) return res.status(404).json({ error: "Pedido no encontrado" });
-    return res.json({ ok: true, id: orderId, state, archived, category: legacyCategory });
+    return res.json({
+      ok: true,
+      id: orderId,
+      state,
+      archived,
+      category: legacyCategory,
+      paymentStatus: nextPaymentStatus,
+      orderStatus: nextOrderStatus,
+    });
   } catch (e) {
     return res.status(500).json({ error: e?.message || String(e) });
   }
@@ -1990,7 +2015,25 @@ app.post("/whatsapp", async (req, res) => {
     return respondAndLog(catalogText(company));
   }
 
-  const hasActiveOrder = String(session.lastOrderId || "").trim().length > 0;
+  const sessionOrderId = String(session.lastOrderId || "").trim();
+  let activeOrderId = "";
+  if (sessionOrderId) {
+    const activeOrderRow = await db.prepare(`
+      SELECT id, companyId, workflowState, archived, category, orderStatus, paymentStatus
+      FROM orders
+      WHERE id=?
+    `).get(sessionOrderId);
+    if (activeOrderRow) {
+      const workflow = deriveOrderWorkflowFromRow(activeOrderRow);
+      const sameCompany =
+        String(activeOrderRow.companyId || "").trim().toLowerCase() ===
+        String(session?.data?.companyId || "babystepsbots").trim().toLowerCase();
+      if (sameCompany && !workflow.archived && workflow.state === "pending") {
+        activeOrderId = sessionOrderId;
+      }
+    }
+  }
+  const hasActiveOrder = !!activeOrderId;
 
   if (
     [
@@ -2020,20 +2063,20 @@ app.post("/whatsapp", async (req, res) => {
         null,
         "",
         "pending",
-        session.lastOrderId
+        activeOrderId
       );
       await appendOrderNote(
-        session.lastOrderId,
+        activeOrderId,
         `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(methodFromText)}`
       );
       return respondAndLog(
-        `Actualizado. El pedido ${session.lastOrderId} ahora figura con medio de pago: ${paymentMethodLabel(methodFromText)}.\n\n` +
-        `${paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })}`,
-        { orderId: session.lastOrderId }
+        `Actualizado. El pedido ${activeOrderId} ahora figura con medio de pago: ${paymentMethodLabel(methodFromText)}.\n\n` +
+        `${paymentMethodsReplyText(company, { orderId: activeOrderId })}`,
+        { orderId: activeOrderId }
       );
     }
     return respondAndLog(
-      paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })
+      paymentMethodsReplyText(company, { orderId: activeOrderId })
     );
   }
   const looksLikePaymentReady =
@@ -2042,7 +2085,7 @@ app.post("/whatsapp", async (req, res) => {
     text.includes("comprobante");
   if (session.state === "MENU" && hasActiveOrder && !hasMedia && looksLikePaymentReady) {
     return respondAndLog(
-      `Perfecto. Para avanzar con la validacion del pedido ${session.lastOrderId}, envia el comprobante cuando lo tengas.\n` +
+      `Perfecto. Para avanzar con la validacion del pedido ${activeOrderId}, envia el comprobante cuando lo tengas.\n` +
       `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`
     );
   }
@@ -2063,17 +2106,17 @@ app.post("/whatsapp", async (req, res) => {
         null,
         "",
         "pending",
-        session.lastOrderId
+        activeOrderId
       );
       await appendOrderNote(
-        session.lastOrderId,
+        activeOrderId,
         `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(directMethod)}`
       );
       const company = await getCompanySafe(session);
       return respondAndLog(
-        `Actualizado. El pedido ${session.lastOrderId} ahora figura con medio de pago: ${paymentMethodLabel(directMethod)}.\n\n` +
-        `${paymentMethodsReplyText(company, { orderId: String(session.lastOrderId || "").trim() })}`,
-        { orderId: session.lastOrderId }
+        `Actualizado. El pedido ${activeOrderId} ahora figura con medio de pago: ${paymentMethodLabel(directMethod)}.\n\n` +
+        `${paymentMethodsReplyText(company, { orderId: activeOrderId })}`,
+        { orderId: activeOrderId }
       );
     }
   }
@@ -2324,9 +2367,9 @@ app.post("/whatsapp", async (req, res) => {
   if (text === "confirmar" && session.state === "ASK_PAYMENT_METHOD" && hasActiveOrder) {
     const company = await getCompanySafe(session);
     return respondAndLog(
-      `El pedido ${session.lastOrderId} ya esta registrado.\n` +
+      `El pedido ${activeOrderId} ya esta registrado.\n` +
       `${paymentMethodSelectionPrompt(company)}`,
-      { orderId: session.lastOrderId }
+      { orderId: activeOrderId }
     );
   }
 
@@ -2342,8 +2385,8 @@ app.post("/whatsapp", async (req, res) => {
     delete session.data.paymentMethodHint;
     await saveSession(session);
     return respondAndLog(
-      `Perfecto. Pedido ${session.lastOrderId} en gestion.`,
-      { orderId: session.lastOrderId }
+      `Perfecto. Pedido ${activeOrderId} en gestion.`,
+      { orderId: activeOrderId }
     );
   }
 
