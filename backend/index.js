@@ -1433,10 +1433,24 @@ app.post("/api/assignments", requireApiAuth, async (req, res) => {
     const s = await db.prepare(`SELECT dataJson FROM sessions WHERE fromNumber=?`).get(fromNumber);
     if (s) {
       const data = JSON.parse(s.dataJson || "{}");
+      const previousCompanyId = String(data.companyId || "babystepsbots").trim().toLowerCase();
+      const nextCompanyId = String(companyId || "").trim().toLowerCase();
+      if (previousCompanyId !== nextCompanyId) {
+        resetAiMemoryForMode(data);
+        data.humanNotified = false;
+        data.name = "";
+        data.contact = "";
+        data.notes = "";
+        delete data.paymentMethodHint;
+      }
       data.companyId = companyId;
       const tempSession = { data };
       await syncSessionAiModeFromCompany(tempSession, { force: true });
-      await db.prepare(`UPDATE sessions SET dataJson=? WHERE fromNumber=?`).run(JSON.stringify(data), fromNumber);
+      await db.prepare(`
+        UPDATE sessions
+        SET state='MENU', cartJson='[]', lastOrderId=NULL, dataJson=?
+        WHERE fromNumber=?
+      `).run(JSON.stringify(data), fromNumber);
     }
 
     res.json({ ok: true });
@@ -1718,6 +1732,15 @@ app.post("/whatsapp", async (req, res) => {
 
   const map = await db.prepare(`SELECT companyId FROM customer_company WHERE fromNumber=?`).get(from);
   if (map?.companyId && session.data.companyId !== map.companyId) {
+    resetAiMemoryForMode(session.data);
+    session.state = "MENU";
+    session.cart = [];
+    session.lastOrderId = null;
+    session.data.humanNotified = false;
+    session.data.name = "";
+    session.data.contact = "";
+    session.data.notes = "";
+    delete session.data.paymentMethodHint;
     session.data.companyId = map.companyId;
     sessionDirty = true;
   }
@@ -1878,7 +1901,19 @@ app.post("/whatsapp", async (req, res) => {
       `).run(target, companyId, new Date().toISOString());
 
       const s2 = await getSession(target);
+      const previousCompanyId = String(s2.data.companyId || "babystepsbots").trim().toLowerCase();
       s2.data.companyId = companyId;
+      if (previousCompanyId !== companyId) {
+        resetAiMemoryForMode(s2.data);
+        s2.state = "MENU";
+        s2.cart = [];
+        s2.lastOrderId = null;
+        s2.data.humanNotified = false;
+        s2.data.name = "";
+        s2.data.contact = "";
+        s2.data.notes = "";
+        delete s2.data.paymentMethodHint;
+      }
       await syncSessionAiModeFromCompany(s2, { force: true });
       await saveSession(s2);
 
