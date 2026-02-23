@@ -299,6 +299,29 @@ function parseJsonSafe(raw, fallback) {
   }
 }
 
+function normalizeWhatsappFromNumber(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.toLowerCase() === "unknown") return "unknown";
+
+  let phone = raw;
+  if (phone.toLowerCase().startsWith("whatsapp:")) {
+    phone = phone.slice("whatsapp:".length).trim();
+  }
+
+  if (!phone) return "";
+  let compact = phone.replace(/[^\d+]/g, "");
+  if (!compact) return "";
+
+  if (compact.startsWith("+")) {
+    compact = `+${compact.slice(1).replace(/\+/g, "")}`;
+  } else {
+    compact = `+${compact.replace(/\+/g, "")}`;
+  }
+
+  return `whatsapp:${compact}`;
+}
+
 function isTruthyFlag(value) {
   if (value === true) return true;
   const raw = String(value || "").trim().toLowerCase();
@@ -1389,12 +1412,11 @@ app.get("/api/assignments", requireApiAuth, async (req, res) => {
 
 app.post("/api/assignments", requireApiAuth, async (req, res) => {
   try {
-    let fromNumber = String(req.body.fromNumber || "").trim();
+    let fromNumber = normalizeWhatsappFromNumber(req.body.fromNumber);
     const companyId = String(req.body.companyId || "").trim();
 
-    if (!fromNumber.startsWith("whatsapp:")) {
-      if (fromNumber.startsWith("+")) fromNumber = `whatsapp:${fromNumber}`;
-      else if (fromNumber.match(/^\d+$/)) fromNumber = `whatsapp:+${fromNumber}`;
+    if (!fromNumber || !fromNumber.startsWith("whatsapp:+")) {
+      return res.status(400).json({ error: "fromNumber invalido. Usa formato whatsapp:+549..." });
     }
 
     const exists = await db.prepare(`SELECT id FROM companies WHERE id=?`).get(companyId);
@@ -1425,7 +1447,10 @@ app.post("/api/assignments", requireApiAuth, async (req, res) => {
 
 app.post("/api/assignments/delete", requireApiAuth, async (req, res) => {
   try {
-    const fromNumber = String(req.body.fromNumber || "").trim();
+    const fromNumber = normalizeWhatsappFromNumber(req.body.fromNumber);
+    if (!fromNumber || !fromNumber.startsWith("whatsapp:+")) {
+      return res.status(400).json({ error: "fromNumber invalido" });
+    }
     await db.prepare(`DELETE FROM customer_company WHERE fromNumber=?`).run(fromNumber);
     res.json({ ok: true });
   } catch (e) {
@@ -1676,7 +1701,8 @@ app.get("/api/companies/:id/whatsapp-messages/stats", requireApiAuth, async (req
 
 // ================= WEBHOOK =================
 app.post("/whatsapp", async (req, res) => {
-  const from = req.body.From || "unknown";
+  const fromRaw = req.body.From || "unknown";
+  const from = normalizeWhatsappFromNumber(fromRaw) || String(fromRaw || "unknown").trim() || "unknown";
   const body = (req.body.Body || "").trim();
   const text = body.toLowerCase();
   const cmdRaw = body.replace(/\s+/g, " ").trim();
@@ -1685,7 +1711,7 @@ app.post("/whatsapp", async (req, res) => {
   const hasMedia = Number.isFinite(numMedia) && numMedia > 0;
   const twilioSid = String(req.body.MessageSid || "").trim();
 
-  if (from && !cmd.startsWith("admin")) await setSetting("last_customer", from);
+  if (from && from !== "unknown" && !cmd.startsWith("admin")) await setSetting("last_customer", from);
 
   const session = await getSession(from);
   let sessionDirty = false;
@@ -1838,10 +1864,9 @@ app.post("/whatsapp", async (req, res) => {
 
       if (!target) target = await getSetting("last_customer");
       if (!target) return respond(res, "No tengo ultimo cliente todavia. Hace que un cliente mande un mensaje primero.");
-
-      if (!target.startsWith("whatsapp:")) {
-        if (target.startsWith("+")) target = `whatsapp:${target}`;
-        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
+      target = normalizeWhatsappFromNumber(target);
+      if (!target || !target.startsWith("whatsapp:+")) {
+        return respond(res, "Numero de cliente invalido. Usa whatsapp:+549...");
       }
 
       await db.prepare(`
@@ -1971,11 +1996,8 @@ app.post("/whatsapp", async (req, res) => {
     if (mAi) {
       let target = (mAi[2] || "").trim() || (await getSetting("last_customer"));
       if (!target) return respond(res, "No hay cliente activo.");
-
-      if (!target.startsWith("whatsapp:")) {
-        if (target.startsWith("+")) target = `whatsapp:${target}`;
-        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
-      }
+      target = normalizeWhatsappFromNumber(target);
+      if (!target || !target.startsWith("whatsapp:+")) return respond(res, "Numero de cliente invalido.");
 
       const s2 = await getSession(target);
       s2.data.aiMode = mAi[1].toLowerCase();
@@ -1989,11 +2011,8 @@ app.post("/whatsapp", async (req, res) => {
     if (mStatus) {
       let target = (mStatus[1] || "").trim() || (await getSetting("last_customer"));
       if (!target) return respond(res, "No hay cliente activo.");
-
-      if (!target.startsWith("whatsapp:")) {
-        if (target.startsWith("+")) target = `whatsapp:${target}`;
-        else if (target.match(/^\d+$/)) target = `whatsapp:+${target}`;
-      }
+      target = normalizeWhatsappFromNumber(target);
+      if (!target || !target.startsWith("whatsapp:+")) return respond(res, "Numero de cliente invalido.");
 
       const s2 = await getSession(target);
       return respond(res, `IA: ${(s2.data.aiMode || "off").toUpperCase()}`);
