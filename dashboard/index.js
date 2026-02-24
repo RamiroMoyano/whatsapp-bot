@@ -479,8 +479,23 @@ function isOrderPaid(order) {
   return ["paid", "pagado", "approved", "aprobado", "settled", "cobrado"].some((v) => raw.includes(v));
 }
 
+function normalizeClientPaymentStatus(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "pending";
+  if (["paid", "pagado", "approved", "aprobado", "settled", "cobrado"].some((v) => raw.includes(v))) return "paid";
+  if (["failed", "fallido", "rechazado", "cancelado", "voided", "chargeback", "refunded"].some((v) => raw.includes(v))) return "failed";
+  return "pending";
+}
+
+function clientPaymentStatusLabel(statusRaw) {
+  const status = normalizeClientPaymentStatus(statusRaw);
+  if (status === "paid") return "Pagado";
+  if (status === "failed") return "Fallido";
+  return "No pagado";
+}
+
 function clientPaymentLabel(order) {
-  return isOrderPaid(order) ? "Pagado" : "No pagado";
+  return clientPaymentStatusLabel(order?.paymentStatus || "");
 }
 
 function clientPaymentMethodLabel(order) {
@@ -3429,11 +3444,78 @@ app.post("/panel/catalogo/import", requireClientAuth, requireClientSectionAccess
   }
 });
 
+async function fetchClientOrderDetailPayload(company, orderId, limit = 120) {
+  const companyIdParam = encodeURIComponent(String(company.id || ""));
+  const order = await api(`/api/orders/${encodeURIComponent(orderId)}?companyId=${companyIdParam}`);
+  if (!order || String(order.companyId || "").trim() !== String(company.id || "").trim()) {
+    const err = new Error("Pedido no pertenece a esta empresa");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  let itemsDetailed = parseJsonSafe(order.itemsDetailedJson || "[]", []);
+  if (!Array.isArray(itemsDetailed)) itemsDetailed = [];
+  if (!itemsDetailed.length) {
+    const rawItems = parseJsonSafe(order.itemsJson || "[]", []);
+    const grouped = {};
+    (Array.isArray(rawItems) ? rawItems : []).forEach((rawId) => {
+      const key = String(rawId || "").trim();
+      if (!key) return;
+      grouped[key] = (grouped[key] || 0) + 1;
+    });
+    itemsDetailed = Object.entries(grouped).map(([id, qty]) => ({
+      id,
+      name: `Producto ${id}`,
+      qty,
+      unit: 0,
+      subtotal: 0,
+    }));
+  }
+
+  let messages = [];
+  try {
+    const history = await api(`/api/orders/${encodeURIComponent(orderId)}/messages?companyId=${companyIdParam}&limit=${Math.max(1, Math.min(500, Number(limit) || 120))}`);
+    messages = Array.isArray(history?.messages) ? history.messages : [];
+  } catch {
+    messages = [];
+  }
+
+  return {
+    order: {
+      id: String(order.id || ""),
+      createdAt: order.createdAt || "",
+      fromNumber: String(order.fromNumber || ""),
+      companyId: String(order.companyId || ""),
+      name: String(order.name || ""),
+      contact: String(order.contact || ""),
+      notes: String(order.notes || ""),
+      total: toNumber(order.total),
+      paymentStatus: String(order.paymentStatus || ""),
+      paymentMethod: String(order.paymentMethod || ""),
+      orderStatus: String(order.orderStatus || ""),
+      workflowState: String(order.workflowState || ""),
+      archived: !!order.archived,
+    },
+    itemsDetailed,
+    messages: messages.map((msg) => ({
+      id: Number(msg?.id || 0),
+      createdAt: msg?.createdAt || "",
+      direction: String(msg?.direction || "").toLowerCase() === "out" ? "out" : "in",
+      role: String(msg?.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
+      content: String(msg?.content || ""),
+      mediaUrl: String(msg?.mediaUrl || ""),
+      mediaContentType: String(msg?.mediaContentType || ""),
+      twilioSid: String(msg?.twilioSid || ""),
+    })),
+  };
+}
+
 app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
   const updatedCategory = String(req.query.updatedCategory || "") === "1";
+  const updatedPayment = String(req.query.updatedPayment || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const {
     selectedRange,
@@ -3483,13 +3565,28 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
 
   const rows = visibleOrders.map((order) => {
     const safeOrderId = escapeHtml(order.id || "");
+    const encodedOrderId = encodeURIComponent(String(order.id || ""));
+    const paymentState = normalizeClientPaymentStatus(order.paymentStatus);
     return `
     <tr class="cp-order-row" data-order-id="${safeOrderId}" tabindex="0" role="button" aria-expanded="false">
-      <td>${escapeHtml(order.id || "-")}</td>
+      <td><a class="cp-order-link" href="/panel/pedidos/ver/${encodedOrderId}" data-no-toggle="1">${escapeHtml(order.id || "-")}</a></td>
       <td>${escapeHtml(formatDateLabel(order.createdAt))}</td>
       <td>${escapeHtml(order.name || order.contact || "-")}</td>
       <td>${formatMoney(toNumber(order.total), "USD")}</td>
-      <td>${escapeHtml(clientPaymentLabel(order))}</td>
+      <td>
+        <form method="POST" action="/panel/pedidos/payment" class="cp-payment-form" data-no-toggle="1">
+          <input type="hidden" name="orderId" value="${safeOrderId}" />
+          <input type="hidden" name="range" value="${escapeHtml(selectedRange)}" />
+          <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
+          <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
+          <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <select name="paymentStatus" class="cp-category-select cp-status-${escapeHtml(paymentState)}" onchange="this.form.submit()">
+            <option value="pending" ${paymentState === "pending" ? "selected" : ""}>No pagado</option>
+            <option value="paid" ${paymentState === "paid" ? "selected" : ""}>Pagado</option>
+            <option value="failed" ${paymentState === "failed" ? "selected" : ""}>Fallido</option>
+          </select>
+        </form>
+      </td>
       <td>${escapeHtml(clientPaymentMethodLabel(order))}</td>
       <td>
         <form method="POST" action="/panel/pedidos/category" class="cp-category-form" data-no-toggle="1">
@@ -3534,6 +3631,7 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
 
   const bodyHtml = `
     ${updatedCategory ? `<div class="cp-alert success">Estado de pedido actualizado.</div>` : ""}
+    ${updatedPayment ? `<div class="cp-alert success">Estado de pago actualizado.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
     <section class="cp-stats">
       <article class="cp-stat"><div class="cp-stat-label">Pedidos creados</div><div class="cp-stat-value">${createdCount}</div><div class="cp-stat-hint">${escapeHtml(rangeLabel)}</div></article>
@@ -3595,6 +3693,7 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
 
       <article class="cp-card cp-span-3">
         <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
+        <div class="cp-note">Click en la fila para expandir detalle rapido o entra por ID para ver la ficha completa del pedido.</div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
         <table class="cp-table cp-orders-table">
           <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th><th>Archivado</th></tr></thead>
@@ -3840,71 +3939,167 @@ app.get("/panel/pedidos/:id/detail", requireClientAuth, requireClientSectionAcce
   if (!orderId) return res.status(400).json({ error: "orderId requerido" });
 
   try {
-    const companyIdParam = encodeURIComponent(String(company.id || ""));
-    const order = await api(`/api/orders/${encodeURIComponent(orderId)}?companyId=${companyIdParam}`);
-    if (!order || String(order.companyId || "").trim() !== String(company.id || "").trim()) {
-      return res.status(403).json({ error: "Pedido no pertenece a esta empresa" });
-    }
-
-    let itemsDetailed = parseJsonSafe(order.itemsDetailedJson || "[]", []);
-    if (!Array.isArray(itemsDetailed)) itemsDetailed = [];
-    if (!itemsDetailed.length) {
-      const rawItems = parseJsonSafe(order.itemsJson || "[]", []);
-      const grouped = {};
-      (Array.isArray(rawItems) ? rawItems : []).forEach((rawId) => {
-        const key = String(rawId || "").trim();
-        if (!key) return;
-        grouped[key] = (grouped[key] || 0) + 1;
-      });
-      itemsDetailed = Object.entries(grouped).map(([id, qty]) => ({
-        id,
-        name: `Producto ${id}`,
-        qty,
-        unit: 0,
-        subtotal: 0,
-      }));
-    }
-
-    let messages = [];
-    try {
-      const history = await api(`/api/orders/${encodeURIComponent(orderId)}/messages?companyId=${companyIdParam}&limit=120`);
-      messages = Array.isArray(history?.messages) ? history.messages : [];
-    } catch {
-      messages = [];
-    }
-
-    return res.json({
-      order: {
-        id: String(order.id || ""),
-        createdAt: order.createdAt || "",
-        fromNumber: String(order.fromNumber || ""),
-        companyId: String(order.companyId || ""),
-        name: String(order.name || ""),
-        contact: String(order.contact || ""),
-        notes: String(order.notes || ""),
-        total: toNumber(order.total),
-        paymentStatus: String(order.paymentStatus || ""),
-        paymentMethod: String(order.paymentMethod || ""),
-        orderStatus: String(order.orderStatus || ""),
-        workflowState: String(order.workflowState || ""),
-        archived: !!order.archived,
-      },
-      itemsDetailed,
-      messages: messages.map((msg) => ({
-        id: Number(msg?.id || 0),
-        createdAt: msg?.createdAt || "",
-        direction: String(msg?.direction || "").toLowerCase() === "out" ? "out" : "in",
-        role: String(msg?.role || "").toLowerCase() === "assistant" ? "assistant" : "user",
-        content: String(msg?.content || ""),
-        mediaUrl: String(msg?.mediaUrl || ""),
-        mediaContentType: String(msg?.mediaContentType || ""),
-        twilioSid: String(msg?.twilioSid || ""),
-      })),
-    });
+    const payload = await fetchClientOrderDetailPayload(company, orderId, 120);
+    return res.json(payload);
   } catch (e) {
+    if (Number(e?.statusCode || 0) === 403) return res.status(403).json({ error: "Pedido no pertenece a esta empresa" });
     const msg = String(e?.message || e);
     if (msg.includes("404")) return res.status(404).json({ error: "Pedido no encontrado" });
     return res.status(500).json({ error: msg });
+  }
+});
+
+app.get("/panel/pedidos/ver/:id", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+  const company = req.company;
+  const orderId = String(req.params.id || "").trim();
+  if (!orderId) return res.redirect("/panel/pedidos");
+
+  try {
+    const payload = await fetchClientOrderDetailPayload(company, orderId, 250);
+    const order = payload.order || {};
+    const itemsDetailed = Array.isArray(payload.itemsDetailed) ? payload.itemsDetailed : [];
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+
+    const itemsHtml = itemsDetailed.length
+      ? `<ul class="cp-order-items">${
+          itemsDetailed.map((item) => `
+            <li>
+              <span>${escapeHtml(item.name || `Producto ${item.id || "-"}`)}</span>
+              <span>x${escapeHtml(item.qty || 1)} - ${formatMoney(toNumber(item.subtotal || item.unit || 0), "USD")}</span>
+            </li>
+          `).join("")
+        }</ul>`
+      : `<div class="cp-empty">Sin items detallados.</div>`;
+
+    const conversationHtml = messages.length
+      ? `<div class="cp-order-chat">${
+          messages.map((msg) => {
+            const isOut = String(msg.direction || "").toLowerCase() === "out";
+            const mediaUrl = String(msg.mediaUrl || "").trim();
+            const mediaType = String(msg.mediaContentType || "").trim();
+            const isImage = mediaUrl && mediaType.toLowerCase().startsWith("image/");
+            return `
+              <article class="cp-order-msg ${isOut ? "out" : "in"}">
+                <div class="cp-order-msg-meta">
+                  <span>${isOut ? "Bot" : "Cliente"}</span>
+                  <span>${escapeHtml(formatDateLabel(msg.createdAt))}</span>
+                </div>
+                ${msg.content ? `<p class="cp-order-msg-text">${escapeHtml(msg.content).replace(/\r?\n/g, "<br/>")}</p>` : ""}
+                ${mediaUrl ? `
+                  <div class="cp-order-msg-media">
+                    <span>${escapeHtml(mediaType || "adjunto")}</span>
+                    <a href="${escapeHtml(mediaUrl)}" target="_blank" rel="noopener noreferrer">Abrir adjunto</a>
+                    ${isImage ? `<img src="${escapeHtml(mediaUrl)}" alt="Adjunto pedido" loading="lazy" />` : ""}
+                  </div>
+                ` : ""}
+              </article>
+            `;
+          }).join("")
+        }</div>`
+      : `<div class="cp-empty">Sin conversacion para este pedido.</div>`;
+
+    const bodyHtml = `
+      <section class="cp-grid">
+        <article class="cp-card cp-span-3">
+          <div class="cp-card-head">
+            <h3>Detalle de pedido ${escapeHtml(order.id || "-")}</h3>
+            <a class="cp-btn" href="/panel/pedidos">Volver al listado</a>
+          </div>
+          <div class="cp-order-detail-grid">
+            <section class="cp-order-detail-card">
+              <h4>Datos del pedido</h4>
+              <div class="cp-kv"><span>ID</span><b>${escapeHtml(order.id || "-")}</b></div>
+              <div class="cp-kv"><span>Fecha</span><b>${escapeHtml(formatDateLabel(order.createdAt))}</b></div>
+              <div class="cp-kv"><span>Cliente</span><b>${escapeHtml(order.name || order.contact || "-")}</b></div>
+              <div class="cp-kv"><span>Total</span><b>${formatMoney(toNumber(order.total || 0), "USD")}</b></div>
+              <div class="cp-kv"><span>Pago</span><b>${escapeHtml(clientPaymentStatusLabel(order.paymentStatus || ""))}</b></div>
+              <div class="cp-kv"><span>Medio de pago</span><b>${escapeHtml(clientPaymentMethodLabel(order))}</b></div>
+              <div class="cp-kv"><span>Estado</span><b>${escapeHtml(clientOrderCategoryLabel(extractClientOrderWorkflow(order).state))}</b></div>
+              <div class="cp-kv"><span>Notas</span><b>${escapeHtml(order.notes || "-")}</b></div>
+            </section>
+            <section class="cp-order-detail-card">
+              <h4>Items</h4>
+              ${itemsHtml}
+            </section>
+            <section class="cp-order-detail-card cp-order-chat-card">
+              <h4>Conversacion</h4>
+              ${conversationHtml}
+            </section>
+          </div>
+        </article>
+      </section>
+    `;
+
+    return res.type("text/html").send(renderClientPage({
+      company,
+      active: "pedidos",
+      title: `Pedido ${order.id || orderId}`,
+      subtitle: `${company.name || company.id} - detalle operativo`,
+      bodyHtml,
+    }));
+  } catch (e) {
+    const message = String(e?.message || e);
+    return res.status(500).type("text/html").send(renderClientPage({
+      company,
+      active: "pedidos",
+      title: "Detalle de pedido",
+      subtitle: `${company.name || company.id} - seguimiento operativo`,
+      bodyHtml: `
+        <section class="cp-grid">
+          <article class="cp-card cp-span-3">
+            <div class="cp-alert error">No se pudo cargar el pedido: ${escapeHtml(message)}</div>
+            <a class="cp-btn" href="/panel/pedidos">Volver</a>
+          </article>
+        </section>
+      `,
+    }));
+  }
+});
+
+app.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+  const company = req.company;
+  const orderId = String(req.body.orderId || "").trim();
+  const paymentStatus = String(req.body.paymentStatus || "").trim().toLowerCase();
+
+  const redirectParams = new URLSearchParams();
+  const range = String(req.body.range || "").trim();
+  const status = String(req.body.status || "").trim();
+  const from = String(req.body.from || "").trim();
+  const to = String(req.body.to || "").trim();
+  if (range) redirectParams.set("range", range);
+  if (status) redirectParams.set("status", status);
+  if (from) redirectParams.set("from", from);
+  if (to) redirectParams.set("to", to);
+
+  const redirectBase = () => {
+    const query = redirectParams.toString();
+    return query ? `/panel/pedidos?${query}` : "/panel/pedidos";
+  };
+
+  if (!orderId || !["pending", "paid", "failed"].includes(paymentStatus)) {
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar pago")}`);
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set("companyId", String(company.id));
+    params.set("q", orderId);
+    params.set("limit", "25");
+    const orders = await api(`/api/orders?${params.toString()}`);
+    const match = (Array.isArray(orders) ? orders : []).find((item) => String(item.id || "") === orderId);
+    if (!match) throw new Error("El pedido no pertenece a esta empresa");
+
+    await api(`/api/orders/${encodeURIComponent(orderId)}/payment-status`, {
+      method: "POST",
+      body: { paymentStatus },
+    });
+
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}updatedPayment=1`);
+  } catch (e) {
+    const next = redirectBase();
+    return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
   }
 });
 

@@ -478,6 +478,42 @@ function normalizePaymentMethodInput(value) {
   return "";
 }
 
+function normalizePaymentStatusInput(value) {
+  const raw = normalizeTextForMatch(value);
+  if (!raw) return "";
+  if (
+    raw.includes("paid") ||
+    raw.includes("pagado") ||
+    raw.includes("approved") ||
+    raw.includes("aprobado") ||
+    raw.includes("settled") ||
+    raw.includes("cobrado")
+  ) {
+    return "paid";
+  }
+  if (
+    raw.includes("pending") ||
+    raw.includes("pendiente") ||
+    raw.includes("no pag") ||
+    raw.includes("unpaid")
+  ) {
+    return "pending";
+  }
+  if (
+    raw.includes("failed") ||
+    raw.includes("fallido") ||
+    raw.includes("rechaz") ||
+    raw.includes("cancel")
+  ) {
+    return "failed";
+  }
+  return "";
+}
+
+function isPaidStatusValue(value) {
+  return normalizePaymentStatusInput(value) === "paid";
+}
+
 function paymentMethodLabel(methodRaw) {
   const method = normalizePaymentMethodInput(methodRaw);
   if (method === "transferencia") return "Transferencia";
@@ -551,6 +587,35 @@ function extractCheckoutFieldsFromText(textRaw) {
   return { name, contact, paymentMethod };
 }
 
+function looksLikeCheckoutOperationalMessage(textRaw) {
+  const raw = normalizeTextForMatch(textRaw);
+  if (!raw) return false;
+  if (/^\d+$/.test(raw)) return true;
+
+  const keywords = [
+    "catalogo",
+    "carrito",
+    "checkout",
+    "agregar",
+    "comprar",
+    "compra",
+    "pedido",
+    "pago",
+    "pagado",
+    "comprobante",
+    "transfer",
+    "efectivo",
+    "debito",
+    "credito",
+    "tarjeta",
+    "confirmar",
+  ];
+  if (keywords.some((word) => raw.includes(word))) return true;
+
+  const extracted = extractCheckoutFieldsFromText(textRaw);
+  return !!(extracted.contact || extracted.paymentMethod);
+}
+
 function buildCheckoutItemsFromSession(session, company) {
   const items = Array.isArray(session?.cart) ? [...session.cart] : [];
   let total = 0;
@@ -595,24 +660,50 @@ async function appendOrderNote(orderIdRaw, noteRaw) {
   `).run(note, `\n${note}`, orderId);
 }
 
+async function resolvePendingSessionOrder(session) {
+  const sessionOrderId = String(session?.lastOrderId || "").trim();
+  if (!sessionOrderId) return null;
+  const row = await db.prepare(`
+    SELECT id, companyId, workflowState, archived, category, orderStatus, paymentStatus
+    FROM orders
+    WHERE id=?
+  `).get(sessionOrderId);
+  if (!row) return null;
+  const workflow = deriveOrderWorkflowFromRow(row);
+  const sameCompany =
+    String(row.companyId || "").trim().toLowerCase() ===
+    String(session?.data?.companyId || "babystepsbots").trim().toLowerCase();
+  if (!sameCompany || workflow.archived || workflow.state !== "pending") return null;
+  return row;
+}
+
+async function buildUniqueOrderId() {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const candidate = newOrderId();
+    const exists = await db.prepare(`SELECT id FROM orders WHERE id=?`).get(candidate);
+    if (!exists?.id) return candidate;
+  }
+  return `PED-${Date.now().toString(36).toUpperCase()}`;
+}
+
 async function createOrUpdateCheckoutOrder(session, from, company, options = {}) {
   const paymentMethod = normalizePaymentMethodInput(options.paymentMethod || "");
   const fallbackMethod = normalizePaymentMethodInput(options.fallbackPaymentMethod || "");
+  const explicitOrderId = String(options.orderId || "").trim();
   const now = new Date().toISOString();
   const snapshot = buildCheckoutItemsFromSession(session, company);
   const orderNotes = String(session?.data?.notes || "").trim();
   const orderName = String(session?.data?.name || "").trim();
   const orderContact = String(session?.data?.contact || "").trim();
 
-  const sessionOrderId = String(session?.lastOrderId || "").trim();
   let existing = null;
-  if (sessionOrderId) {
+  if (explicitOrderId) {
     existing = await db.prepare(`
       SELECT id, companyId, name, contact, notes, itemsJson, itemsDetailedJson, total,
-             paymentMethod, paymentStatus, orderStatus, workflowState, archived
+              paymentMethod, paymentStatus, orderStatus, workflowState, archived
       FROM orders
       WHERE id=?
-    `).get(sessionOrderId);
+    `).get(explicitOrderId);
   }
 
   const existingWorkflow = existing ? deriveOrderWorkflowFromRow(existing) : { state: "", archived: false };
@@ -657,6 +748,7 @@ async function createOrUpdateCheckoutOrder(session, from, company, options = {})
     );
 
     session.lastOrderId = existing.id;
+    session.data.checkoutOrderId = existing.id;
     if (hasCartItems) session.cart = [];
     return { orderId: existing.id, total: nextTotal, paymentMethod: finalMethod, reused: true };
   }
@@ -665,7 +757,7 @@ async function createOrUpdateCheckoutOrder(session, from, company, options = {})
     return { orderId: "", total: 0, paymentMethod: finalMethod, reused: false, missingItems: true };
   }
 
-  const orderId = newOrderId();
+  const orderId = await buildUniqueOrderId();
   await db.prepare(`
     INSERT INTO orders(
       id,createdAt,fromNumber,companyId,name,contact,notes,
@@ -695,6 +787,7 @@ async function createOrUpdateCheckoutOrder(session, from, company, options = {})
   );
 
   session.lastOrderId = orderId;
+  session.data.checkoutOrderId = orderId;
   session.cart = [];
   return { orderId, total: snapshot.total, paymentMethod: finalMethod, reused: false };
 }
@@ -786,7 +879,7 @@ function normalizePlanTierFromText(value) {
   if (!raw) return "";
   if (raw.includes("pro")) return "PRO";
   if (raw.includes("lite")) return "LITE";
-  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai")) return "BASICO";
+  if (raw.includes("basic") || raw.includes("basico") || raw.includes("sin ai") || raw.includes("base")) return "BASICO";
   return "";
 }
 
@@ -1442,6 +1535,7 @@ app.post("/api/assignments", requireApiAuth, async (req, res) => {
         data.contact = "";
         data.notes = "";
         delete data.paymentMethodHint;
+        delete data.checkoutOrderId;
       }
       data.companyId = companyId;
       const tempSession = { data };
@@ -1644,14 +1738,7 @@ app.post("/api/orders/:id/category", requireApiAuth, async (req, res) => {
       : "";
     const legacyCategory = archived ? `archived:${state}` : state;
     const currentPaymentStatus = String(current?.paymentStatus || "").trim();
-    const normalizedPayment = currentPaymentStatus.toLowerCase();
-    const isPaid =
-      normalizedPayment.includes("paid") ||
-      normalizedPayment.includes("pagado") ||
-      normalizedPayment.includes("approved") ||
-      normalizedPayment.includes("aprobado") ||
-      normalizedPayment.includes("settled") ||
-      normalizedPayment.includes("cobrado");
+    const isPaid = isPaidStatusValue(currentPaymentStatus);
     const nextPaymentStatus = state === "completed"
       ? (isPaid ? currentPaymentStatus : "paid")
       : currentPaymentStatus;
@@ -1713,6 +1800,41 @@ app.get("/api/companies/:id/whatsapp-messages/stats", requireApiAuth, async (req
   }
 });
 
+app.post("/api/orders/:id/payment-status", requireApiAuth, async (req, res) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+
+    const current = await db.prepare(`
+      SELECT id, paymentStatus
+      FROM orders
+      WHERE id=?
+    `).get(orderId);
+    if (!current) return res.status(404).json({ error: "Pedido no encontrado" });
+
+    let nextPaymentStatus = normalizePaymentStatusInput(req.body.paymentStatus || "");
+    if (!nextPaymentStatus && req.body.paid !== undefined) {
+      nextPaymentStatus = normalizeArchivedFlag(req.body.paid) ? "paid" : "pending";
+    }
+    if (!nextPaymentStatus) return res.status(400).json({ error: "paymentStatus invalido" });
+
+    const result = await db.prepare(`
+      UPDATE orders
+      SET paymentStatus=?
+      WHERE id=?
+    `).run(nextPaymentStatus, orderId);
+
+    if (!result.changes) return res.status(404).json({ error: "Pedido no encontrado" });
+    return res.json({
+      ok: true,
+      id: orderId,
+      paymentStatus: nextPaymentStatus,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 // ================= WEBHOOK =================
 app.post("/whatsapp", async (req, res) => {
   const fromRaw = req.body.From || "unknown";
@@ -1741,6 +1863,7 @@ app.post("/whatsapp", async (req, res) => {
     session.data.contact = "";
     session.data.notes = "";
     delete session.data.paymentMethodHint;
+    delete session.data.checkoutOrderId;
     session.data.companyId = map.companyId;
     sessionDirty = true;
   }
@@ -1754,13 +1877,17 @@ app.post("/whatsapp", async (req, res) => {
     await saveSession(session);
   }
 
+  const pendingOrderForSession = await resolvePendingSessionOrder(session);
+  const activeOrderId = String(pendingOrderForSession?.id || "").trim();
+  const hasActiveOrder = !!activeOrderId;
+
   const respondAndLog = async (textOut, options = {}) => {
     const message = String(textOut || "");
     if (!cmd.startsWith("admin")) {
       await logWhatsappMessage({
         fromNumber: from,
         companyId: session?.data?.companyId || "babystepsbots",
-        orderId: options.orderId ?? session?.lastOrderId ?? null,
+        orderId: options.orderId ?? activeOrderId ?? null,
         direction: "out",
         role: "assistant",
         content: message,
@@ -1774,7 +1901,7 @@ app.post("/whatsapp", async (req, res) => {
     await logWhatsappMessage({
       fromNumber: from,
       companyId: session?.data?.companyId || "babystepsbots",
-      orderId: session?.lastOrderId || null,
+      orderId: activeOrderId || null,
       direction: "in",
       role: "user",
       content: body,
@@ -1785,7 +1912,7 @@ app.post("/whatsapp", async (req, res) => {
 
   if (hasMedia && !cmd.startsWith("admin")) {
     const company = await getCompanySafe(session);
-    const orderId = String(session.lastOrderId || "").trim();
+    const orderId = activeOrderId;
     const mediaCount = Math.max(1, Math.min(10, numMedia));
 
     for (let i = 0; i < mediaCount; i += 1) {
@@ -1913,6 +2040,7 @@ app.post("/whatsapp", async (req, res) => {
         s2.data.contact = "";
         s2.data.notes = "";
         delete s2.data.paymentMethodHint;
+        delete s2.data.checkoutOrderId;
       }
       await syncSessionAiModeFromCompany(s2, { force: true });
       await saveSession(s2);
@@ -2069,25 +2197,30 @@ app.post("/whatsapp", async (req, res) => {
     return respondAndLog(catalogText(company));
   }
 
-  const sessionOrderId = String(session.lastOrderId || "").trim();
-  let activeOrderId = "";
-  if (sessionOrderId) {
-    const activeOrderRow = await db.prepare(`
-      SELECT id, companyId, workflowState, archived, category, orderStatus, paymentStatus
-      FROM orders
-      WHERE id=?
-    `).get(sessionOrderId);
-    if (activeOrderRow) {
-      const workflow = deriveOrderWorkflowFromRow(activeOrderRow);
-      const sameCompany =
-        String(activeOrderRow.companyId || "").trim().toLowerCase() ===
-        String(session?.data?.companyId || "babystepsbots").trim().toLowerCase();
-      if (sameCompany && !workflow.archived && workflow.state === "pending") {
-        activeOrderId = sessionOrderId;
-      }
-    }
+  if (text === "ayuda") {
+    return respondAndLog(
+      "Comandos utiles:\n" +
+      "- menu\n" +
+      "- catalogo\n" +
+      "- carrito\n" +
+      "- checkout\n" +
+      "- humano\n" +
+      "- cancelar (reinicia el flujo actual)"
+    );
   }
-  const hasActiveOrder = !!activeOrderId;
+
+  if (text === "cancelar") {
+    session.state = "MENU";
+    session.cart = [];
+    session.data.name = "";
+    session.data.contact = "";
+    session.data.notes = "";
+    session.data.humanNotified = false;
+    delete session.data.paymentMethodHint;
+    delete session.data.checkoutOrderId;
+    await saveSession(session);
+    return respondAndLog("Listo, reinicie el flujo. Escribi catalogo para empezar una nueva compra.");
+  }
 
   if (
     [
@@ -2099,7 +2232,8 @@ app.post("/whatsapp", async (req, res) => {
       "medio de pago",
       "medios de pago",
       "medios",
-    ].includes(text)
+    ].includes(text) &&
+    !session.cart.length
   ) {
     const company = await getCompanySafe(session);
     const methodFromText = normalizePaymentMethodInput(body);
@@ -2137,14 +2271,14 @@ app.post("/whatsapp", async (req, res) => {
     ["listo", "ok", "ya", "hecho", "transferi", "ya transferi", "pague", "ya pague"].includes(text) ||
     text.includes("ya transfer") ||
     text.includes("comprobante");
-  if (session.state === "MENU" && hasActiveOrder && !hasMedia && looksLikePaymentReady) {
+  if (session.state === "MENU" && hasActiveOrder && !hasMedia && !session.cart.length && looksLikePaymentReady) {
     return respondAndLog(
       `Perfecto. Para avanzar con la validacion del pedido ${activeOrderId}, envia el comprobante cuando lo tengas.\n` +
       `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`
     );
   }
 
-  if (session.state === "MENU" && hasActiveOrder && !hasMedia) {
+  if (session.state === "MENU" && hasActiveOrder && !hasMedia && !session.cart.length) {
     const directMethod = normalizePaymentMethodInput(body);
     if (directMethod) {
       await db.prepare(`
@@ -2216,13 +2350,6 @@ app.post("/whatsapp", async (req, res) => {
   if (session.state === "MENU") {
     const buyIntent = ["comprar", "compra", "adquirir", "quiero un bot", "quiero bot"].some((token) => text.includes(token));
     if (buyIntent) {
-      const aiMode = String(session.data.aiMode || "").toLowerCase();
-      if (["lite", "pro"].includes(aiMode)) {
-        const ai = await aiReply(session, from, body);
-        if (ai) {
-          return respondAndLog(ai);
-        }
-      }
       return respondAndLog(
         "Perfecto. Vamos por el flujo directo para evitar confusiones:\n" +
         "1) Escribi: catalogo\n" +
@@ -2232,7 +2359,14 @@ app.post("/whatsapp", async (req, res) => {
     }
   }
 
-  if (["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase()) && session.state === "MENU" && !isReserved(text)) {
+  if (
+    ["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase()) &&
+    session.state === "MENU" &&
+    !isReserved(text) &&
+    !session.cart.length &&
+    !hasActiveOrder &&
+    !looksLikeCheckoutOperationalMessage(body)
+  ) {
     const ai = await aiReply(session, from, body);
     if (ai) return respondAndLog(ai);
   }
@@ -2392,6 +2526,7 @@ app.post("/whatsapp", async (req, res) => {
     session.data.contact = "";
     session.data.notes = "";
     delete session.data.paymentMethodHint;
+    delete session.data.checkoutOrderId;
     await saveSession(session);
     return respondAndLog(
       `Perfecto. Pedido ${orderId} en gestion.\nTe confirmamos por este chat cuando avance el pago/entrega.`,
@@ -2437,6 +2572,7 @@ app.post("/whatsapp", async (req, res) => {
     session.data.contact = "";
     session.data.notes = "";
     delete session.data.paymentMethodHint;
+    delete session.data.checkoutOrderId;
     await saveSession(session);
     return respondAndLog(
       `Perfecto. Pedido ${activeOrderId} en gestion.`,

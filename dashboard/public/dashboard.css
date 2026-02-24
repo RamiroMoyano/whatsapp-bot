@@ -1363,6 +1363,12 @@ body.client-ui {
   color: #a12626;
 }
 
+.cp-status-failed {
+  border-color: #f2b7b7;
+  background: #fff0f0;
+  color: #a12626;
+}
+
 .cp-status-archived {
   border-color: #d4d9e4;
   background: #f2f4f8;
@@ -1401,6 +1407,16 @@ body.client-ui {
 
 .cp-order-row td {
   transition: background-color 0.18s ease;
+}
+
+.cp-order-link {
+  color: #2f6dd3;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.cp-order-link:hover {
+  text-decoration: underline;
 }
 
 .cp-order-row:hover td {
@@ -2207,6 +2223,12 @@ body.client-ui::after {
   color: #ffd0d0;
 }
 
+.cp-status-failed {
+  border-color: rgba(252, 141, 141, 0.7);
+  background: rgba(89, 19, 19, 0.66);
+  color: #ffd0d0;
+}
+
 .cp-status-archived {
   border-color: rgba(163, 177, 206, 0.5);
   background: rgba(31, 40, 61, 0.72);
@@ -2215,6 +2237,10 @@ body.client-ui::after {
 
 .cp-archive-toggle {
   color: #a6c6f3;
+}
+
+.cp-order-link {
+  color: #9fd1ff;
 }
 
 .cp-msg-list {
