@@ -587,6 +587,200 @@ function extractCheckoutFieldsFromText(textRaw) {
   return { name, contact, paymentMethod };
 }
 
+function normalizeCatalogMatchText(value) {
+  return normalizeTextForMatch(value)
+    .replace(/[^a-z0-9\s,+\-\/x]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeCatalogSelectionIntent(textRaw) {
+  const raw = normalizeCatalogMatchText(textRaw);
+  if (!raw) return false;
+  if (/\b\d{1,3}\b/.test(raw)) return true;
+  const keywords = [
+    "me interesa",
+    "quiero",
+    "sumame",
+    "suma",
+    "agrega",
+    "agregame",
+    "agregar",
+    "elijo",
+    "elegi",
+    "opcion",
+    "opciones",
+    "catalogo",
+    "bot",
+    "comprar",
+    "compra",
+    "adquirir",
+    "llevo",
+  ];
+  return keywords.some((word) => raw.includes(word));
+}
+
+function extractCatalogSelectionsFromText(textRaw, catalogRaw) {
+  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
+  const normalizedText = normalizeCatalogMatchText(textRaw);
+  const idToProduct = new Map();
+  for (const item of catalog) {
+    const id = Number(item?.id);
+    if (!Number.isFinite(id)) continue;
+    idToProduct.set(id, item);
+  }
+
+  const selectedIds = [];
+  const selectedOnce = new Set();
+  const invalidIds = [];
+
+  const addId = (id, qty = 1, explicitQuantity = false) => {
+    if (!idToProduct.has(id)) {
+      if (!invalidIds.includes(id)) invalidIds.push(id);
+      return;
+    }
+    if (explicitQuantity) {
+      const safeQty = Math.max(1, Math.min(20, Number(qty) || 1));
+      for (let i = 0; i < safeQty; i += 1) selectedIds.push(id);
+      selectedOnce.add(id);
+      return;
+    }
+    if (selectedOnce.has(id)) return;
+    selectedIds.push(id);
+    selectedOnce.add(id);
+  };
+
+  let working = ` ${normalizedText} `;
+  const qtyPattern = /\b(\d{1,2})\s*x\s*(\d{1,3})\b/g;
+  for (const match of normalizedText.matchAll(qtyPattern)) {
+    const qty = Number(match[1]);
+    const id = Number(match[2]);
+    if (Number.isFinite(id)) addId(id, qty, true);
+  }
+  working = working.replace(qtyPattern, " ");
+
+  const numericPattern = /\b(\d{1,3})\b/g;
+  for (const match of working.matchAll(numericPattern)) {
+    const id = Number(match[1]);
+    if (!Number.isFinite(id)) continue;
+    addId(id, 1, false);
+  }
+
+  const genericWords = new Set([
+    "bot",
+    "whatsapp",
+    "con",
+    "sin",
+    "para",
+    "de",
+    "del",
+    "la",
+    "el",
+    "los",
+    "las",
+    "ai",
+  ]);
+
+  for (const [id, item] of idToProduct.entries()) {
+    if (selectedOnce.has(id)) continue;
+    const itemName = normalizeCatalogMatchText(item?.name || "");
+    if (!itemName) continue;
+
+    if (working.includes(` ${itemName} `)) {
+      addId(id, 1, false);
+      continue;
+    }
+
+    const strongTokens = itemName
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => token.length > 2 && !genericWords.has(token));
+    if (!strongTokens.length) continue;
+
+    const allTokensPresent = strongTokens.every((token) => working.includes(token));
+    if (allTokensPresent) addId(id, 1, false);
+  }
+
+  return {
+    selectedIds,
+    invalidIds,
+    hasSelectionIntent: looksLikeCatalogSelectionIntent(textRaw),
+  };
+}
+
+function summarizeCatalogSelection(idsRaw, catalogRaw) {
+  const ids = Array.isArray(idsRaw) ? idsRaw : [];
+  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
+  const counts = new Map();
+  for (const id of ids) {
+    const key = Number(id);
+    if (!Number.isFinite(key)) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const lines = [];
+  for (const [id, qty] of counts.entries()) {
+    const product = catalog.find((item) => Number(item?.id) === id);
+    const label = product?.name || `Producto ${id}`;
+    lines.push(qty > 1 ? `${label} x${qty}` : label);
+  }
+  return lines;
+}
+
+function contextualCheckoutFallback(session, company, options = {}) {
+  const state = String(session?.state || "MENU");
+  const cartCount = Array.isArray(session?.cart) ? session.cart.length : 0;
+  const activeOrderId = String(options.activeOrderId || "").trim();
+
+  if (state === "ASK_NAME") {
+    return "Necesito tu nombre para continuar con el pedido.";
+  }
+  if (state === "ASK_CONTACT") {
+    return "Necesito un telefono de contacto para continuar.";
+  }
+  if (state === "ASK_NOTES") {
+    return (
+      "Agrega notas u observaciones para el pedido (opcional).\n" +
+      "Si no queres agregar nada, responde con: -"
+    );
+  }
+  if (state === "ASK_PAYMENT_METHOD") {
+    return paymentMethodSelectionPrompt(company);
+  }
+  if (state === "ASK_PAYMENT_DETAILS") {
+    return (
+      `Contame detalle de coordinacion para el pedido ${activeOrderId || "(sin ID)"}.\n` +
+      "Ejemplo: dia, horario y lugar. Si no aplica, responde con -"
+    );
+  }
+  if (state === "MENU" && activeOrderId && !cartCount) {
+    return (
+      `Tenes un pedido activo (${activeOrderId}).\n` +
+      "Podes enviar detalle de pago/entrega o escribir menu para iniciar un nuevo flujo."
+    );
+  }
+  if (state === "MENU" && cartCount > 0) {
+    const hasName = !!String(session?.data?.name || "").trim();
+    const hasContact = !!String(session?.data?.contact || "").trim();
+    const hasPayment = !!String(session?.data?.paymentMethodHint || "").trim();
+    const missing = [];
+    if (!hasName) missing.push("nombre");
+    if (!hasContact) missing.push("contacto");
+    if (!hasPayment) missing.push("medio de pago");
+
+    if (!missing.length) {
+      return (
+        "Ya tengo carrito y datos base. Escribi checkout para continuar,\n" +
+        "o envia todo junto: nombre + telefono + medio de pago."
+      );
+    }
+    return (
+      `Ya tengo tu carrito. Falta: ${missing.join(", ")}.\n` +
+      "Tambien podes enviar todo en un solo mensaje (ej: Pedro 3812345678 efectivo)."
+    );
+  }
+  return "No entendi. Escribi: menu / catalogo / ayuda";
+}
+
 function looksLikeCheckoutOperationalMessage(textRaw) {
   const raw = normalizeTextForMatch(textRaw);
   if (!raw) return false;
@@ -609,6 +803,12 @@ function looksLikeCheckoutOperationalMessage(textRaw) {
     "credito",
     "tarjeta",
     "confirmar",
+    "me interesa",
+    "quiero el",
+    "quiero esos",
+    "sumame",
+    "sumar",
+    "llevo",
   ];
   if (keywords.some((word) => raw.includes(word))) return true;
 
@@ -1959,8 +2159,6 @@ app.post("/whatsapp", async (req, res) => {
     );
   }
 
-  let reply = "No entendi. Escribi: menu / catalogo / ayuda";
-
   if (isHumanTrigger(text)) {
     session.state = "HUMAN";
     session.data.humanNotified = true;
@@ -2324,15 +2522,46 @@ app.post("/whatsapp", async (req, res) => {
     return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
   }
 
+  if (session.state === "MENU" && !session.cart.length) {
+    const company = await getCompanySafe(session);
+    const detected = extractCatalogSelectionsFromText(body, company.catalog || []);
+    if (detected.selectedIds.length > 0) {
+      for (const id of detected.selectedIds) session.cart.push(Number(id));
+      await saveSession(session);
+      const added = summarizeCatalogSelection(detected.selectedIds, company.catalog || []);
+      const addedText = added.length ? `Agregados: ${added.join(", ")}` : "Productos agregados al carrito.";
+      return respondAndLog(
+        `${addedText}\n\n${await cartText(session)}\n\nPara continuar: checkout`,
+      );
+    }
+    if (detected.hasSelectionIntent && detected.invalidIds.length > 0) {
+      return respondAndLog(
+        `No encuentro esas opciones (${detected.invalidIds.join(", ")}).\n` +
+        `Escribi catalogo y elegi IDs validos.`
+      );
+    }
+  }
+
   if (session.state === "MENU" && session.cart.length) {
     const quickData = extractCheckoutFieldsFromText(body);
-    if (quickData.name && quickData.contact && quickData.paymentMethod) {
-      session.data.name = quickData.name;
-      session.data.contact = quickData.contact;
-      if (!session.data.notes) session.data.notes = "";
+    const mergedName = String(quickData.name || session.data.name || "").trim();
+    const mergedContact = String(quickData.contact || session.data.contact || "").trim();
+    const mergedPaymentMethod = normalizePaymentMethodInput(
+      quickData.paymentMethod || session.data.paymentMethodHint || ""
+    );
+    const hasUsefulData = !!(quickData.name || quickData.contact || quickData.paymentMethod);
+
+    if (hasUsefulData) {
+      if (mergedName) session.data.name = mergedName;
+      if (mergedContact) session.data.contact = mergedContact;
+      if (mergedPaymentMethod) session.data.paymentMethodHint = mergedPaymentMethod;
+    }
+
+    if (hasUsefulData && mergedName && mergedContact && mergedPaymentMethod) {
+      if (session.data.notes === undefined || session.data.notes === null) session.data.notes = "";
       const company = await getCompanySafe(session);
       const created = await createOrUpdateCheckoutOrder(session, from, company, {
-        paymentMethod: quickData.paymentMethod,
+        paymentMethod: mergedPaymentMethod,
       });
       if (created.missingItems) {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
@@ -2343,6 +2572,31 @@ app.post("/whatsapp", async (req, res) => {
       return respondAndLog(
         buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
         { orderId: created.orderId }
+      );
+    }
+
+    if (hasUsefulData && mergedContact && mergedPaymentMethod && !mergedName) {
+      session.state = "ASK_NAME";
+      await saveSession(session);
+      return respondAndLog(
+        "Recibi tu contacto y medio de pago. Solo falta tu nombre para registrar el pedido."
+      );
+    }
+
+    if (hasUsefulData && mergedName && mergedPaymentMethod && !mergedContact) {
+      session.state = "ASK_CONTACT";
+      await saveSession(session);
+      return respondAndLog(
+        "Recibi tu nombre y medio de pago. Ahora pasame un telefono de contacto."
+      );
+    }
+
+    if (hasUsefulData && mergedName && mergedContact && !mergedPaymentMethod) {
+      session.state = "ASK_NOTES";
+      await saveSession(session);
+      return respondAndLog(
+        "Perfecto. Si queres agrega notas u observaciones (opcional) y luego elegimos medio de pago.\n" +
+        "Si no queres agregar nada, responde con: -"
       );
     }
   }
@@ -2580,8 +2834,11 @@ app.post("/whatsapp", async (req, res) => {
     );
   }
 
+  const company = await getCompanySafe(session);
   await saveSession(session);
-  return respondAndLog(reply);
+  return respondAndLog(
+    contextualCheckoutFallback(session, company, { activeOrderId })
+  );
 });
 // ================= RESPUESTA =================
 function respond(res, text) {
