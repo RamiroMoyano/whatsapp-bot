@@ -594,35 +594,82 @@ function normalizeCatalogMatchText(value) {
     .trim();
 }
 
-function looksLikeCatalogSelectionIntent(textRaw) {
+function isPureCatalogSelectionText(textRaw) {
   const raw = normalizeCatalogMatchText(textRaw);
   if (!raw) return false;
-  if (/\b\d{1,3}\b/.test(raw)) return true;
+
+  const compact = ` ${raw} `
+    .replace(/\b(\d{1,2})\s*x\s*(\d{1,3})\b/g, " ")
+    .replace(/\b\d{1,3}\b/g, " ")
+    .replace(/\b(y|e|and|,|\/|\+|-|del|de|el|la|los|las)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return !compact;
+}
+
+function looksLikeCatalogInfoIntent(textRaw) {
+  const raw = normalizeCatalogMatchText(textRaw);
+  if (!raw) return false;
   const keywords = [
-    "me interesa",
-    "quiero",
-    "sumame",
-    "suma",
+    "contame",
+    "cuentame",
+    "info",
+    "informacion",
+    "mas",
+    "detalle",
+    "detalles",
+    "caracteristica",
+    "caracteristicas",
+    "que incluye",
+    "que trae",
+    "como funciona",
+    "diferencia",
+    "explicame",
+  ];
+  if (raw.includes("?")) return true;
+  return keywords.some((word) => raw.includes(word));
+}
+
+function looksLikeCatalogAddIntent(textRaw) {
+  const raw = normalizeCatalogMatchText(textRaw);
+  if (!raw) return false;
+  const keywords = [
     "agrega",
     "agregame",
     "agregar",
-    "elijo",
-    "elegi",
-    "opcion",
-    "opciones",
-    "catalogo",
-    "bot",
+    "sumame",
+    "sumar",
+    "suma",
+    "anadi",
+    "añadi",
+    "aniadi",
+    "adiciona",
+    "quiero",
+    "me interesa",
+    "llevo",
     "comprar",
     "compra",
     "adquirir",
-    "llevo",
+    "elijo",
+    "elegi",
   ];
   return keywords.some((word) => raw.includes(word));
+}
+
+function looksLikeCatalogSelectionIntent(textRaw) {
+  return (
+    isPureCatalogSelectionText(textRaw) ||
+    looksLikeCatalogAddIntent(textRaw) ||
+    looksLikeCatalogInfoIntent(textRaw)
+  );
 }
 
 function extractCatalogSelectionsFromText(textRaw, catalogRaw) {
   const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
   const normalizedText = normalizeCatalogMatchText(textRaw);
+  const isInfoIntent = looksLikeCatalogInfoIntent(textRaw);
+  const isAddIntent = looksLikeCatalogAddIntent(textRaw);
+  const isPureSelection = isPureCatalogSelectionText(textRaw);
   const idToProduct = new Map();
   for (const item of catalog) {
     const id = Number(item?.id);
@@ -705,6 +752,9 @@ function extractCatalogSelectionsFromText(textRaw, catalogRaw) {
     selectedIds,
     invalidIds,
     hasSelectionIntent: looksLikeCatalogSelectionIntent(textRaw),
+    isInfoIntent,
+    isAddIntent,
+    isPureSelection,
   };
 }
 
@@ -724,6 +774,61 @@ function summarizeCatalogSelection(idsRaw, catalogRaw) {
     lines.push(qty > 1 ? `${label} x${qty}` : label);
   }
   return lines;
+}
+
+function catalogItemDetailsText(itemRaw) {
+  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
+  const name = String(item.name || "Producto").trim();
+  const price = Number(item.price || 0);
+  const explicitDescription = String(
+    item.description || item.details || item.detail || item.summary || item.info || ""
+  ).trim();
+
+  if (explicitDescription) {
+    return `${name} — $${price}\n${explicitDescription}`;
+  }
+
+  const normalizedName = normalizeTextForMatch(name);
+  if (normalizedName.includes("base")) {
+    return `${name} — $${price}\nIncluye flujo comercial base sin IA avanzada, ideal para empezar.`;
+  }
+  if (normalizedName.includes("lite")) {
+    return `${name} — $${price}\nIncluye IA LITE con memoria/contexto moderado y asistencia comercial.`;
+  }
+  if (normalizedName.includes("pro")) {
+    return `${name} — $${price}\nIncluye IA PRO con mayor memoria/contexto y respuestas mas personalizadas.`;
+  }
+  if (normalizedName.includes("dashboard")) {
+    return `${name} — $${price}\nPanel con metricas operativas para seguimiento comercial y pedidos.`;
+  }
+  return `${name} — $${price}\nSi queres, te detallo alcance y casos de uso para este producto.`;
+}
+
+function buildCatalogInfoReply(company, selectedIdsRaw) {
+  const selectedIds = Array.isArray(selectedIdsRaw) ? selectedIdsRaw : [];
+  const catalog = Array.isArray(company?.catalog) ? company.catalog : [];
+  const uniqueIds = [...new Set(selectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
+  const selectedItems = uniqueIds
+    .map((id) => catalog.find((item) => Number(item?.id) === id))
+    .filter(Boolean);
+
+  if (!selectedItems.length) {
+    return (
+      "Decime que opcion queres revisar (por ID o nombre).\n" +
+      "Ejemplo: info 2, info bot ai lite."
+    );
+  }
+
+  const lines = [];
+  lines.push(`Te paso info de ${selectedItems.length} opcion(es):`);
+  lines.push("");
+  for (const item of selectedItems) {
+    lines.push(`${item.id}) ${catalogItemDetailsText(item)}`);
+    lines.push("");
+  }
+  lines.push("Si queres agregar al carrito, escribi: agregar <id> (ej: agregar 2).");
+  lines.push("Tambien podes agregar varios: 2 y 4.");
+  return lines.join("\n").trim();
 }
 
 function contextualCheckoutFallback(session, company, options = {}) {
@@ -770,12 +875,14 @@ function contextualCheckoutFallback(session, company, options = {}) {
     if (!missing.length) {
       return (
         "Ya tengo carrito y datos base. Escribi checkout para continuar,\n" +
-        "o envia todo junto: nombre + telefono + medio de pago."
+        "o envia todo junto: nombre + telefono + medio de pago.\n" +
+        "Si queres ver detalles de un producto: info <id>."
       );
     }
     return (
       `Ya tengo tu carrito. Falta: ${missing.join(", ")}.\n` +
-      "Tambien podes enviar todo en un solo mensaje (ej: Pedro 3812345678 efectivo)."
+      "Tambien podes enviar todo en un solo mensaje (ej: Pedro 3812345678 efectivo).\n" +
+      "Si queres ver detalles de un producto: info <id>."
     );
   }
   return "No entendi. Escribi: menu / catalogo / ayuda";
@@ -2522,10 +2629,22 @@ app.post("/whatsapp", async (req, res) => {
     return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
   }
 
-  if (session.state === "MENU" && !session.cart.length) {
+  if (session.state === "MENU" && !hasActiveOrder) {
     const company = await getCompanySafe(session);
     const detected = extractCatalogSelectionsFromText(body, company.catalog || []);
-    if (detected.selectedIds.length > 0) {
+    const quickCheckoutData = extractCheckoutFieldsFromText(body);
+    const looksLikeCheckoutData = !!(quickCheckoutData.contact || quickCheckoutData.paymentMethod);
+
+    if (detected.isInfoIntent) {
+      return respondAndLog(buildCatalogInfoReply(company, detected.selectedIds));
+    }
+
+    const canAutoAddFromNaturalText =
+      detected.selectedIds.length > 0 &&
+      (detected.isAddIntent || detected.isPureSelection) &&
+      !looksLikeCheckoutData;
+
+    if (canAutoAddFromNaturalText) {
       for (const id of detected.selectedIds) session.cart.push(Number(id));
       await saveSession(session);
       const added = summarizeCatalogSelection(detected.selectedIds, company.catalog || []);
@@ -2534,7 +2653,7 @@ app.post("/whatsapp", async (req, res) => {
         `${addedText}\n\n${await cartText(session)}\n\nPara continuar: checkout`,
       );
     }
-    if (detected.hasSelectionIntent && detected.invalidIds.length > 0) {
+    if (detected.isAddIntent && detected.invalidIds.length > 0) {
       return respondAndLog(
         `No encuentro esas opciones (${detected.invalidIds.join(", ")}).\n` +
         `Escribi catalogo y elegi IDs validos.`
