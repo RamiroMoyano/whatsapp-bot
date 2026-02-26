@@ -1130,6 +1130,26 @@ function buildOrderRegisteredReply(company, orderId, total, paymentMethodRaw) {
   return lines.join("\n");
 }
 
+async function notifyTelegramOrderCreated(company, fromNumber, created) {
+  const orderId = String(created?.orderId || "").trim();
+  if (!orderId) return false;
+  if (created?.reused) return false;
+
+  const total = Number(created?.total || 0);
+  const paymentLabel = paymentMethodLabel(created?.paymentMethod || "");
+  const companyName = String(company?.name || company?.id || "-").trim();
+  const customer = String(fromNumber || "-").trim();
+
+  return sendTelegram(
+    `PEDIDO GENERADO\n` +
+    `Empresa: ${companyName}\n` +
+    `Cliente: ${customer}\n` +
+    `Pedido: ${orderId}\n` +
+    `Total: $${total}\n` +
+    `Pago: ${paymentLabel}`
+  );
+}
+
 async function logWhatsappMessage({
   fromNumber,
   companyId,
@@ -2218,7 +2238,6 @@ app.post("/whatsapp", async (req, res) => {
   }
 
   if (hasMedia && !cmd.startsWith("admin")) {
-    const company = await getCompanySafe(session);
     const orderId = activeOrderId;
     const mediaCount = Math.max(1, Math.min(10, numMedia));
 
@@ -2249,14 +2268,6 @@ app.post("/whatsapp", async (req, res) => {
         `).run(`\n${noteLine}`, orderId);
       }
 
-      await sendTelegram(
-        `COMPROBANTE RECIBIDO\n` +
-        `Empresa: ${company?.name || company?.id || "-"}\n` +
-        `Cliente: ${from}\n` +
-        `Pedido: ${orderId || "-"}\n` +
-        `Tipo: ${mediaType || "-"}\n` +
-        `URL: ${mediaUrl || "-"}`
-      );
     }
 
     return respondAndLog(
@@ -2685,6 +2696,7 @@ app.post("/whatsapp", async (req, res) => {
       if (created.missingItems) {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
+      await notifyTelegramOrderCreated(company, from, created);
       session.state = "ASK_PAYMENT_DETAILS";
       delete session.data.paymentMethodHint;
       await saveSession(session);
@@ -2801,6 +2813,7 @@ app.post("/whatsapp", async (req, res) => {
         await saveSession(session);
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
+      await notifyTelegramOrderCreated(company, from, created);
       session.state = "ASK_PAYMENT_DETAILS";
       delete session.data.paymentMethodHint;
       await saveSession(session);
@@ -2844,6 +2857,7 @@ app.post("/whatsapp", async (req, res) => {
       return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
     }
 
+    await notifyTelegramOrderCreated(company, from, created);
     session.state = "ASK_PAYMENT_DETAILS";
     delete session.data.paymentMethodHint;
     await saveSession(session);
@@ -2917,6 +2931,7 @@ app.post("/whatsapp", async (req, res) => {
       await saveSession(session);
       return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
     }
+    await notifyTelegramOrderCreated(company, from, created);
     session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
     return respondAndLog(
