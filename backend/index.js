@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import OpenAI from "openai";
@@ -149,19 +149,19 @@ async function saveSession(s) {
 }
 
 // ================= TEXT HELPERS =================
-const menuText = (c) => `👋 Hola! Soy el asistente de ${c.name}
-• catalogo
-• carrito
-• checkout
-• humano`;
+const menuText = (c) => `ðŸ‘‹ Hola! Soy el asistente de ${c.name}
+â€¢ catalogo
+â€¢ carrito
+â€¢ checkout
+â€¢ humano`;
 
 const catalogText = (c) =>
-  `🛒 ${c.name}\n` +
-  (c.catalog || []).map((p) => `${p.id}) ${p.name} — $${p.price}`).join("\n");
+  `ðŸ›’ ${c.name}\n` +
+  (c.catalog || []).map((p) => `${p.id}) ${p.name} â€” $${p.price}`).join("\n");
 
 const cartText = async (s) => {
   const c = await getCompanySafe(s);
-  if (!s.cart.length) return "🧺 Carrito vacío.";
+  if (!s.cart.length) return "ðŸ§º Carrito vacÃ­o.";
   let total = 0;
   const out = {};
   s.cart.forEach((id) => (out[id] = (out[id] || 0) + 1));
@@ -170,9 +170,9 @@ const cartText = async (s) => {
     const unit = Number(p?.price || 0);
     const sub = unit * q;
     total += sub;
-    return `• ${p?.name || "Producto"} x${q} — $${sub}`;
+    return `â€¢ ${p?.name || "Producto"} x${q} â€” $${sub}`;
   });
-  return `🧾 ${c.name}\n${lines.join("\n")}\nTotal: $${total}`;
+  return `ðŸ§¾ ${c.name}\n${lines.join("\n")}\nTotal: $${total}`;
 };
 
 // ================= AI =================
@@ -221,36 +221,27 @@ function trimAiHistoryForProfile(history, profile) {
 }
 
 async function aiReply(session, from, text) {
-  if (!openai || AI_GLOBAL === "off") return "IA no disponible.";
+  if (!openai || AI_GLOBAL === "off") return null;
+
   const aiMode = String(session.data.aiMode || "").toLowerCase();
-  if (!["lite", "pro"].includes(aiMode)) return null;
-
-  const today = new Date().toISOString().slice(0, 10);
-  if (session.data.aiCountDate !== today) {
-    session.data.aiCountDate = today;
-    session.data.aiCount = 0;
-  }
-
-  const profile = aiModeProfile(aiMode);
-  if (Number(session.data.aiCount || 0) >= profile.dailyLimit) {
-    return "⚠️ Límite diario de IA alcanzado. Escribí humano.";
-  }
+  const profile = ["lite", "pro"].includes(aiMode)
+    ? aiModeProfile(aiMode)
+    : { memoryMessages: 30, memoryChars: 20000 };
 
   const c = await getCompanySafe(session);
   const paymentPrompt = paymentMethodsPromptText(c);
   const prompt = `
 ${c.prompt || ""}
 
-CATÁLOGO:
+CATALOGO:
 ${(c.catalog || []).map((p) => `${p.id}) ${p.name}: $${p.price}`).join("\n")}
 
 Reglas:
 - Tono: ${(c.rules || {}).tone || "neutral"}
 - No inventar datos
-- Siempre cerrar con pregunta
-- Si el cliente quiere comprar, guialo al flujo operativo: catalogo -> numero de producto -> checkout -> nombre -> contacto -> notas/observaciones -> medio de pago -> detalle de pago
-- Al elegir medio de pago se registra un pedido con ID automaticamente
-- Comprobante de transferencia: opcional, nunca bloqueante
+- Responde de forma natural y util
+- Si el cliente pregunta por productos, explica diferencias y beneficios de cada opcion
+- Si el cliente quiere comprar, propon siguiente paso claro sin bloquear la conversacion
 `;
 
   const history = normalizeAiHistory(session.data.aiHistory || []);
@@ -260,22 +251,27 @@ Reglas:
     { role: "user", content: text },
   ];
 
-  const resp = await openai.responses.create({
-    model: "gpt-4o-mini",
-    input: inputMessages,
-    instructions: `${prompt}\nMEDIOS DE PAGO:\n${paymentPrompt}`,
-  });
+  try {
+    const resp = await openai.responses.create({
+      model: "gpt-4o-mini",
+      input: inputMessages,
+      instructions: `${prompt}\nMEDIOS DE PAGO:\n${paymentPrompt}`,
+    });
 
-  const answer = (resp.output_text || "").trim();
-  session.data.aiCount = Number(session.data.aiCount || 0) + 1;
-  session.data.aiHistory = [
-    ...history,
-    { role: "user", content: String(text || "").trim(), at: new Date().toISOString() },
-    { role: "assistant", content: answer || "Sin respuesta.", at: new Date().toISOString() },
-  ].slice(-120);
-  await saveSession(session);
+    const answer = (resp.output_text || "").trim();
+    session.data.aiCount = Number(session.data.aiCount || 0) + 1;
+    session.data.aiHistory = [
+      ...history,
+      { role: "user", content: String(text || "").trim(), at: new Date().toISOString() },
+      { role: "assistant", content: answer || "Sin respuesta.", at: new Date().toISOString() },
+    ].slice(-180);
+    await saveSession(session);
 
-  return answer;
+    return answer || null;
+  } catch (e) {
+    console.error("aiReply failed:", e?.message || e);
+    return null;
+  }
 }
 
 // ================= UTILIDADES =================
@@ -561,7 +557,7 @@ function extractCheckoutFieldsFromText(textRaw) {
     if (!normalized) continue;
     if (normalizePaymentMethodInput(line)) continue;
     if (/\d{6,}/.test(normalized)) continue;
-    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "mañana"].includes(normalized)) continue;
+    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "maÃ±ana"].includes(normalized)) continue;
     name = line;
     break;
   }
@@ -574,10 +570,10 @@ function extractCheckoutFieldsFromText(textRaw) {
       .replace(/transferencia/gi, " ")
       .replace(/transfer/gi, " ")
       .replace(/debito/gi, " ")
-      .replace(/d[eé]bito/gi, " ")
+      .replace(/d[eÃ©]bito/gi, " ")
       .replace(/tarjeta/gi, " ")
       .replace(/credito/gi, " ")
-      .replace(/cr[eé]dito/gi, " ")
+      .replace(/cr[eÃ©]dito/gi, " ")
       .replace(/cash/gi, " ")
       .replace(/\s+/g, " ")
       .trim();
@@ -641,7 +637,7 @@ function looksLikeCatalogAddIntent(textRaw) {
     "sumar",
     "suma",
     "anadi",
-    "añadi",
+    "aÃ±adi",
     "aniadi",
     "adiciona",
     "quiero",
@@ -785,23 +781,23 @@ function catalogItemDetailsText(itemRaw) {
   ).trim();
 
   if (explicitDescription) {
-    return `${name} — $${price}\n${explicitDescription}`;
+    return `${name} â€” $${price}\n${explicitDescription}`;
   }
 
   const normalizedName = normalizeTextForMatch(name);
   if (normalizedName.includes("base")) {
-    return `${name} — $${price}\nIncluye flujo comercial base sin IA avanzada, ideal para empezar.`;
+    return `${name} â€” $${price}\nIncluye flujo comercial base sin IA avanzada, ideal para empezar.`;
   }
   if (normalizedName.includes("lite")) {
-    return `${name} — $${price}\nIncluye IA LITE con memoria/contexto moderado y asistencia comercial.`;
+    return `${name} â€” $${price}\nIncluye IA LITE con memoria/contexto moderado y asistencia comercial.`;
   }
   if (normalizedName.includes("pro")) {
-    return `${name} — $${price}\nIncluye IA PRO con mayor memoria/contexto y respuestas mas personalizadas.`;
+    return `${name} â€” $${price}\nIncluye IA PRO con mayor memoria/contexto y respuestas mas personalizadas.`;
   }
   if (normalizedName.includes("dashboard")) {
-    return `${name} — $${price}\nPanel con metricas operativas para seguimiento comercial y pedidos.`;
+    return `${name} â€” $${price}\nPanel con metricas operativas para seguimiento comercial y pedidos.`;
   }
-  return `${name} — $${price}\nSi queres, te detallo alcance y casos de uso para este producto.`;
+  return `${name} â€” $${price}\nSi queres, te detallo alcance y casos de uso para este producto.`;
 }
 
 function buildCatalogInfoReply(company, selectedIdsRaw) {
@@ -1701,7 +1697,7 @@ async function backfillOrdersWorkflowColumns() {
 
 await backfillOrdersWorkflowColumns();
 
-// ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÍ ==================
+// ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÃ ==================
 // ===== API: Companies =====
 app.get("/api/companies", requireApiAuth, async (req, res) => {
   try {
@@ -2732,30 +2728,6 @@ app.post("/whatsapp", async (req, res) => {
     }
   }
 
-  if (session.state === "MENU") {
-    const buyIntent = ["comprar", "compra", "adquirir", "quiero un bot", "quiero bot"].some((token) => text.includes(token));
-    if (buyIntent) {
-      return respondAndLog(
-        "Perfecto. Vamos por el flujo directo para evitar confusiones:\n" +
-        "1) Escribi: catalogo\n" +
-        "2) Elegi producto enviando el numero (ej: 3)\n" +
-        "3) Escribi: checkout"
-      );
-    }
-  }
-
-  if (
-    ["lite", "pro"].includes(String(session.data.aiMode || "").toLowerCase()) &&
-    session.state === "MENU" &&
-    !isReserved(text) &&
-    !session.cart.length &&
-    !hasActiveOrder &&
-    !looksLikeCheckoutOperationalMessage(body)
-  ) {
-    const ai = await aiReply(session, from, body);
-    if (ai) return respondAndLog(ai);
-  }
-
   if (text === "checkout") {
     if (!session.cart.length) return respondAndLog("Carrito vacio.");
     session.state = "ASK_NAME";
@@ -2968,6 +2940,11 @@ app.post("/whatsapp", async (req, res) => {
     );
   }
 
+  if (!isReserved(text) && body) {
+    const ai = await aiReply(session, from, body);
+    if (ai) return respondAndLog(ai);
+  }
+
   const company = await getCompanySafe(session);
   await saveSession(session);
   return respondAndLog(
@@ -2985,6 +2962,7 @@ function respond(res, text) {
 app.get("/", (_, res) => res.send("OK"));
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-app.listen(process.env.PORT || 3000, () => console.log("🚀 Bot corriendo"));
+app.listen(process.env.PORT || 3000, () => console.log("ðŸš€ Bot corriendo"));
+
 
 
