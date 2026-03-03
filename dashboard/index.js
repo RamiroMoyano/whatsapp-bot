@@ -257,10 +257,10 @@ async function saveCompanyRules(company, rules) {
 
 function layout({ title, active, body, notifications = 0 }) {
   const nav = `
-    <a class="btn ${active === "companies" ? "primary" : "secondary"}" href="/admin">Empresas</a>
-    <a class="btn ${active === "new-company" ? "primary" : "secondary"}" href="/admin/company/new">Nueva empresa</a>
-    <a class="btn ${active === "messages" ? "primary" : "secondary"}" href="/admin/messages">Mensajes</a>
-    <a class="btn ${active === "assign" ? "primary" : "secondary"}" href="/admin/assign">Asignar clientes</a>
+    <a class="btn ${active === "companies" ? "primary" : "secondary"}" href="/admin">🏢 Empresas</a>
+    <a class="btn ${active === "new-company" ? "primary" : "secondary"}" href="/admin/company/new">✨ Nueva empresa</a>
+    <a class="btn ${active === "messages" ? "primary" : "secondary"}" href="/admin/messages">📨 Mensajes</a>
+    <a class="btn ${active === "assign" ? "primary" : "secondary"}" href="/admin/assign">🔗 Asignar clientes</a>
   `;
 
   return `<!doctype html>
@@ -271,7 +271,7 @@ function layout({ title, active, body, notifications = 0 }) {
       <link rel="stylesheet" href="/dashboard.css" />
       <title>${escapeHtml(title)}</title>
     </head>
-    <body class="dark">
+    <body class="admin-light-ui">
       <div class="container">
         <header class="top">
           <div style="display:flex;flex-direction:column;gap:6px">
@@ -280,7 +280,7 @@ function layout({ title, active, body, notifications = 0 }) {
           </div>
           <div style="display:flex;gap:10px;align-items:center">
             ${renderNotificationBell({ href: "/admin/messages", count: notifications, className: "admin-notify-bell", title: "Mensajes y notificaciones" })}
-            <a class="btn secondary" href="/admin/logout">Logout</a>
+            <a class="btn secondary" href="/admin/logout">🚪 Logout</a>
           </div>
         </header>
         ${body}
@@ -723,29 +723,29 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <link rel="stylesheet" href="/dashboard.css" />
     <title>BabySteps - Admin</title>
   </head>
-  <body class="admin-home-page">
+  <body class="admin-home-page admin-light-ui">
     <div class="container">
 
       <div class="admin-header admin-home-header">
         <div class="brand">
           <div>
-            <div class="title">BabySteps</div>
+            <div class="title">🛰️ BabySteps</div>
             <div class="subtitle">Admin Console</div>
           </div>
         </div>
         <div class="admin-header-actions">
           ${renderNotificationBell({ href: "/admin/messages", count: unreadAdminNotifications, className: "admin-notify-bell", title: "Mensajes del buzon" })}
-          <a class="btn secondary" href="/admin/logout">Logout</a>
+          <a class="btn secondary" href="/admin/logout">🚪 Logout</a>
         </div>
       </div>
 
       <div class="admin-home-shell">
         <aside class="card admin-side-menu">
-          <h3 style="margin:0">Menu</h3>
-          <a class="btn primary" href="/admin/company/new">Agregar +</a>
-          <a class="btn secondary" href="/admin/messages">Mensajes</a>
-          <a class="btn secondary" href="#admin-company-list">Eliminar</a>
-          <a class="btn secondary" href="/admin/assign">Asignar clientes</a>
+          <h3 style="margin:0">🧭 Menu</h3>
+          <a class="btn primary" href="/admin/company/new">✨ Agregar +</a>
+          <a class="btn secondary" href="/admin/messages">📨 Mensajes</a>
+          <a class="btn secondary" href="#admin-company-list">🗑️ Eliminar</a>
+          <a class="btn secondary" href="/admin/assign">🔗 Asignar clientes</a>
         </aside>
 
         <section class="admin-home-main">
@@ -753,22 +753,22 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
 
           <div class="kpis">
             <a class="${kpiClass("all")}" href="${buildAdminHref("all")}">
-              <div class="label">Empresas</div>
+              <div class="label">🏢 Empresas</div>
               <div class="value">${rowsData.length}</div>
               <div class="hint">de ${companies.length} registradas</div>
             </a>
             <a class="${kpiClass("full")}" href="${buildAdminHref("full")}">
-              <div class="label">Dashboard completo</div>
+              <div class="label">🧠 Dashboard completo</div>
               <div class="value">${fullCount}</div>
               <div class="hint">acceso total</div>
             </a>
             <a class="${kpiClass("limited")}" href="${buildAdminHref("limited")}">
-              <div class="label">Dashboard limitado</div>
+              <div class="label">🔒 Dashboard limitado</div>
               <div class="value">${limitedCount}</div>
               <div class="hint">solo catalogo/suscripcion/cuenta</div>
             </a>
             <a class="${kpiClass("inactive")}" href="${buildAdminHref("inactive")}">
-              <div class="label">Dashboard inactivo</div>
+              <div class="label">⏸️ Dashboard inactivo</div>
               <div class="value">${disabledCount}</div>
               <div class="hint">sin acceso</div>
             </a>
@@ -804,7 +804,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     <link rel="stylesheet" href="/dashboard.css" />
     <title>Error</title>
   </head>
-  <body>
+  <body class="admin-light-ui">
     <div class="container">
       <div class="card">
         <h3 style="margin:0 0 10px;">Error cargando /admin</h3>
@@ -1040,21 +1040,21 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     <link rel="stylesheet" href="/dashboard.css" />
     <title>Editar ${c.id}</title>
   </head>
-  <body>
+  <body class="admin-light-ui admin-edit-page">
     <div class="container">
       <div class="app-header">
         <div class="brand">
           <img src="/img/logo.png" alt="BabySteps" onerror="this.style.display='none'"/>
           <div>
-            <div class="title">Editar empresa</div>
+            <div class="title">🛠️ Editar empresa</div>
             <div class="subtitle">${c.id}</div>
           </div>
         </div>
         <div class="nav admin-nav-actions">
           ${renderNotificationBell({ href: "/admin/messages", count: adminUnreadNotifications, className: "admin-notify-bell", title: "Mensajes del buzon" })}
-          <a class="btn secondary" href="/admin"><- Volver</a>
+          <a class="btn secondary" href="/admin">⬅️ Volver</a>
           <span class="admin-nav-divider" aria-hidden="true"></span>
-          <a class="btn secondary" href="/admin/logout">Logout</a>
+          <a class="btn secondary" href="/admin/logout">🚪 Logout</a>
         </div>
       </div>
 
