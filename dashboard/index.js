@@ -3790,7 +3790,13 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           <input type="hidden" name="state" value="${escapeHtml(order.workflow.state)}" />
           <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" class="cp-archive-hidden" />
           <label class="cp-archive-toggle">
-            <input type="checkbox" class="cp-archive-checkbox" ${order.workflow.archived ? "checked" : ""} />
+            <input
+              type="checkbox"
+              class="cp-archive-checkbox"
+              data-no-toggle="1"
+              ${order.workflow.archived ? "checked" : ""}
+              onchange="(function(el){var f=el.form;if(!f)return;var h=f.querySelector('.cp-archive-hidden');var lbl=f.querySelector('.cp-archive-toggle span');if(h)h.value=el.checked?'1':'0';if(lbl)lbl.textContent=el.checked?'Si':'No';if(typeof f.requestSubmit==='function'){f.requestSubmit();}else{f.submit();}})(this)"
+            />
             <span>${order.workflow.archived ? "Si" : "No"}</span>
           </label>
         </form>
@@ -4085,18 +4091,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           orderRows.forEach((row) => bindOrderRow(row));
         }
 
-        const archiveForms = Array.from(document.querySelectorAll(".cp-archive-form"));
-        archiveForms.forEach((form) => {
-          const checkbox = form.querySelector(".cp-archive-checkbox");
-          const hidden = form.querySelector(".cp-archive-hidden");
-          const label = form.querySelector(".cp-archive-toggle span");
-          if (!checkbox || !hidden || !label) return;
-          checkbox.addEventListener("change", () => {
-            hidden.value = checkbox.checked ? "1" : "0";
-            label.textContent = checkbox.checked ? "Si" : "No";
-            form.submit();
-          });
-        });
       })();
     </script>
   `;
