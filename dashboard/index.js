@@ -2160,6 +2160,110 @@ function normalizeCatalogHeader(value) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+function cleanCatalogText(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function isCatalogTextDefined(value) {
+  const raw = cleanCatalogText(value).toLowerCase();
+  return !!raw && !["-", "n/a", "na", "null", "undefined", "sin dato", "s/d"].includes(raw);
+}
+
+function splitCatalogTags(value) {
+  if (Array.isArray(value)) {
+    const unique = [];
+    const seen = new Set();
+    for (const rawTag of value) {
+      const tag = cleanCatalogText(rawTag);
+      if (!isCatalogTextDefined(tag)) continue;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(tag);
+    }
+    return unique;
+  }
+
+  const text = cleanCatalogText(value);
+  if (!isCatalogTextDefined(text)) return [];
+  const unique = [];
+  const seen = new Set();
+  for (const part of text.split(/[|,;]+/g)) {
+    const tag = cleanCatalogText(part);
+    if (!isCatalogTextDefined(tag)) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(tag);
+  }
+  return unique;
+}
+
+function buildCatalogCategoryPath(partsRaw = []) {
+  const parts = [];
+  const seen = new Set();
+  for (const rawPart of partsRaw) {
+    const part = cleanCatalogText(rawPart);
+    if (!isCatalogTextDefined(part)) continue;
+    const key = part.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(part);
+  }
+  return parts.length ? parts.join(" > ") : "-";
+}
+
+function normalizeCatalogItemRecord(itemRaw, idx = 0, previousRaw = null) {
+  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
+  const previous = previousRaw && typeof previousRaw === "object" ? previousRaw : {};
+
+  const rubro = cleanCatalogText(item.rubro ?? item.segment ?? previous.rubro ?? "");
+  const seccion = cleanCatalogText(item.seccion ?? item.section ?? previous.seccion ?? "");
+  const subseccion = cleanCatalogText(item.subseccion ?? item.subsection ?? previous.subseccion ?? "");
+  const categoryDirect = cleanCatalogText(item.category ?? item.type ?? previous.category ?? previous.type ?? "");
+  const category = isCatalogTextDefined(categoryDirect)
+    ? categoryDirect
+    : buildCatalogCategoryPath([rubro, seccion, subseccion]);
+
+  const idRaw = cleanCatalogText(item.id ?? previous.id ?? "");
+  const nameRaw = cleanCatalogText(item.name ?? item.title ?? previous.name ?? previous.title ?? "");
+  const stockRaw = cleanCatalogText(item.stock ?? item.qty ?? previous.stock ?? previous.qty ?? "-");
+  const skuRaw = cleanCatalogText(item.sku ?? item.codigo ?? previous.sku ?? previous.codigo ?? "");
+  const colorRaw = cleanCatalogText(item.color ?? previous.color ?? "");
+  const talleRaw = cleanCatalogText(item.talle ?? item.size ?? previous.talle ?? previous.size ?? "");
+  const descriptionRaw = cleanCatalogText(
+    item.description ??
+    item.descripcion ??
+    item.details ??
+    item.detail ??
+    item.summary ??
+    previous.description ??
+    previous.descripcion ??
+    previous.details ??
+    ""
+  );
+
+  const tags = splitCatalogTags(item.tags ?? item.tag ?? previous.tags ?? previous.tag ?? "");
+  const normalized = {
+    id: idRaw || String(idx + 1),
+    name: nameRaw || `Producto ${idx + 1}`,
+    price: toNumber(item.price ?? item.amount ?? previous.price ?? previous.amount ?? 0),
+    stock: isCatalogTextDefined(stockRaw) ? stockRaw : "-",
+    category,
+  };
+
+  if (isCatalogTextDefined(rubro)) normalized.rubro = rubro;
+  if (isCatalogTextDefined(seccion)) normalized.seccion = seccion;
+  if (isCatalogTextDefined(subseccion)) normalized.subseccion = subseccion;
+  if (isCatalogTextDefined(skuRaw)) normalized.sku = skuRaw;
+  if (isCatalogTextDefined(colorRaw)) normalized.color = colorRaw;
+  if (isCatalogTextDefined(talleRaw)) normalized.talle = talleRaw;
+  if (isCatalogTextDefined(descriptionRaw)) normalized.description = descriptionRaw;
+  if (tags.length) normalized.tags = tags;
+
+  return normalized;
+}
+
 function parseCatalogPrice(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return 0;
@@ -2193,10 +2297,18 @@ function getCatalogFieldByHeader(row, aliases) {
 function extractCatalogItemsFromSheet(sheet) {
   const aliases = {
     id: ["id", "codigo", "codigoproducto", "sku", "code"],
-    name: ["producto", "nombre", "name", "item", "descripcion"],
+    name: ["producto", "nombre", "name", "item", "producto_variante"],
     price: ["precio", "price", "monto", "valor", "importe"],
     stock: ["stock", "cantidad", "existencia", "qty"],
     category: ["categoria", "category", "rubro", "tipo"],
+    rubro: ["rubro", "segmento", "linea", "familia"],
+    seccion: ["seccion", "seccion1", "seccion2", "categoria2"],
+    subseccion: ["subseccion", "subcategoria", "subrubro", "sublinea"],
+    talle: ["talle", "size", "tamano", "tamaño"],
+    color: ["color", "variantcolor", "colores"],
+    sku: ["sku", "codigointerno", "codigo_sku", "codigoitem"],
+    description: ["descripcion", "detalle", "description", "resumen"],
+    tags: ["tags", "etiquetas", "keywords", "palabrasclave"],
   };
 
   const rowsAsObjects = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
@@ -2209,7 +2321,18 @@ function extractCatalogItemsFromSheet(sheet) {
     const priceRaw = getCatalogFieldByHeader(row, aliases.price);
     const stockRaw = String(getCatalogFieldByHeader(row, aliases.stock) || "").trim();
     const categoryRaw = String(getCatalogFieldByHeader(row, aliases.category) || "").trim();
-    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryRaw;
+    const rubroRaw = String(getCatalogFieldByHeader(row, aliases.rubro) || "").trim();
+    const seccionRaw = String(getCatalogFieldByHeader(row, aliases.seccion) || "").trim();
+    const subseccionRaw = String(getCatalogFieldByHeader(row, aliases.subseccion) || "").trim();
+    const talleRaw = String(getCatalogFieldByHeader(row, aliases.talle) || "").trim();
+    const colorRaw = String(getCatalogFieldByHeader(row, aliases.color) || "").trim();
+    const skuRaw = String(getCatalogFieldByHeader(row, aliases.sku) || "").trim();
+    const descriptionRaw = String(getCatalogFieldByHeader(row, aliases.description) || "").trim();
+    const tagsRaw = getCatalogFieldByHeader(row, aliases.tags);
+    const categoryComputed = isCatalogTextDefined(categoryRaw)
+      ? categoryRaw
+      : buildCatalogCategoryPath([rubroRaw, seccionRaw, subseccionRaw]);
+    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryComputed !== "-" || skuRaw || descriptionRaw || talleRaw || colorRaw;
     if (!hasData) continue;
 
     const price = parseCatalogPrice(priceRaw);
@@ -2217,13 +2340,21 @@ function extractCatalogItemsFromSheet(sheet) {
       throw new Error(`Precio invalido en fila ${idx + 2}`);
     }
 
-    items.push({
+    items.push(normalizeCatalogItemRecord({
       id: idRaw,
       name: nameRaw,
       price,
       stock: stockRaw || "-",
-      category: categoryRaw || "-",
-    });
+      category: categoryComputed,
+      rubro: rubroRaw,
+      seccion: seccionRaw,
+      subseccion: subseccionRaw,
+      talle: talleRaw,
+      color: colorRaw,
+      sku: skuRaw,
+      description: descriptionRaw,
+      tags: tagsRaw,
+    }, idx));
   }
 
   if (items.length) return items;
@@ -2244,7 +2375,18 @@ function extractCatalogItemsFromSheet(sheet) {
     const priceRaw = row[2];
     const stockRaw = String(row[3] || "").trim();
     const categoryRaw = String(row[4] || "").trim();
-    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryRaw;
+    const rubroRaw = String(row[5] || "").trim();
+    const seccionRaw = String(row[6] || "").trim();
+    const subseccionRaw = String(row[7] || "").trim();
+    const talleRaw = String(row[8] || "").trim();
+    const colorRaw = String(row[9] || "").trim();
+    const skuRaw = String(row[10] || "").trim();
+    const descriptionRaw = String(row[11] || "").trim();
+    const tagsRaw = row[12];
+    const categoryComputed = isCatalogTextDefined(categoryRaw)
+      ? categoryRaw
+      : buildCatalogCategoryPath([rubroRaw, seccionRaw, subseccionRaw]);
+    const hasData = idRaw || nameRaw || String(priceRaw || "").trim() || stockRaw || categoryComputed !== "-" || talleRaw || colorRaw || skuRaw || descriptionRaw;
     if (!hasData) continue;
 
     const price = parseCatalogPrice(priceRaw);
@@ -2252,13 +2394,21 @@ function extractCatalogItemsFromSheet(sheet) {
       throw new Error(`Precio invalido en fila ${idx + 1 + (looksLikeHeader ? 2 : 1)}`);
     }
 
-    fallbackItems.push({
+    fallbackItems.push(normalizeCatalogItemRecord({
       id: idRaw,
       name: nameRaw,
       price,
       stock: stockRaw || "-",
-      category: categoryRaw || "-",
-    });
+      category: categoryComputed,
+      rubro: rubroRaw,
+      seccion: seccionRaw,
+      subseccion: subseccionRaw,
+      talle: talleRaw,
+      color: colorRaw,
+      sku: skuRaw,
+      description: descriptionRaw,
+      tags: tagsRaw,
+    }, idx));
   }
   return fallbackItems;
 }
@@ -2391,13 +2541,7 @@ function findCatalogItemForTierAndChannel(catalog, tier, channelMode) {
 function extractCatalogEntriesForCompany(company) {
   const catalogRaw = parseJsonSafe(company?.catalogJson || "[]", []);
   const catalogBase = Array.isArray(catalogRaw) ? catalogRaw : [];
-  return catalogBase.map((item, idx) => ({
-    id: String(item?.id ?? `P-${idx + 1}`),
-    name: String(item?.name || item?.title || "Sin nombre"),
-    price: toNumber(item?.price ?? item?.amount ?? 0),
-    stock: item?.stock ?? item?.qty ?? "-",
-    category: String(item?.category || item?.type || "-"),
-  }));
+  return catalogBase.map((item, idx) => normalizeCatalogItemRecord(item, idx));
 }
 
 function extractCatalogBotOptions(company) {
@@ -3074,6 +3218,32 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
       <td>${escapeHtml(item.category)}</td>
     </tr>
   `).join("");
+  const groupedCatalogMap = state.catalog.reduce((acc, item) => {
+    const category = cleanCatalogText(item?.category || "-") || "-";
+    if (!acc[category]) acc[category] = [];
+    acc[category].push(item);
+    return acc;
+  }, {});
+  const groupedRows = Object.entries(groupedCatalogMap)
+    .sort(([a], [b]) => a.localeCompare(b, "es", { sensitivity: "base" }))
+    .map(([category, items]) => {
+      const itemRows = items.map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.name)}</td>
+          <td>${formatMoney(item.price, state.subscription.currency)}</td>
+          <td>${escapeHtml(item.stock)}</td>
+          <td>${escapeHtml(item.category)}</td>
+        </tr>
+      `).join("");
+      return `
+        <tr class="cp-table-group-row">
+          <td colspan="5"><b>${escapeHtml(category)}</b> <span class="cp-details-hint">(${items.length})</span></td>
+        </tr>
+        ${itemRows}
+      `;
+    })
+    .join("");
   const editorRows = state.catalog.map((item) => `
     <tr class="cp-edit-row">
       <td><input type="text" data-field="id" value="${escapeHtml(item.id)}" placeholder="ID" /></td>
@@ -3090,6 +3260,14 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
     price: toNumber(item.price),
     stock: String(item.stock ?? "-"),
     category: String(item.category ?? "-"),
+    ...(item.sku ? { sku: String(item.sku) } : {}),
+    ...(item.description ? { description: String(item.description) } : {}),
+    ...(item.rubro ? { rubro: String(item.rubro) } : {}),
+    ...(item.seccion ? { seccion: String(item.seccion) } : {}),
+    ...(item.subseccion ? { subseccion: String(item.subseccion) } : {}),
+    ...(item.talle ? { talle: String(item.talle) } : {}),
+    ...(item.color ? { color: String(item.color) } : {}),
+    ...(Array.isArray(item.tags) && item.tags.length ? { tags: item.tags } : {}),
   })));
 
   const bodyHtml = `
@@ -3112,7 +3290,7 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
         <div class="cp-card-toggle-body">
           <table class="cp-table">
             <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
-            <tbody>${rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
+            <tbody>${groupedRows || rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
           </table>
         </div>
       </details>
@@ -3124,7 +3302,7 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
         </summary>
         <div class="cp-card-toggle-body">
           <form id="catalogImportForm" method="POST" action="/panel/catalogo/import" class="cp-form">
-            <p class="cp-note">Sube un archivo .xlsx, .xls o .csv. Se detectan columnas por encabezado (ID, producto, precio, stock, categoria).</p>
+            <p class="cp-note">Sube .xlsx/.xls/.csv. Encabezados soportados: ID, producto, precio, stock, categoria, rubro, seccion, subseccion, talle, color, sku, descripcion, tags.</p>
             <label>Archivo Excel</label>
             <input id="catalogExcelFile" type="file" accept=".xlsx,.xls,.csv" required />
             <input id="catalogExcelBase64" type="hidden" name="excelBase64" value="" />
@@ -3360,13 +3538,28 @@ app.post("/panel/catalogo/save", requireClientAuth, requireClientSectionAccess("
   try {
     const parsed = JSON.parse(catalogJson);
     if (!Array.isArray(parsed)) throw new Error("catalogJson debe ser un array");
+    const existingCatalogRaw = parseJsonSafe(company.catalogJson || "[]", []);
+    const existingCatalog = Array.isArray(existingCatalogRaw)
+      ? existingCatalogRaw.map((item, idx) => normalizeCatalogItemRecord(item, idx))
+      : [];
+    const existingById = new Map(
+      existingCatalog
+        .map((item) => [cleanCatalogText(item?.id || ""), item])
+        .filter(([key]) => !!key)
+    );
+
+    const normalized = parsed.map((item, idx) => {
+      const key = cleanCatalogText(item?.id || "");
+      const previous = key ? existingById.get(key) : null;
+      return normalizeCatalogItemRecord(item, idx, previous);
+    });
 
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
       method: "POST",
       body: {
         name: company.name || id,
         prompt: company.prompt || "",
-        catalogJson,
+        catalogJson: JSON.stringify(normalized),
         rulesJson: company.rulesJson || "{}",
       },
     });
@@ -3399,34 +3592,18 @@ app.post("/panel/catalogo/import", requireClientAuth, requireClientSectionAccess
       throw new Error("No se detectaron filas validas para importar");
     }
 
-    const importedItems = importedItemsRaw.map((item, idx) => ({
-      id: String(item.id || idx + 1).trim() || String(idx + 1),
-      name: String(item.name || "").trim() || `Producto ${idx + 1}`,
-      price: toNumber(item.price),
-      stock: String(item.stock || "-").trim() || "-",
-      category: String(item.category || "-").trim() || "-",
-    }));
+    const importedItems = importedItemsRaw.map((item, idx) => normalizeCatalogItemRecord(item, idx));
 
     const existingCatalog = parseJsonSafe(company.catalogJson || "[]", []);
-    const existingItems = (Array.isArray(existingCatalog) ? existingCatalog : []).map((item, idx) => ({
-      id: String(item?.id || idx + 1).trim() || String(idx + 1),
-      name: String(item?.name || "").trim() || `Producto ${idx + 1}`,
-      price: toNumber(item?.price),
-      stock: String(item?.stock || "-").trim() || "-",
-      category: String(item?.category || "-").trim() || "-",
-    }));
+    const existingItems = (Array.isArray(existingCatalog) ? existingCatalog : []).map((item, idx) =>
+      normalizeCatalogItemRecord(item, idx)
+    );
 
     const merged = importMode === "append"
       ? [...existingItems, ...importedItems]
       : importedItems;
 
-    const normalized = merged.map((item, idx) => ({
-      id: item.id || String(idx + 1),
-      name: item.name || `Producto ${idx + 1}`,
-      price: toNumber(item.price),
-      stock: item.stock || "-",
-      category: item.category || "-",
-    }));
+    const normalized = merged.map((item, idx) => normalizeCatalogItemRecord(item, idx));
 
     await api(`/api/companies/${encodeURIComponent(id)}/save`, {
       method: "POST",

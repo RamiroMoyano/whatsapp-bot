@@ -1296,6 +1296,14 @@ body.client-ui {
   background: #f9fbff;
 }
 
+.cp-table .cp-table-group-row td {
+  background: #eef4ff;
+  color: #36588d;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .cp-table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -2133,6 +2141,11 @@ body.client-ui::after {
 
 .cp-table tr:hover td {
   background: rgba(18, 53, 113, 0.55);
+}
+
+.cp-table .cp-table-group-row td {
+  background: rgba(20, 60, 128, 0.65);
+  color: #b7d7ff;
 }
 
 .cp-empty {

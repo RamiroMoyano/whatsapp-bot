@@ -156,8 +156,12 @@ const menuText = (c) => `ðŸ‘‹ Hola! Soy el asistente de ${c.name}
 â€¢ humano`;
 
 const catalogText = (c) =>
-  `ðŸ›’ ${c.name}\n` +
-  (c.catalog || []).map((p) => `${p.id}) ${p.name} â€” $${p.price}`).join("\n");
+  `Catalogo ${c.name}\n` +
+  (c.catalog || []).map((p) => {
+    const category = buildCatalogCategoryPathFromItem(p);
+    const suffix = category !== "-" ? ` [${category}]` : "";
+    return `${p.id}) ${p.name} - $${p.price}${suffix}`;
+  }).join("\n");
 
 const cartText = async (s) => {
   const c = await getCompanySafe(s);
@@ -590,6 +594,59 @@ function normalizeCatalogMatchText(value) {
     .trim();
 }
 
+function isMeaningfulCatalogValue(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return !!raw && !["-", "n/a", "na", "null", "undefined", "sin dato", "s/d"].includes(raw);
+}
+
+function buildCatalogCategoryPathFromItem(itemRaw) {
+  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
+  const categoryRaw = String(item.category ?? item.type ?? "").trim();
+  if (isMeaningfulCatalogValue(categoryRaw)) return categoryRaw;
+
+  const parts = [item.rubro, item.seccion, item.subseccion]
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => isMeaningfulCatalogValue(value));
+  if (!parts.length) return "-";
+
+  const unique = [];
+  const seen = new Set();
+  for (const part of parts) {
+    const key = part.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(part);
+  }
+  return unique.length ? unique.join(" > ") : "-";
+}
+
+function getCatalogGroupKeyset(itemRaw) {
+  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
+  const sources = [
+    buildCatalogCategoryPathFromItem(item),
+    item.rubro,
+    item.seccion,
+    item.subseccion,
+    item.category,
+    item.type,
+    item.tags,
+  ];
+
+  const keywords = new Set();
+  for (const source of sources) {
+    const values = Array.isArray(source) ? source : [source];
+    for (const value of values) {
+      const normalized = normalizeCatalogMatchText(value);
+      if (!normalized) continue;
+      keywords.add(normalized);
+      for (const token of normalized.split(" ")) {
+        if (token.length >= 3) keywords.add(token);
+      }
+    }
+  }
+  return keywords;
+}
+
 function isPureCatalogSelectionText(textRaw) {
   const raw = normalizeCatalogMatchText(textRaw);
   if (!raw) return false;
@@ -744,9 +801,120 @@ function extractCatalogSelectionsFromText(textRaw, catalogRaw) {
     if (allTokensPresent) addId(id, 1, false);
   }
 
+  const groupStopWords = new Set([
+    "catalogo",
+    "producto",
+    "productos",
+    "opcion",
+    "opciones",
+    "quiero",
+    "agregar",
+    "agregame",
+    "sumame",
+    "sumar",
+    "suma",
+    "compra",
+    "comprar",
+    "pedido",
+    "pedidos",
+    "carrito",
+    "checkout",
+    "info",
+    "informacion",
+    "detalle",
+    "detalles",
+    "contame",
+    "cuentame",
+    "mas",
+    "sobre",
+    "del",
+    "de",
+    "la",
+    "el",
+    "los",
+    "las",
+    "para",
+    "con",
+    "sin",
+    "mostrame",
+    "mostrar",
+    "ver",
+    "tengo",
+    "que",
+    "me",
+    "interesa",
+  ]);
+
+  const queryTokens = normalizedText
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !/^\d+$/.test(token) && !groupStopWords.has(token));
+
+  const groupMatchesRaw = [];
+  if (queryTokens.length) {
+    for (const [id, item] of idToProduct.entries()) {
+      const keyset = getCatalogGroupKeyset(item);
+      if (!keyset.size) continue;
+
+      const keyList = [...keyset];
+      let hits = 0;
+      for (const token of queryTokens) {
+        const matched = keyList.some((key) => {
+          if (key === token) return true;
+          if (key.length >= 4 && key.includes(token)) return true;
+          if (token.length >= 5 && token.includes(key)) return true;
+          return false;
+        });
+        if (matched) hits += 1;
+      }
+
+      if (hits > 0) {
+        groupMatchesRaw.push({
+          id,
+          hits,
+          category: buildCatalogCategoryPathFromItem(item),
+        });
+      }
+    }
+  }
+
+  let groupMatchedIds = [];
+  let groupLabels = [];
+  if (groupMatchesRaw.length) {
+    groupMatchesRaw.sort((a, b) => b.hits - a.hits || a.id - b.id);
+    const minHits = queryTokens.length > 1 ? 2 : 1;
+    const filtered = groupMatchesRaw.filter((row) => row.hits >= minHits);
+    const scoped = filtered.length ? filtered : groupMatchesRaw;
+
+    const uniqueIds = [];
+    const seenIds = new Set();
+    for (const row of scoped) {
+      if (selectedOnce.has(row.id)) continue;
+      if (seenIds.has(row.id)) continue;
+      seenIds.add(row.id);
+      uniqueIds.push(row.id);
+    }
+    groupMatchedIds = uniqueIds;
+
+    const labels = [];
+    const seenLabels = new Set();
+    for (const row of scoped) {
+      const label = String(row.category || "-").trim();
+      if (!isMeaningfulCatalogValue(label)) continue;
+      const key = label.toLowerCase();
+      if (seenLabels.has(key)) continue;
+      seenLabels.add(key);
+      labels.push(label);
+      if (labels.length >= 3) break;
+    }
+    groupLabels = labels;
+  }
+
   return {
     selectedIds,
     invalidIds,
+    groupMatchedIds,
+    groupLabels,
     hasSelectionIntent: looksLikeCatalogSelectionIntent(textRaw),
     isInfoIntent,
     isAddIntent,
@@ -825,6 +993,38 @@ function buildCatalogInfoReply(company, selectedIdsRaw) {
   lines.push("Si queres agregar al carrito, escribi: agregar <id> (ej: agregar 2).");
   lines.push("Tambien podes agregar varios: 2 y 4.");
   return lines.join("\n").trim();
+}
+
+function buildCatalogFilteredReply(company, selectedIdsRaw, labelsRaw = []) {
+  const selectedIds = Array.isArray(selectedIdsRaw) ? selectedIdsRaw : [];
+  const labels = Array.isArray(labelsRaw) ? labelsRaw.filter(Boolean) : [];
+  const catalog = Array.isArray(company?.catalog) ? company.catalog : [];
+  const uniqueIds = [...new Set(selectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
+  const selectedItems = uniqueIds
+    .map((id) => catalog.find((item) => Number(item?.id) === id))
+    .filter(Boolean);
+
+  if (!selectedItems.length) {
+    return "No encontre productos para ese rubro/seccion. Escribi catalogo para ver opciones.";
+  }
+
+  const lines = [];
+  const context = labels.length ? ` en ${labels.join(" / ")}` : "";
+  lines.push(`Encontre ${selectedItems.length} producto(s)${context}:`);
+  lines.push("");
+  for (const item of selectedItems.slice(0, 40)) {
+    const category = buildCatalogCategoryPathFromItem(item);
+    const suffix = category !== "-" ? ` [${category}]` : "";
+    lines.push(`${item.id}) ${item.name} - $${Number(item.price || 0)}${suffix}`);
+  }
+  if (selectedItems.length > 40) {
+    lines.push("");
+    lines.push(`Mostrando 40 de ${selectedItems.length}. Pedi un filtro mas especifico para acotar.`);
+  }
+  lines.push("");
+  lines.push("Para agregar al carrito: agregar <id>  (ej: agregar 2)");
+  lines.push("Para ver detalle: info <id>");
+  return lines.join("\n");
 }
 
 function contextualCheckoutFallback(session, company, options = {}) {
@@ -2641,6 +2841,15 @@ app.post("/whatsapp", async (req, res) => {
     const detected = extractCatalogSelectionsFromText(body, company.catalog || []);
     const quickCheckoutData = extractCheckoutFieldsFromText(body);
     const looksLikeCheckoutData = !!(quickCheckoutData.contact || quickCheckoutData.paymentMethod);
+
+    if (!detected.selectedIds.length && detected.groupMatchedIds.length >= 2) {
+      return respondAndLog(
+        buildCatalogFilteredReply(company, detected.groupMatchedIds, detected.groupLabels)
+      );
+    }
+    if (!detected.selectedIds.length && detected.groupMatchedIds.length === 1 && detected.isInfoIntent) {
+      return respondAndLog(buildCatalogInfoReply(company, detected.groupMatchedIds));
+    }
 
     if (detected.isInfoIntent) {
       return respondAndLog(buildCatalogInfoReply(company, detected.selectedIds));
