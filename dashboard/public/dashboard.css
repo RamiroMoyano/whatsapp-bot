@@ -1408,6 +1408,25 @@ body.client-ui {
   margin: 0;
 }
 
+.cp-archive-toggle-btn {
+  border: 1px solid rgba(121, 167, 240, 0.45);
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.cp-archive-box {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
 .cp-order-row {
   cursor: pointer;
   outline: none;

@@ -3788,17 +3788,17 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="state" value="${escapeHtml(order.workflow.state)}" />
-          <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" class="cp-archive-hidden" />
-          <label class="cp-archive-toggle">
-            <input
-              type="checkbox"
-              class="cp-archive-checkbox"
-              data-no-toggle="1"
-              ${order.workflow.archived ? "checked" : ""}
-              onchange="(function(el){var f=el.form;if(!f)return;var h=f.querySelector('.cp-archive-hidden');var lbl=f.querySelector('.cp-archive-toggle span');if(h)h.value=el.checked?'1':'0';if(lbl)lbl.textContent=el.checked?'Si':'No';if(typeof f.requestSubmit==='function'){f.requestSubmit();}else{f.submit();}})(this)"
-            />
+          <button
+            type="submit"
+            name="archived"
+            value="${order.workflow.archived ? "0" : "1"}"
+            class="cp-archive-toggle cp-archive-toggle-btn"
+            data-no-toggle="1"
+            title="${order.workflow.archived ? "Desarchivar pedido" : "Archivar pedido"}"
+          >
+            <span class="cp-archive-box">${order.workflow.archived ? "✓" : ""}</span>
             <span>${order.workflow.archived ? "Si" : "No"}</span>
-          </label>
+          </button>
         </form>
       </td>
     </tr>
