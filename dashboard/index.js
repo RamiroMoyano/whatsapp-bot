@@ -2425,17 +2425,26 @@ function buildSupportMessageSubject(item) {
   return item?.sender === "admin" ? "Respuesta del admin" : "Consulta de soporte";
 }
 
+const SUPPORTED_CURRENCIES = ["ARS", "USD", "EUR", "GBP", "BRL"];
+
+function normalizeSupportedCurrency(value, fallback = "USD") {
+  const raw = String(value || "").trim().toUpperCase();
+  if (SUPPORTED_CURRENCIES.includes(raw)) return raw;
+  return fallback;
+}
+
 function formatMoney(value, currency = "USD") {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "-";
+  const safeCurrency = normalizeSupportedCurrency(currency, "USD");
   try {
     return new Intl.NumberFormat("es-AR", {
       style: "currency",
-      currency,
+      currency: safeCurrency,
       maximumFractionDigits: 0,
     }).format(amount);
   } catch {
-    return `$${Math.round(amount)}`;
+    return `${safeCurrency} ${Math.round(amount)}`;
   }
 }
 
@@ -2869,7 +2878,12 @@ function extractClientState(company, options = {}) {
     nextAmount: computedNextAmount,
     prorationDueNow: toNumber(rules.subscriptionProrationDueNow ?? 0),
     prorationAt: rules.subscriptionProrationAt || "",
-    currency: String(company?.subscriptionCurrency || rules.subscriptionCurrency || "USD"),
+    currency: normalizeSupportedCurrency(
+      rules.catalogCurrency ||
+      company?.subscriptionCurrency ||
+      rules.subscriptionCurrency ||
+      "USD"
+    ),
     autoRenew: rules.autoRenew ?? company?.autoRenew ?? true,
     activeBotName: activeCatalogItem?.name || plan.botClass,
     pricingSourceCompanyId: String(options?.pricingSourceCompanyId || rules?.botCatalogProviderId || company?.id || ""),
@@ -3207,6 +3221,10 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
 app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
+  const rules = parseJsonSafe(company.rulesJson || "{}", {});
+  const selectedCatalogCurrency = normalizeSupportedCurrency(
+    rules?.catalogCurrency || rules?.subscriptionCurrency || state.subscription.currency || "USD"
+  );
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const rows = state.catalog.map((item) => `
@@ -3269,6 +3287,9 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
     ...(item.color ? { color: String(item.color) } : {}),
     ...(Array.isArray(item.tags) && item.tags.length ? { tags: item.tags } : {}),
   })));
+  const currencyOptions = SUPPORTED_CURRENCIES.map((code) => (
+    `<option value="${code}" ${selectedCatalogCurrency === code ? "selected" : ""}>${code}</option>`
+  )).join("");
 
   const bodyHtml = `
     ${saved ? `<div class="cp-alert success">Catalogo actualizado correctamente.</div>` : ""}
@@ -3282,6 +3303,18 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
     </section>
 
     <section class="cp-grid">
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>Moneda de cobro del catalogo</h3><span>${escapeHtml(selectedCatalogCurrency)}</span></div>
+        <form method="POST" action="/panel/catalogo/currency" class="cp-form">
+          <label>Moneda</label>
+          <select name="currency">${currencyOptions}</select>
+          <p class="cp-note">Esta moneda se aplica al panel y al bot cuando muestra precios.</p>
+          <div class="cp-actions">
+            <button class="cp-btn primary" type="submit">Guardar moneda</button>
+          </div>
+        </form>
+      </article>
+
       <details class="cp-card cp-span-3 cp-card-toggle" id="catalogo-completo">
         <summary>
           <span>Catalogo completo</span>
@@ -3567,6 +3600,33 @@ app.post("/panel/catalogo/save", requireClientAuth, requireClientSectionAccess("
     res.redirect("/panel/catalogo?saved=1");
   } catch (e) {
     res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/panel/catalogo/currency", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
+  const company = req.company;
+  const id = company.id;
+  const selectedCurrency = normalizeSupportedCurrency(String(req.body.currency || "").trim(), "USD");
+
+  try {
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    rules.catalogCurrency = selectedCurrency;
+    // Keep subscription currency aligned for panel totals/montos.
+    rules.subscriptionCurrency = selectedCurrency;
+
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      },
+    });
+
+    return res.redirect("/panel/catalogo?saved=1");
+  } catch (e) {
+    return res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
   }
 });
 
