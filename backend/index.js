@@ -3130,6 +3130,39 @@ app.post("/whatsapp", async (req, res) => {
         "Si no queres agregar nada, dejalo vacio o responde: ok"
       );
     }
+
+    if (hasUsefulData) {
+      const missing = [];
+      if (!mergedName) missing.push("nombre");
+      if (!mergedContact) missing.push("contacto");
+      if (!mergedPaymentMethod) missing.push("medio de pago");
+
+      if (!mergedName) {
+        session.state = "ASK_NAME";
+      } else if (!mergedContact) {
+        session.state = "ASK_CONTACT";
+      } else if (!mergedPaymentMethod) {
+        session.state = "ASK_PAYMENT_METHOD";
+      }
+      await saveSession(session);
+      return respondAndLog(
+        `Recibi parte de los datos para registrar el pedido. Falta: ${missing.join(", ")}.\n` +
+        "Podes enviarlo en un solo mensaje (ej: Pedro 3812345678 transferencia)."
+      );
+    }
+  }
+
+  if (
+    session.state === "MENU" &&
+    !hasActiveOrder &&
+    !session.cart.length &&
+    !hasMedia &&
+    normalizePaymentMethodInput(body)
+  ) {
+    return respondAndLog(
+      "Todavia no tengo un pedido activo para asociar ese pago.\n" +
+      "Primero elegi productos (catalogo) y despues seguimos con checkout."
+    );
   }
 
   if (text === "checkout") {
@@ -3344,7 +3377,7 @@ app.post("/whatsapp", async (req, res) => {
     );
   }
 
-  if (!isReserved(text) && body) {
+  if (!isReserved(text) && body && !looksLikeCheckoutOperationalMessage(body)) {
     const ai = await aiReply(session, from, body);
     if (ai) return respondAndLog(ai);
   }
