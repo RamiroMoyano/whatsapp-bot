@@ -3052,7 +3052,7 @@ app.post("/whatsapp", async (req, res) => {
 
     const canAutoAddFromNaturalText =
       detected.selectedIds.length > 0 &&
-      (detected.isAddIntent || detected.isPureSelection || detected.weightedMatched) &&
+      !detected.isInfoIntent &&
       !looksLikeCheckoutData;
 
     if (canAutoAddFromNaturalText) {
@@ -3061,7 +3061,7 @@ app.post("/whatsapp", async (req, res) => {
       const added = summarizeCatalogSelection(detected.selectedIds, company.catalog || []);
       const addedText = added.length ? `Agregados: ${added.join(", ")}` : "Productos agregados al carrito.";
       return respondAndLog(
-        `${addedText}\n\n${await cartText(session)}\n\nPara continuar: checkout`,
+        `${addedText}\n\n${await cartText(session)}\n\n¿Querés agregar algo más? Podes escribir otro producto o su ID.\nPara continuar: checkout`,
       );
     }
     if (detected.isAddIntent && detected.invalidIds.length > 0) {
