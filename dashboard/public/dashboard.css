@@ -939,6 +939,36 @@ body.client-ui {
   color: #6b7ea8;
 }
 
+.cp-account-gear {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid #d5e4ff;
+  background: #f5f8ff;
+  color: #375a99;
+  text-decoration: none;
+  font-size: 18px;
+  line-height: 1;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.cp-account-gear:hover {
+  border-color: #b9d1ff;
+  background: #ecf3ff;
+  color: #1f4bb8;
+  transform: translateY(-1px);
+}
+
+.cp-account-gear.active {
+  border-color: #bfd4ff;
+  background: linear-gradient(135deg, #e9f1ff, #f8fbff);
+  color: #0f4cc9;
+}
+
 .cp-nav {
   display: flex;
   flex-direction: column;
@@ -1850,6 +1880,25 @@ body.client-ui::after {
   color: #8eb1e7;
 }
 
+.cp-account-gear {
+  border-color: rgba(108, 160, 241, 0.32);
+  background: linear-gradient(145deg, rgba(10, 27, 63, 0.95), rgba(5, 17, 43, 0.9));
+  color: #b9cff3;
+}
+
+.cp-account-gear:hover {
+  border-color: rgba(120, 203, 255, 0.62);
+  background: linear-gradient(120deg, rgba(11, 65, 161, 0.94), rgba(8, 119, 176, 0.9));
+  color: #f5fbff;
+  box-shadow: 0 0 18px rgba(46, 157, 255, 0.18);
+}
+
+.cp-account-gear.active {
+  border-color: rgba(103, 222, 255, 0.78);
+  background: linear-gradient(120deg, rgba(11, 65, 161, 0.94), rgba(8, 119, 176, 0.9));
+  color: #f5fbff;
+}
+
 .cp-nav-link {
   border: 1px solid rgba(108, 160, 241, 0.28);
   background: linear-gradient(145deg, rgba(10, 27, 63, 0.95), rgba(5, 17, 43, 0.9));
@@ -1876,15 +1925,7 @@ body.client-ui::after {
 }
 
 .cp-nav-link:nth-child(4) span::before {
-  content: "\1F6E0";
-}
-
-.cp-nav-link:nth-child(5) span::before {
-  content: "\1F4B3";
-}
-
-.cp-nav-link:nth-child(6) span::before {
-  content: "\1F464";
+  content: "\1F4AC";
 }
 
 .cp-nav-link span::before {
