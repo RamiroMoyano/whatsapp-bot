@@ -2955,10 +2955,6 @@ function buildPriceChart(values) {
 function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess, whatsappMessagesTotal = 0 }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
   const unreadNotifications = getClientUnreadNotificationCount(company);
-  const totalMessages = Number.isFinite(Number(whatsappMessagesTotal)) ? Math.max(0, Number(whatsappMessagesTotal)) : 0;
-  const messageCounterHtml = active === "inicio"
-    ? `<div class="cp-msg-counter"><span>Mensajes WhatsApp</span><b>${totalMessages}</b></div>`
-    : "";
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
@@ -3014,7 +3010,6 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
               <p>${escapeHtml(subtitle || "")}</p>
             </div>
             <div class="cp-header-actions">
-              ${messageCounterHtml}
               ${renderNotificationBell({ href: "/panel/conversaciones#cp-inbox", count: unreadNotifications, className: "cp-notify-bell", title: "Mensajes y notificaciones" })}
               <div class="cp-header-visual" aria-hidden="true"></div>
             </div>
@@ -3144,7 +3139,6 @@ app.post("/c/login", handleClientLogin);
 app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
-  const whatsappStats = await getCompanyWhatsappMessageStats(company.id);
   const toHtmlText = (value) => escapeHtml(value).replace(/\r?\n/g, "<br/>");
   const profile = state.profile || {};
   const brandManual = String(
@@ -3196,11 +3190,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
 
       <article class="cp-card">
         <h3>Configuracion bot</h3>
-        <div class="cp-bot-badges">
-          <span class="cp-pill primary">${escapeHtml(state.plan.planLabel)}</span>
-          <span class="cp-pill">${escapeHtml(state.plan.channelLabel)}</span>
-          <span class="cp-pill">${escapeHtml(state.subscription.status)}</span>
-        </div>
         <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
         <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.subscription.activeBotName || state.plan.botClass)}</b></div>
         <div class="cp-kv"><span>Canal principal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
@@ -3215,7 +3204,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
     title: "Overview",
     subtitle: `${company.name || company.id} - resumen operativo`,
     bodyHtml,
-    whatsappMessagesTotal: whatsappStats.total,
   }));
 });
 
@@ -4390,13 +4378,114 @@ app.get("/panel/soporte", requireClientAuth, (_req, res) => {
   return res.redirect("/panel/conversaciones");
 });
 
-app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("conversaciones"), (req, res) => {
-  const params = new URLSearchParams();
-  if (String(req.query.messageSent || "") === "1") params.set("messageSent", "1");
-  if (String(req.query.error || "").trim()) params.set("supportError", String(req.query.error || "").trim());
-  params.set("view", "conversaciones");
-  const query = params.toString();
-  return res.redirect(query ? `/panel/cuenta?${query}#cp-inbox` : "/panel/cuenta#cp-inbox");
+app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
+  const company = req.company;
+  const messageSent = String(req.query.messageSent || "") === "1";
+  const supportError = String(req.query.supportError || req.query.error || "").trim();
+  const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
+
+  try {
+    const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
+    const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
+    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
+    let inbox = extractAdminInbox(rules);
+
+    const hasUnreadAdminMessages = inbox.some((item) => item.sender === "admin" && !item.readByClient);
+    if (hasUnreadAdminMessages) {
+      inbox = inbox.map((item) => (item.sender === "admin" ? { ...item, readByClient: true } : item));
+      setAdminInbox(rules, inbox);
+      try {
+        await saveCompanyRules(currentCompany, rules);
+        currentCompany.rulesJson = JSON.stringify(rules);
+      } catch {
+        // no-op
+      }
+    }
+
+    const openCount = inbox.filter((item) => item.status === "open").length;
+    const resolvedCount = inbox.filter((item) => item.status === "resolved").length;
+    const unreadCount = inbox.filter((item) => item.sender === "admin" && !item.readByClient).length;
+    const inboxRows = inbox
+      .slice()
+      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
+      .map((item) => {
+        const subject = buildSupportMessageSubject(item);
+        return `
+        <details class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
+          <summary class="cp-msg-summary">
+            <span class="cp-msg-subject" title="${escapeHtml(subject)}">${escapeHtml(subject)}</span>
+            <span class="cp-msg-meta">
+              <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
+              <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
+            </span>
+          </summary>
+          <div class="cp-msg-body">
+            <div class="cp-msg-head">
+              <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
+              ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
+            </div>
+            <p class="cp-msg-text">${toHtmlText(item.text)}</p>
+          </div>
+        </details>
+      `;
+      })
+      .join("");
+
+    const bodyHtml = `
+      ${messageSent ? `<div class="cp-alert success">Mensaje enviado al admin.</div>` : ""}
+      ${supportError ? `<div class="cp-alert error">${escapeHtml(supportError)}</div>` : ""}
+
+      <section class="cp-stats">
+        <article class="cp-stat"><div class="cp-stat-label">Mensajes</div><div class="cp-stat-value">${inbox.length}</div><div class="cp-stat-hint">total historial</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Abiertos</div><div class="cp-stat-value">${openCount}</div><div class="cp-stat-hint">pendientes de gestion</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Resueltos</div><div class="cp-stat-value">${resolvedCount}</div><div class="cp-stat-hint">cerrados</div></article>
+        <article class="cp-stat"><div class="cp-stat-label">Sin leer</div><div class="cp-stat-value">${unreadCount}</div><div class="cp-stat-hint">respuestas del admin</div></article>
+      </section>
+
+      <section class="cp-grid">
+        <article class="cp-card cp-span-3" id="cp-inbox">
+          <div class="cp-card-head"><h3>Conversaciones</h3><span>${inbox.length} mensajes</span></div>
+          <form method="POST" action="/panel/soporte/messages" class="cp-form">
+            <div class="cp-grid-2">
+              <div>
+                <label>Asunto</label>
+                <input name="messageSubject" maxlength="120" placeholder="Ej: Cambio de plan / Error de pedidos" />
+              </div>
+              <div>
+                <label>Pedido relacionado (opcional)</label>
+                <input name="orderId" placeholder="Ej: PED-123ABC" />
+              </div>
+              <div>
+                <label>Estado del tema</label>
+                <select name="statusMessage">
+                  <option value="open">Abierto</option>
+                  <option value="resolved">Resuelto</option>
+                </select>
+              </div>
+            </div>
+            <label>Mensaje</label>
+            <textarea name="messageText" rows="3" maxlength="1000" placeholder="Describe tu consulta, incidencia o solicitud"></textarea>
+            <div class="cp-actions">
+              <button class="cp-btn primary" type="submit">Enviar</button>
+            </div>
+          </form>
+          <div class="cp-msg-list">
+            ${inboxRows || `<div class="cp-empty">Sin mensajes todavia.</div>`}
+          </div>
+        </article>
+      </section>
+    `;
+
+    return res.type("text/html").send(renderClientPage({
+      company: currentCompany,
+      active: "conversaciones",
+      title: "Conversaciones",
+      subtitle: `${currentCompany.name || currentCompany.id} - soporte con admin`,
+      bodyHtml,
+    }));
+  } catch (e) {
+    return res.status(500).send(`No se pudo cargar conversaciones: ${escapeHtml(e?.message || e)}`);
+  }
 });
 
 app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
@@ -4409,15 +4498,15 @@ app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAcces
   const status = statusRaw === "resolved" ? "resolved" : "open";
 
   if (messageSubject.length > 120) {
-    return res.redirect(`/panel/cuenta?view=conversaciones&supportError=${encodeURIComponent("El asunto supera 120 caracteres")}#cp-inbox`);
+    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("El asunto supera 120 caracteres")}#cp-inbox`);
   }
 
   if (!messageText) {
-    return res.redirect(`/panel/cuenta?view=conversaciones&supportError=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
+    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
   }
 
   if (messageText.length > 1000) {
-    return res.redirect(`/panel/cuenta?view=conversaciones&supportError=${encodeURIComponent("El mensaje supera 1000 caracteres")}#cp-inbox`);
+    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("El mensaje supera 1000 caracteres")}#cp-inbox`);
   }
 
   try {
@@ -4441,9 +4530,9 @@ app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAcces
     setAdminInbox(rules, inbox);
     await saveCompanyRules(currentCompany, rules);
 
-    return res.redirect("/panel/cuenta?view=conversaciones&messageSent=1#cp-inbox");
+    return res.redirect("/panel/conversaciones?messageSent=1#cp-inbox");
   } catch (e) {
-    return res.redirect(`/panel/cuenta?view=conversaciones&supportError=${encodeURIComponent(e?.message || e)}#cp-inbox`);
+    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent(e?.message || e)}#cp-inbox`);
   }
 });
 
@@ -4646,8 +4735,6 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
   const company = req.company;
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
-  const messageSent = String(req.query.messageSent || "") === "1";
-  const supportError = String(req.query.supportError || "").trim();
   const requested = String(req.query.requested || "") === "1";
   const requestedAction = String(req.query.action || "").trim().toLowerCase();
   const actionLabel = requestedAction === "upgrade"
@@ -4657,66 +4744,16 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
       : requestedAction === "cancel"
         ? "Cancelacion"
         : "Actualizacion";
-  const activeView = String(req.query.view || "").trim().toLowerCase() === "conversaciones"
-    ? "conversaciones"
-    : "cuenta";
-  const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
 
   try {
     const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
     const { state } = await loadClientStateWithProvider(currentCompany);
     const payment = extractPaymentSettings(state.rules || {});
-    const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
-    const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-    let inbox = extractAdminInbox(rules);
-
-    const hasUnreadAdminMessages = inbox.some((item) => item.sender === "admin" && !item.readByClient);
-    if (hasUnreadAdminMessages) {
-      inbox = inbox.map((item) => (item.sender === "admin" ? { ...item, readByClient: true } : item));
-      setAdminInbox(rules, inbox);
-      try {
-        await saveCompanyRules(currentCompany, rules);
-        currentCompany.rulesJson = JSON.stringify(rules);
-      } catch {
-        // no-op
-      }
-    }
-
-    const openCount = inbox.filter((item) => item.status === "open").length;
-    const resolvedCount = inbox.filter((item) => item.status === "resolved").length;
-    const unreadCount = inbox.filter((item) => item.sender === "admin" && !item.readByClient).length;
-    const inboxRows = inbox
-      .slice()
-      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
-      .map((item) => {
-        const subject = buildSupportMessageSubject(item);
-        return `
-        <details class="cp-msg-item ${item.sender === "admin" ? "from-admin" : "from-client"}">
-          <summary class="cp-msg-summary">
-            <span class="cp-msg-subject" title="${escapeHtml(subject)}">${escapeHtml(subject)}</span>
-            <span class="cp-msg-meta">
-              <span class="cp-msg-date">${escapeHtml(formatDateLabel(item.createdAt))}</span>
-              <span class="cp-msg-state ${item.status === "resolved" ? "resolved" : "open"}">${item.status === "resolved" ? "Resuelto" : "Abierto"}</span>
-            </span>
-          </summary>
-          <div class="cp-msg-body">
-            <div class="cp-msg-head">
-              <span class="cp-msg-who">${item.sender === "admin" ? "Admin" : "Empresa"}</span>
-              ${item.orderId ? `<span class="cp-msg-order">Pedido: ${escapeHtml(item.orderId)}</span>` : ""}
-            </div>
-            <p class="cp-msg-text">${toHtmlText(item.text)}</p>
-          </div>
-        </details>
-      `;
-      })
-      .join("");
 
     const bodyHtml = `
       ${saved ? `<div class="cp-alert success">Datos de cuenta actualizados.</div>` : ""}
       ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
       ${requested ? `<div class="cp-alert success">Solicitud de ${escapeHtml(actionLabel)} enviada al admin para revision.</div>` : ""}
-      ${messageSent ? `<div class="cp-alert success">Mensaje enviado al admin.</div>` : ""}
-      ${supportError ? `<div class="cp-alert error">${escapeHtml(supportError)}</div>` : ""}
 
       <section class="cp-grid">
         <details class="cp-card cp-span-2 cp-card-toggle">
@@ -4861,51 +4898,14 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
             </div>
           </div>
         </details>
-
-        <article class="cp-card cp-span-3" id="cp-inbox">
-          <div class="cp-card-head"><h3>Conversaciones</h3><span>${inbox.length} mensajes</span></div>
-          <section class="cp-stats" style="margin-bottom:12px">
-            <article class="cp-stat"><div class="cp-stat-label">Mensajes</div><div class="cp-stat-value">${inbox.length}</div><div class="cp-stat-hint">total historial</div></article>
-            <article class="cp-stat"><div class="cp-stat-label">Abiertos</div><div class="cp-stat-value">${openCount}</div><div class="cp-stat-hint">pendientes de gestion</div></article>
-            <article class="cp-stat"><div class="cp-stat-label">Resueltos</div><div class="cp-stat-value">${resolvedCount}</div><div class="cp-stat-hint">cerrados</div></article>
-            <article class="cp-stat"><div class="cp-stat-label">Sin leer</div><div class="cp-stat-value">${unreadCount}</div><div class="cp-stat-hint">respuestas del admin</div></article>
-          </section>
-          <form method="POST" action="/panel/soporte/messages" class="cp-form">
-            <div class="cp-grid-2">
-              <div>
-                <label>Asunto</label>
-                <input name="messageSubject" maxlength="120" placeholder="Ej: Cambio de plan / Error de pedidos" />
-              </div>
-              <div>
-                <label>Pedido relacionado (opcional)</label>
-                <input name="orderId" placeholder="Ej: PED-123ABC" />
-              </div>
-              <div>
-                <label>Estado del tema</label>
-                <select name="statusMessage">
-                  <option value="open">Abierto</option>
-                  <option value="resolved">Resuelto</option>
-                </select>
-              </div>
-            </div>
-            <label>Mensaje</label>
-            <textarea name="messageText" rows="3" maxlength="1000" placeholder="Describe tu consulta, incidencia o solicitud"></textarea>
-            <div class="cp-actions">
-              <button class="cp-btn primary" type="submit">Enviar</button>
-            </div>
-          </form>
-          <div class="cp-msg-list">
-            ${inboxRows || `<div class="cp-empty">Sin mensajes todavia.</div>`}
-          </div>
-        </article>
       </section>
     `;
 
     return res.type("text/html").send(renderClientPage({
       company: currentCompany,
-      active: activeView,
+      active: "cuenta",
       title: "Cuenta",
-      subtitle: `${currentCompany.name || currentCompany.id} - datos personales, suscripcion y conversaciones`,
+      subtitle: `${currentCompany.name || currentCompany.id} - datos personales y suscripcion`,
       bodyHtml,
     }));
   } catch (e) {
