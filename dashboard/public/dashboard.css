@@ -1994,6 +1994,13 @@ body.client-ui::after {
   gap: 10px;
 }
 
+.cp-header-icon-stack {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
 .cp-msg-counter {
   min-width: 138px;
   border: 1px solid rgba(137, 220, 255, 0.5);
@@ -2026,6 +2033,19 @@ body.client-ui::after {
   background: rgba(5, 43, 93, 0.64);
   color: #e6f4ff;
   box-shadow: 0 0 16px rgba(52, 159, 255, 0.23);
+}
+
+.cp-support-tool {
+  border-color: rgba(113, 240, 213, 0.56);
+  background: rgba(4, 53, 79, 0.72);
+  color: #d9fff4;
+  box-shadow: 0 0 16px rgba(40, 211, 179, 0.2);
+}
+
+.cp-support-tool.active {
+  border-color: rgba(113, 240, 213, 0.78);
+  background: linear-gradient(120deg, rgba(7, 83, 121, 0.9), rgba(6, 124, 150, 0.9));
+  color: #f0fffb;
 }
 
 .cp-header-visual {
@@ -2420,6 +2440,44 @@ body.client-ui::after {
 
 .cp-msg-order {
   font-size: 11px;
+}
+
+.cp-conv-table td {
+  vertical-align: middle;
+}
+
+.cp-conv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.cp-conv-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.cp-conv-status.process .cp-conv-dot {
+  background: #f4c84a;
+  box-shadow: 0 0 10px rgba(244, 200, 74, 0.46);
+}
+
+.cp-conv-status.closed .cp-conv-dot {
+  background: #66d897;
+  box-shadow: 0 0 10px rgba(102, 216, 151, 0.42);
+}
+
+.cp-conv-status.bot .cp-conv-dot {
+  background: #61a6ff;
+  box-shadow: 0 0 10px rgba(97, 166, 255, 0.42);
+}
+
+.cp-conv-status.generated .cp-conv-dot {
+  background: #54d6b2;
+  box-shadow: 0 0 10px rgba(84, 214, 178, 0.42);
 }
 
 .cp-company-details,

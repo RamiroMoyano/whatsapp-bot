@@ -19,7 +19,7 @@ app.get("/c/logout", (req, res) => res.redirect("/panel/logout"));
 app.get("/c/catalogo", (req, res) => res.redirect("/panel/catalogo"));
 app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
 app.get("/c/pedidos/export", (req, res) => res.redirect("/panel/pedidos/export"));
-app.get("/c/soporte", (req, res) => res.redirect("/panel/conversaciones"));
+app.get("/c/soporte", (req, res) => res.redirect("/panel/soporte"));
 app.get("/c/conversaciones", (req, res) => res.redirect("/panel/conversaciones"));
 app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
 app.get("/c/cuenta", (req, res) => res.redirect("/panel/cuenta"));
@@ -241,7 +241,16 @@ function renderNotificationBell({ href, count = 0, className = "", title = "Noti
   const badge = safeCount > 0
     ? `<span class="notify-badge">${safeCount > 99 ? "99+" : safeCount}</span>`
     : "";
-  return `<a class="${classes}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">🔔${badge}</a>`;
+  return `<a class="${classes}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">&#128276;${badge}</a>`;
+}
+
+function renderSupportToolIcon({ href, count = 0, className = "", title = "Soporte" }) {
+  const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
+  const classes = `notify-bell cp-support-tool ${className}`.trim();
+  const badge = safeCount > 0
+    ? `<span class="notify-badge">${safeCount > 99 ? "99+" : safeCount}</span>`
+    : "";
+  return `<a class="${classes}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">&#128736;${badge}</a>`;
 }
 
 async function saveCompanyRules(company, rules) {
@@ -2952,9 +2961,9 @@ function buildPriceChart(values) {
   `;
 }
 
-function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess, whatsappMessagesTotal = 0 }) {
+function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
-  const unreadNotifications = getClientUnreadNotificationCount(company);
+  const supportUnread = getClientUnreadNotificationCount(company);
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
     { key: "catalogo", label: "Catalogo", href: "/panel/catalogo" },
@@ -3010,7 +3019,10 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
               <p>${escapeHtml(subtitle || "")}</p>
             </div>
             <div class="cp-header-actions">
-              ${renderNotificationBell({ href: "/panel/conversaciones#cp-inbox", count: unreadNotifications, className: "cp-notify-bell", title: "Mensajes y notificaciones" })}
+              <div class="cp-header-icon-stack">
+                ${renderSupportToolIcon({ href: "/panel/soporte#cp-inbox", count: supportUnread, className: `cp-tool-bell ${active === "soporte" ? "active" : ""}`, title: "Soporte con admin" })}
+                ${renderNotificationBell({ href: "/panel/conversaciones", count: 0, className: "cp-notify-bell", title: "Notificaciones" })}
+              </div>
               <div class="cp-header-visual" aria-hidden="true"></div>
             </div>
           </header>
@@ -3736,6 +3748,70 @@ async function fetchClientOrderDetailPayload(company, orderId, limit = 120) {
   };
 }
 
+function truncateConversationText(value, max = 96) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (!text) return "Sin mensaje reciente.";
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
+function getConversationStatusFromOrder(order, lastDirection = "in") {
+  const workflow = extractClientOrderWorkflow(order);
+  const paymentState = normalizeClientPaymentStatus(order?.paymentStatus);
+  if (workflow.archived || workflow.state === "rejected") {
+    return { key: "closed", label: "Cerrado" };
+  }
+  if (workflow.state === "completed" || paymentState === "paid") {
+    return { key: "generated", label: "Pedido generado" };
+  }
+  if (String(lastDirection || "").toLowerCase() === "out") {
+    return { key: "bot", label: "Bot respondiendo" };
+  }
+  return { key: "process", label: "En proceso" };
+}
+
+async function buildClientConversationSummary(company, maxRows = 24) {
+  const orders = await fetchCompanyOrders(company.id, "", "", 500);
+  const uniqueOrders = [];
+  const seenCustomers = new Set();
+  for (const order of orders) {
+    const customerKey = String(order?.contact || order?.fromNumber || order?.name || order?.id || "")
+      .trim()
+      .toLowerCase();
+    if (!customerKey || seenCustomers.has(customerKey)) continue;
+    seenCustomers.add(customerKey);
+    uniqueOrders.push(order);
+    if (uniqueOrders.length >= maxRows) break;
+  }
+
+  const companyIdParam = encodeURIComponent(String(company.id || ""));
+  const summaryRows = await Promise.all(uniqueOrders.map(async (order) => {
+    let historyMessages = [];
+    try {
+      const history = await api(`/api/orders/${encodeURIComponent(order.id)}/messages?companyId=${companyIdParam}&limit=120`);
+      historyMessages = Array.isArray(history?.messages) ? history.messages : [];
+    } catch {
+      historyMessages = [];
+    }
+    const latestMessage = historyMessages.length ? historyMessages[historyMessages.length - 1] : null;
+    const lastDirection = String(latestMessage?.direction || "").toLowerCase() === "out" ? "out" : "in";
+    const status = getConversationStatusFromOrder(order, lastDirection);
+    const customerName = String(order?.name || order?.contact || order?.fromNumber || "-").trim() || "-";
+    const rawLastText = String(latestMessage?.content || "").trim() || String(order?.notes || "").trim();
+    return {
+      orderId: String(order?.id || ""),
+      customerName,
+      lastMessage: truncateConversationText(rawLastText),
+      statusKey: status.key,
+      statusLabel: status.label,
+      createdAt: order?.createdAt || "",
+    };
+  }));
+
+  summaryRows.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
+  return summaryRows;
+}
+
 app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   let orders = [];
@@ -4374,11 +4450,7 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
   }
 });
 
-app.get("/panel/soporte", requireClientAuth, (_req, res) => {
-  return res.redirect("/panel/conversaciones");
-});
-
-app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
+app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
   const company = req.company;
   const messageSent = String(req.query.messageSent || "") === "1";
   const supportError = String(req.query.supportError || req.query.error || "").trim();
@@ -4478,17 +4550,77 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
 
     return res.type("text/html").send(renderClientPage({
       company: currentCompany,
-      active: "conversaciones",
-      title: "Conversaciones",
+      active: "soporte",
+      title: "Soporte",
       subtitle: `${currentCompany.name || currentCompany.id} - soporte con admin`,
       bodyHtml,
     }));
   } catch (e) {
-    return res.status(500).send(`No se pudo cargar conversaciones: ${escapeHtml(e?.message || e)}`);
+    return res.status(500).send(`No se pudo cargar soporte: ${escapeHtml(e?.message || e)}`);
   }
 });
 
-app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
+app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
+  const company = req.company;
+  let rows = [];
+  let fetchError = "";
+  try {
+    rows = await buildClientConversationSummary(company, 24);
+  } catch (e) {
+    fetchError = e?.message || String(e);
+  }
+
+  const counts = rows.reduce((acc, row) => {
+    const key = row.statusKey || "process";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, { process: 0, closed: 0, bot: 0, generated: 0 });
+
+  const tableRows = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.customerName)}</td>
+      <td>${escapeHtml(row.lastMessage)}</td>
+      <td>
+        <span class="cp-conv-status ${escapeHtml(row.statusKey)}">
+          <span class="cp-conv-dot" aria-hidden="true"></span>
+          ${escapeHtml(row.statusLabel)}
+        </span>
+      </td>
+      <td><a class="cp-order-link" href="/panel/pedidos/ver/${encodeURIComponent(row.orderId)}">Ver pedido</a></td>
+    </tr>
+  `).join("");
+
+  const bodyHtml = `
+    ${fetchError ? `<div class="cp-alert error">No se pudo cargar conversaciones: ${escapeHtml(fetchError)}</div>` : ""}
+    <section class="cp-stats">
+      <article class="cp-stat"><div class="cp-stat-label">Conversaciones</div><div class="cp-stat-value">${rows.length}</div><div class="cp-stat-hint">clientes activos</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">En proceso</div><div class="cp-stat-value">${counts.process || 0}</div><div class="cp-stat-hint">seguimiento</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Cerradas</div><div class="cp-stat-value">${counts.closed || 0}</div><div class="cp-stat-hint">finalizadas</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Bot respondiendo</div><div class="cp-stat-value">${counts.bot || 0}</div><div class="cp-stat-hint">ultima salida bot</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Pedido generado</div><div class="cp-stat-value">${counts.generated || 0}</div><div class="cp-stat-hint">listo para gestionar</div></article>
+    </section>
+
+    <section class="cp-grid">
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>Conversaciones con clientes</h3><span>${rows.length} filas</span></div>
+        <table class="cp-table cp-conv-table">
+          <thead><tr><th>Cliente</th><th>Ultimo mensaje</th><th>Estado</th><th>Accion</th></tr></thead>
+          <tbody>${tableRows || `<tr><td colspan="4">Sin conversaciones registradas todavia.</td></tr>`}</tbody>
+        </table>
+      </article>
+    </section>
+  `;
+
+  return res.type("text/html").send(renderClientPage({
+    company,
+    active: "conversaciones",
+    title: "Conversaciones",
+    subtitle: `${company.name || company.id} - resumen de interacciones con clientes`,
+    bodyHtml,
+  }));
+});
+
+app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
   const company = req.company;
   const id = String(company?.id || "").trim();
   const messageSubject = String(req.body.messageSubject || "").trim();
@@ -4498,15 +4630,15 @@ app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAcces
   const status = statusRaw === "resolved" ? "resolved" : "open";
 
   if (messageSubject.length > 120) {
-    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("El asunto supera 120 caracteres")}#cp-inbox`);
+    return res.redirect(`/panel/soporte?supportError=${encodeURIComponent("El asunto supera 120 caracteres")}#cp-inbox`);
   }
 
   if (!messageText) {
-    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
+    return res.redirect(`/panel/soporte?supportError=${encodeURIComponent("Escribe un mensaje antes de enviar")}#cp-inbox`);
   }
 
   if (messageText.length > 1000) {
-    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent("El mensaje supera 1000 caracteres")}#cp-inbox`);
+    return res.redirect(`/panel/soporte?supportError=${encodeURIComponent("El mensaje supera 1000 caracteres")}#cp-inbox`);
   }
 
   try {
@@ -4530,14 +4662,14 @@ app.post("/panel/soporte/messages", requireClientAuth, requireClientSectionAcces
     setAdminInbox(rules, inbox);
     await saveCompanyRules(currentCompany, rules);
 
-    return res.redirect("/panel/conversaciones?messageSent=1#cp-inbox");
+    return res.redirect("/panel/soporte?messageSent=1#cp-inbox");
   } catch (e) {
-    return res.redirect(`/panel/conversaciones?supportError=${encodeURIComponent(e?.message || e)}#cp-inbox`);
+    return res.redirect(`/panel/soporte?supportError=${encodeURIComponent(e?.message || e)}#cp-inbox`);
   }
 });
 
 app.post("/panel/pedidos/messages", requireClientAuth, async (req, res) => {
-  return res.redirect("/panel/conversaciones");
+  return res.redirect("/panel/soporte");
 });
 
 app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
@@ -5039,4 +5171,3 @@ app.get("/__routes", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
-
