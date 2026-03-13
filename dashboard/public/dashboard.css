@@ -2480,6 +2480,58 @@ body.client-ui::after {
   box-shadow: 0 0 10px rgba(84, 214, 178, 0.42);
 }
 
+.cp-performance-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.cp-performance-panel::after {
+  content: "";
+  position: absolute;
+  inset: auto -18% -42% auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(90, 205, 255, 0.16), transparent 68%);
+  pointer-events: none;
+}
+
+.cp-performance-lines {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  padding: 12px 4px 4px;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+}
+
+.cp-performance-lines div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(114, 179, 255, 0.18);
+}
+
+.cp-performance-lines div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.cp-performance-lines span {
+  color: #9ab8e8;
+  font-size: 14px;
+}
+
+.cp-performance-lines b {
+  color: #f4fbff;
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 800;
+  text-align: right;
+}
+
 .cp-company-details,
 .cp-mini-kv,
 .cp-info-block,

@@ -3151,61 +3151,37 @@ app.post("/c/login", handleClientLogin);
 app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
-  const toHtmlText = (value) => escapeHtml(value).replace(/\r?\n/g, "<br/>");
-  const profile = state.profile || {};
-  const brandManual = String(
-    state.rules?.brandManual ||
-    state.rules?.brandGuide ||
-    state.rules?.manualMarca ||
-    state.rules?.manualDeMarca ||
-    company.prompt ||
-    ""
-  ).trim();
-  const companyPurpose = String(
-    state.rules?.companyPurpose ||
-    state.rules?.purpose ||
-    state.rules?.objective ||
-    state.rules?.objetivo ||
-    state.rules?.goal ||
-    ""
-  ).trim();
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  let monthlyOrders = [];
+  try {
+    monthlyOrders = await fetchCompanyOrders(company.id, monthStart, "", 500);
+  } catch {
+    monthlyOrders = [];
+  }
+
+  const monthlyCustomers = new Set(
+    monthlyOrders
+      .map((order) => String(order?.contact || order?.fromNumber || order?.name || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const estimatedSales = monthlyOrders.reduce((acc, order) => acc + toNumber(order?.total), 0);
+  const savedMinutes = (monthlyCustomers.size * 6) + (monthlyOrders.length * 14);
+  const savedHours = savedMinutes > 0 ? (savedMinutes / 60) : 0;
+  const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
-      <article class="cp-card cp-span-2">
-        <details class="cp-company-details" open>
-          <summary>
-            <span>Informacion de la empresa</span>
-            <span class="cp-details-hint">Click para expandir o contraer</span>
-          </summary>
-          <div class="cp-company-details-body">
-            <div class="cp-info-grid">
-              <div class="cp-mini-kv"><span>Empresa</span><b>${escapeHtml(company.name || company.id)}</b></div>
-              <div class="cp-mini-kv"><span>ID</span><b>${escapeHtml(company.id)}</b></div>
-              <div class="cp-mini-kv"><span>Responsable</span><b>${escapeHtml(profile.ownerName || "-")}</b></div>
-              <div class="cp-mini-kv"><span>Email</span><b>${escapeHtml(profile.ownerEmail || "-")}</b></div>
-              <div class="cp-mini-kv"><span>Telefono</span><b>${escapeHtml(profile.ownerPhone || "-")}</b></div>
-              <div class="cp-mini-kv"><span>Ubicacion</span><b>${escapeHtml([profile.companyCity, profile.companyCountry].filter(Boolean).join(", ") || "-")}</b></div>
-            </div>
-            <div class="cp-info-stack">
-              <div class="cp-info-block">
-                <h4>Manual de marca</h4>
-                <p>${brandManual ? toHtmlText(brandManual) : "No definido todavia."}</p>
-              </div>
-              <div class="cp-info-block">
-                <h4>Objetivo / Proposito</h4>
-                <p>${companyPurpose ? toHtmlText(companyPurpose) : "No definido todavia."}</p>
-              </div>
-            </div>
-          </div>
-        </details>
-      </article>
-
-      <article class="cp-card">
-        <h3>Configuracion bot</h3>
-        <div class="cp-kv"><span>Empresa</span><b>${escapeHtml(company.id)}</b></div>
-        <div class="cp-kv"><span>Clase bot</span><b>${escapeHtml(state.subscription.activeBotName || state.plan.botClass)}</b></div>
-        <div class="cp-kv"><span>Canal principal</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
-        <div class="cp-kv"><span>Precio</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+      <article class="cp-card cp-span-3 cp-performance-panel">
+        <div class="cp-card-head">
+          <h3>Rendimiento del bot este mes</h3>
+          <span>${escapeHtml(monthlyLabel)}</span>
+        </div>
+        <div class="cp-performance-lines">
+          <div><span>Clientes atendidos:</span> <b>${monthlyCustomers.size}</b></div>
+          <div><span>Pedidos generados:</span> <b>${monthlyOrders.length}</b></div>
+          <div><span>Ventas estimadas:</span> <b>${formatMoney(estimatedSales, state.subscription.currency)}</b></div>
+          <div><span>Tiempo ahorrado:</span> <b>${savedHours.toFixed(savedHours >= 10 ? 0 : 1)} horas</b></div>
+        </div>
       </article>
     </section>
   `;
