@@ -1513,7 +1513,8 @@ function buildOrderRegisteredReply(company, orderId, total, paymentMethodRaw) {
   }
 
   if (paymentMethod === "debito" || paymentMethod === "tarjeta") {
-    lines.push("Perfecto. Indica lugar y horario para coordinar el pago y la entrega.");
+    lines.push("Perfecto. Si queres, envia el comprobante del pago con tarjeta de forma opcional para agilizar la validacion.");
+    lines.push("Tambien podes indicar cualquier detalle util sobre el pago o la entrega.");
     return lines.join("\n");
   }
 
@@ -3028,7 +3029,7 @@ app.post("/whatsapp", async (req, res) => {
     if (!p) return respondAndLog("Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
     session.cart.push(id);
     await saveSession(session);
-    return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\nPara finalizar: checkout`);
+    return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\n¿Deseas agregar o ver algo mas? Podes escribir otro producto, su ID o "catalogo".\nPara finalizar: checkout`);
   }
 
   if (session.state === "MENU" && !hasActiveOrder) {
