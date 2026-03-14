@@ -3628,6 +3628,11 @@ body.client-saas-ui select {
   box-shadow: none;
 }
 
+body.client-saas-ui select option {
+  background: #111c2e;
+  color: #e5e7eb;
+}
+
 body.client-saas-ui textarea {
   min-height: 110px;
 }

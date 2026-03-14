@@ -4043,7 +4043,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
   exportParams.set("status", selectedStatus);
   if (fromInput) exportParams.set("from", fromInput);
   if (toInput) exportParams.set("to", toInput);
-  const exportCsvHref = `/panel/pedidos/export?format=csv&${exportParams.toString()}`;
   const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
 
   const rows = visibleOrders.map((order) => {
@@ -4174,7 +4173,6 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
           <div class="cp-actions">
             <button class="cp-btn primary" type="submit">Aplicar filtros</button>
             <a class="cp-btn" href="/panel/pedidos">Limpiar</a>
-            <a class="cp-btn" href="${exportCsvHref}">Exportar CSV</a>
             <a class="cp-btn" href="${exportXlsxHref}">Exportar XLSX</a>
           </div>
         </form>
