@@ -1,4 +1,4 @@
-﻿@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Orbitron:wght@500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=Orbitron:wght@500;700&display=swap");
 
 :root {
   --bg: #091224;
@@ -3181,4 +3181,689 @@ body.admin-light-ui .admin-toggle-caret {
     grid-template-columns: 1fr;
   }
 }
+
+/* =========================
+   Client Dashboard SaaS Dark
+========================= */
+body.client-saas-ui {
+  --saas-bg: #0b1220;
+  --saas-surface: #111c2e;
+  --saas-surface-2: #162338;
+  --saas-border: rgba(148, 163, 184, 0.16);
+  --saas-border-strong: rgba(148, 163, 184, 0.24);
+  --saas-text: #e5e7eb;
+  --saas-muted: #94a3b8;
+  --saas-accent: #3b82f6;
+  --saas-accent-soft: rgba(59, 130, 246, 0.16);
+  --saas-success: #22c55e;
+  --saas-danger: #ef4444;
+  --saas-warning: #f59e0b;
+  --saas-radius: 12px;
+  --saas-shadow: 0 10px 30px rgba(2, 6, 23, 0.28);
+  color: var(--saas-text);
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.1), transparent 24%),
+    linear-gradient(180deg, #0b1220 0%, #0b1220 100%);
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+body.client-saas-ui::before,
+body.client-saas-ui::after {
+  display: none;
+}
+
+body.client-saas-ui .cp-shell {
+  width: min(1440px, calc(100% - 48px));
+  margin: 24px auto;
+  grid-template-columns: 248px 1fr;
+  gap: 20px;
+}
+
+body.client-saas-ui .cp-sidebar,
+body.client-saas-ui .cp-header,
+body.client-saas-ui .cp-stat,
+body.client-saas-ui .cp-card,
+body.client-saas-ui .cp-msg-item,
+body.client-saas-ui .cp-order-detail-shell,
+body.client-saas-ui .cp-order-detail-card,
+body.client-saas-ui .cp-table,
+body.client-saas-ui .cp-empty {
+  background: var(--saas-surface);
+  border: 1px solid var(--saas-border);
+  box-shadow: var(--saas-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body.client-saas-ui .cp-sidebar {
+  border-radius: var(--saas-radius);
+  padding: 20px 16px;
+  gap: 16px;
+}
+
+body.client-saas-ui .cp-brand {
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--saas-border);
+  gap: 12px;
+}
+
+body.client-saas-ui .cp-brand img {
+  width: 34px;
+  height: 34px;
+}
+
+body.client-saas-ui .cp-brand-title {
+  color: var(--saas-text);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+body.client-saas-ui .cp-brand-sub {
+  color: var(--saas-muted);
+  font-size: 13px;
+}
+
+body.client-saas-ui .cp-account-gear,
+body.client-saas-ui .cp-notify-bell,
+body.client-saas-ui .cp-support-tool {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--saas-border);
+  background: var(--saas-surface-2);
+  color: var(--saas-text);
+  box-shadow: none;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+body.client-saas-ui .cp-account-gear:hover,
+body.client-saas-ui .cp-notify-bell:hover,
+body.client-saas-ui .cp-support-tool:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #f8fafc;
+  transform: translateY(-1px);
+}
+
+body.client-saas-ui .cp-account-gear.active,
+body.client-saas-ui .cp-support-tool.active {
+  background: var(--saas-accent-soft);
+  border-color: rgba(59, 130, 246, 0.42);
+  color: #eff6ff;
+}
+
+body.client-saas-ui .cp-nav {
+  gap: 10px;
+}
+
+body.client-saas-ui .cp-nav-link {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--saas-muted);
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+body.client-saas-ui .cp-nav-link:hover {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--saas-border);
+  color: var(--saas-text);
+  transform: none;
+  box-shadow: none;
+}
+
+body.client-saas-ui .cp-nav-link.active {
+  background: var(--saas-accent-soft);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #eff6ff;
+  animation: none;
+}
+
+body.client-saas-ui .cp-nav-link.locked {
+  background: rgba(148, 163, 184, 0.04);
+  border: 1px dashed var(--saas-border);
+  color: #64748b;
+}
+
+body.client-saas-ui .cp-logout {
+  margin-top: auto;
+  border-radius: 12px;
+  border: 1px solid var(--saas-border);
+  background: transparent;
+  color: var(--saas-text);
+  font-weight: 600;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+body.client-saas-ui .cp-logout:hover {
+  text-decoration: none;
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--saas-border-strong);
+}
+
+body.client-saas-ui .cp-main {
+  gap: 20px;
+}
+
+body.client-saas-ui .cp-header {
+  padding: 24px;
+  border-radius: var(--saas-radius);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+body.client-saas-ui .cp-header::after {
+  display: none;
+}
+
+body.client-saas-ui .cp-header-copy h1 {
+  margin: 0;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  text-transform: none;
+  letter-spacing: -0.04em;
+  font-size: clamp(30px, 4vw, 42px);
+  color: #f8fafc;
+}
+
+body.client-saas-ui .cp-header-copy p {
+  margin: 8px 0 0;
+  color: var(--saas-muted);
+  font-size: 14px;
+}
+
+body.client-saas-ui .cp-header-actions {
+  gap: 16px;
+}
+
+body.client-saas-ui .cp-header-icon-stack {
+  flex-direction: row;
+  gap: 10px;
+}
+
+body.client-saas-ui .cp-header-visual {
+  width: 112px;
+  height: 72px;
+  border-radius: 12px;
+  border: 1px solid var(--saas-border);
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(148, 163, 184, 0.06)),
+    rgba(255, 255, 255, 0.01);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+body.client-saas-ui .cp-stats {
+  gap: 20px;
+}
+
+body.client-saas-ui .cp-stat,
+body.client-saas-ui .cp-card {
+  border-radius: var(--saas-radius);
+  padding: 24px;
+  animation: none;
+}
+
+body.client-saas-ui .cp-stat {
+  min-height: 148px;
+}
+
+body.client-saas-ui .cp-stat::after {
+  display: none;
+}
+
+body.client-saas-ui .cp-stat-label,
+body.client-saas-ui .cp-stat-hint,
+body.client-saas-ui .cp-card-head span,
+body.client-saas-ui .cp-card-head a,
+body.client-saas-ui .cp-note,
+body.client-saas-ui label,
+body.client-saas-ui .cp-kv,
+body.client-saas-ui .cp-activity-day,
+body.client-saas-ui .cp-activity-count,
+body.client-saas-ui .cp-conversation-time,
+body.client-saas-ui .cp-msg-date,
+body.client-saas-ui .cp-msg-head,
+body.client-saas-ui .cp-conversation-meta {
+  color: var(--saas-muted);
+}
+
+body.client-saas-ui .cp-stat-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+body.client-saas-ui .cp-stat-value {
+  margin-top: 14px;
+  color: #f8fafc;
+  font-size: clamp(34px, 3vw, 42px);
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+body.client-saas-ui .cp-stat-hint {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+body.client-saas-ui .cp-card-head {
+  margin-bottom: 18px;
+}
+
+body.client-saas-ui .cp-card h3,
+body.client-saas-ui .cp-card-head h3 {
+  color: #f8fafc;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+body.client-saas-ui .cp-card-head a {
+  color: #c7d2fe;
+}
+
+body.client-saas-ui .cp-performance-panel::after,
+body.client-saas-ui .cp-overview-block::after {
+  display: none;
+}
+
+body.client-saas-ui .cp-performance-lines {
+  margin-top: 0;
+  padding: 0;
+  gap: 16px;
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+body.client-saas-ui .cp-performance-lines div {
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+body.client-saas-ui .cp-performance-lines span {
+  color: var(--saas-muted);
+  font-size: 14px;
+}
+
+body.client-saas-ui .cp-performance-lines b {
+  color: #f8fafc;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+body.client-saas-ui .cp-activity-track {
+  height: 12px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+body.client-saas-ui .cp-activity-bar {
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  box-shadow: none;
+}
+
+body.client-saas-ui .cp-faq-list li,
+body.client-saas-ui .cp-alert-line {
+  border-radius: 12px;
+  border: 1px solid var(--saas-border);
+  background: rgba(148, 163, 184, 0.04);
+}
+
+body.client-saas-ui .cp-faq-rank {
+  border-radius: 8px;
+  background: var(--saas-accent-soft);
+  color: #dbeafe;
+}
+
+body.client-saas-ui .cp-faq-label {
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-faq-list b {
+  color: #f8fafc;
+}
+
+body.client-saas-ui .cp-alerts-panel {
+  background: var(--saas-surface);
+}
+
+body.client-saas-ui .cp-alert-line.ok .cp-alert-line-icon,
+body.client-saas-ui .cp-status-completed,
+body.client-saas-ui .cp-msg-state.resolved {
+  color: #dcfce7;
+}
+
+body.client-saas-ui .cp-alert-line.warn .cp-alert-line-icon {
+  color: #fcd34d;
+}
+
+body.client-saas-ui .cp-alert-line.info .cp-alert-line-icon {
+  color: #93c5fd;
+}
+
+body.client-saas-ui .cp-btn {
+  min-height: 42px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--saas-border);
+  background: var(--saas-surface-2);
+  color: var(--saas-text);
+  font-weight: 600;
+  box-shadow: none;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease, color 0.18s ease;
+}
+
+body.client-saas-ui .cp-btn:hover {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--saas-border-strong);
+}
+
+body.client-saas-ui .cp-btn.primary {
+  border-color: transparent;
+  background: var(--saas-accent);
+  color: #eff6ff;
+}
+
+body.client-saas-ui .cp-btn.primary:hover {
+  background: #2563eb;
+}
+
+body.client-saas-ui .cp-btn.danger {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fecaca;
+}
+
+body.client-saas-ui .cp-alert {
+  border-radius: 12px;
+  border: 1px solid var(--saas-border);
+  background: rgba(148, 163, 184, 0.06);
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-alert.success {
+  border-color: rgba(34, 197, 94, 0.24);
+  background: rgba(34, 197, 94, 0.08);
+  color: #dcfce7;
+}
+
+body.client-saas-ui .cp-alert.error {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fecaca;
+}
+
+body.client-saas-ui input,
+body.client-saas-ui textarea,
+body.client-saas-ui select {
+  min-height: 44px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--saas-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--saas-text);
+  font-family: "Inter", "Segoe UI", sans-serif;
+  box-shadow: none;
+}
+
+body.client-saas-ui textarea {
+  min-height: 110px;
+}
+
+body.client-saas-ui textarea::placeholder,
+body.client-saas-ui input::placeholder {
+  color: #64748b;
+}
+
+body.client-saas-ui input:focus,
+body.client-saas-ui textarea:focus,
+body.client-saas-ui select:focus {
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+}
+
+body.client-saas-ui .cp-kv {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+body.client-saas-ui .cp-kv b,
+body.client-saas-ui .cp-mini-kv b,
+body.client-saas-ui .cp-msg-who,
+body.client-saas-ui .cp-conversation-client {
+  color: #f8fafc;
+}
+
+body.client-saas-ui .cp-card-toggle > summary,
+body.client-saas-ui .cp-msg-summary,
+body.client-saas-ui .cp-conversation-summary {
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-card-toggle > summary {
+  padding: 0 0 18px;
+}
+
+body.client-saas-ui .cp-card-toggle[open] > summary,
+body.client-saas-ui .cp-msg-item[open] .cp-msg-summary {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+body.client-saas-ui .cp-card-toggle-body {
+  padding-top: 18px;
+}
+
+body.client-saas-ui .cp-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+body.client-saas-ui .cp-table th,
+body.client-saas-ui .cp-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+body.client-saas-ui .cp-table th {
+  background: rgba(148, 163, 184, 0.06);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+body.client-saas-ui .cp-table td {
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-table tr:hover td,
+body.client-saas-ui .cp-order-row:hover td {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+body.client-saas-ui .cp-order-row.active td {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+body.client-saas-ui .cp-table .cp-table-group-row td {
+  background: rgba(148, 163, 184, 0.08);
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+body.client-saas-ui .cp-empty {
+  border-style: dashed;
+  color: var(--saas-muted);
+}
+
+body.client-saas-ui .cp-order-detail-shell,
+body.client-saas-ui .cp-order-detail-card {
+  border-radius: 12px;
+}
+
+body.client-saas-ui .cp-order-msg {
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(148, 163, 184, 0.05);
+}
+
+body.client-saas-ui .cp-order-msg.out {
+  border-color: rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+body.client-saas-ui .cp-order-msg-text,
+body.client-saas-ui .cp-msg-text,
+body.client-saas-ui .cp-conversation-last {
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-order-msg-media a,
+body.client-saas-ui .cp-order-link {
+  color: #93c5fd;
+}
+
+body.client-saas-ui .cp-status-badge,
+body.client-saas-ui .cp-category-select,
+body.client-saas-ui .cp-msg-state {
+  border-radius: 999px;
+  border: 1px solid var(--saas-border);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--saas-text);
+}
+
+body.client-saas-ui .cp-status-completed,
+body.client-saas-ui .cp-msg-state.resolved {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+body.client-saas-ui .cp-status-pending,
+body.client-saas-ui .cp-msg-state.open {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+}
+
+body.client-saas-ui .cp-status-rejected,
+body.client-saas-ui .cp-status-failed {
+  border-color: rgba(239, 68, 68, 0.22);
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+}
+
+body.client-saas-ui .cp-status-archived {
+  border-color: var(--saas-border);
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+}
+
+body.client-saas-ui .cp-conv-status {
+  gap: 8px;
+  font-weight: 600;
+}
+
+body.client-saas-ui .cp-conv-dot {
+  box-shadow: none;
+}
+
+body.client-saas-ui .cp-conv-status.process .cp-conv-dot {
+  background: var(--saas-warning);
+}
+
+body.client-saas-ui .cp-conv-status.closed .cp-conv-dot,
+body.client-saas-ui .cp-conv-status.generated .cp-conv-dot {
+  background: var(--saas-success);
+}
+
+body.client-saas-ui .cp-conv-status.bot .cp-conv-dot {
+  background: var(--saas-accent);
+}
+
+body.client-saas-ui .cp-conversation-item,
+body.client-saas-ui .cp-msg-item {
+  border-radius: 12px;
+}
+
+body.client-saas-ui .cp-conversation-summary {
+  padding: 18px 20px;
+}
+
+body.client-saas-ui .cp-conversation-body {
+  padding: 0 20px 20px;
+}
+
+body.client-saas-ui .cp-msg-list,
+body.client-saas-ui .cp-conversation-list {
+  gap: 12px;
+}
+
+body.client-saas-ui .cp-order-msg-media img {
+  border-radius: 10px;
+}
+
+@media (max-width: 1100px) {
+  body.client-saas-ui .cp-shell {
+    width: calc(100% - 32px);
+    grid-template-columns: 1fr;
+  }
+
+  body.client-saas-ui .cp-sidebar {
+    position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  body.client-saas-ui .cp-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.client-saas-ui .cp-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  body.client-saas-ui .cp-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  body.client-saas-ui .cp-header-visual {
+    width: 88px;
+    height: 56px;
+  }
+}
+
+@media (max-width: 560px) {
+  body.client-saas-ui .cp-shell {
+    width: calc(100% - 20px);
+    margin: 10px auto;
+  }
+
+  body.client-saas-ui .cp-sidebar,
+  body.client-saas-ui .cp-header,
+  body.client-saas-ui .cp-stat,
+  body.client-saas-ui .cp-card {
+    padding: 20px;
+  }
+
+  body.client-saas-ui .cp-stats {
+    grid-template-columns: 1fr;
+  }
+
+  body.client-saas-ui .cp-header-copy h1 {
+    font-size: 28px;
+  }
+
+  body.client-saas-ui .cp-header-visual {
+    display: none;
+  }
+}
+
 

@@ -2997,7 +2997,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
       <link rel="stylesheet" href="/dashboard.css" />
       <title>${escapeHtml(title)}</title>
     </head>
-    <body class="client-ui">
+    <body class="client-ui client-saas-ui">
       <div class="cp-shell">
         <aside class="cp-sidebar">
           <div class="cp-brand">
@@ -5380,3 +5380,4 @@ app.get("/__routes", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
+
