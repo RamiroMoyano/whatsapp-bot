@@ -4808,8 +4808,6 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
       <article class="cp-stat"><div class="cp-stat-label">Conversaciones</div><div class="cp-stat-value">${rows.length}</div><div class="cp-stat-hint">registradas hoy</div></article>
       <article class="cp-stat"><div class="cp-stat-label">En proceso</div><div class="cp-stat-value">${counts.process || 0}</div><div class="cp-stat-hint">seguimiento</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Cerradas</div><div class="cp-stat-value">${counts.closed || 0}</div><div class="cp-stat-hint">finalizadas</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Bot respondiendo</div><div class="cp-stat-value">${counts.bot || 0}</div><div class="cp-stat-hint">ultima salida bot</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Pedido generado</div><div class="cp-stat-value">${counts.generated || 0}</div><div class="cp-stat-hint">listo para gestionar</div></article>
     </section>
 
     <section class="cp-grid">
