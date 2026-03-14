@@ -3199,37 +3199,37 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
     <section class="cp-grid cp-overview-grid">
       <article class="cp-card cp-span-3 cp-overview-heading-card">
         <div class="cp-card-head">
-          <h3>Rendimiento del bot este mes</h3>
+          <h3>🚀 Rendimiento del bot este mes</h3>
           <span>${escapeHtml(monthlyLabel)}</span>
         </div>
       </article>
 
       <section class="cp-stats cp-span-3 cp-performance-stats-grid">
-        <article class="cp-stat cp-performance-stat">
-          <div class="cp-stat-label">Clientes atendidos</div>
+        <article class="cp-stat cp-performance-stat cp-tone-blue">
+          <div class="cp-stat-label">👥 Clientes atendidos</div>
           <div class="cp-stat-value">${monthlyCustomers.size}</div>
           <div class="cp-stat-hint">mes en curso</div>
         </article>
-        <article class="cp-stat cp-performance-stat">
-          <div class="cp-stat-label">Pedidos generados</div>
+        <article class="cp-stat cp-performance-stat cp-tone-cyan">
+          <div class="cp-stat-label">📦 Pedidos generados</div>
           <div class="cp-stat-value">${monthlyOrders.length}</div>
           <div class="cp-stat-hint">registrados este mes</div>
         </article>
-        <article class="cp-stat cp-performance-stat">
-          <div class="cp-stat-label">Ventas estimadas</div>
+        <article class="cp-stat cp-performance-stat cp-tone-green">
+          <div class="cp-stat-label">💸 Ventas estimadas</div>
           <div class="cp-stat-value">${formatMoney(estimatedSales, state.subscription.currency)}</div>
           <div class="cp-stat-hint">facturacion del periodo</div>
         </article>
-        <article class="cp-stat cp-performance-stat">
-          <div class="cp-stat-label">Tiempo ahorrado</div>
+        <article class="cp-stat cp-performance-stat cp-tone-purple">
+          <div class="cp-stat-label">⏱️ Tiempo ahorrado</div>
           <div class="cp-stat-value">${savedHours.toFixed(savedHours >= 10 ? 0 : 1)} h</div>
           <div class="cp-stat-hint">automatizacion estimada</div>
         </article>
       </section>
 
-      <article class="cp-card cp-span-2 cp-overview-block">
+      <article class="cp-card cp-span-2 cp-overview-block cp-tone-cyan-soft">
         <div class="cp-card-head">
-          <h3>Actividad del bot por dia</h3>
+          <h3>📈 Actividad del bot por dia</h3>
           <span>ultimos 7 dias</span>
         </div>
         <div class="cp-activity-chart">
@@ -3237,9 +3237,9 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
         </div>
       </article>
 
-      <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel">
+      <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
         <div class="cp-card-head">
-          <h3>Alertas importantes</h3>
+          <h3>⚠️ Alertas importantes</h3>
           <span>revision rapida</span>
         </div>
         <ul class="cp-alert-lines">
@@ -4810,7 +4810,7 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>Conversaciones del dia</h3><span>${rows.length} registros</span></div>
+        <div class="cp-card-head"><h3>💬 Conversaciones del dia</h3><span>${rows.length} registros</span></div>
         <div class="cp-conversation-list">
           ${conversationRows || `<div class="cp-empty">Sin conversaciones registradas hoy.</div>`}
         </div>
