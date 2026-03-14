@@ -3158,7 +3158,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const payment = extractPaymentSettings(rules);
   let monthlyOrders = [];
   let weeklyOrders = [];
-  let recentConversationRows = [];
   try {
     monthlyOrders = await fetchCompanyOrders(company.id, monthStart, "", 500);
   } catch {
@@ -3168,14 +3167,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
     weeklyOrders = await fetchCompanyOrders(company.id, weekStart, "", 500);
   } catch {
     weeklyOrders = [];
-  }
-  try {
-    recentConversationRows = await buildClientConversationSummary(company, {
-      limitRows: 48,
-      includeMessages: true,
-    });
-  } catch {
-    recentConversationRows = [];
   }
 
   const monthlyCustomers = new Set(
@@ -3188,7 +3179,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const savedHours = savedMinutes > 0 ? (savedMinutes / 60) : 0;
   const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
   const activitySeries = buildBotActivitySeries(weeklyOrders, 7);
-  const faqTopics = buildFrequentQuestions(recentConversationRows, 4);
   const alerts = buildOverviewAlerts({ state, payment, monthlyOrders });
   const activityRows = activitySeries.buckets.map((bucket) => `
     <div class="cp-activity-row">
@@ -3199,13 +3189,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
       <span class="cp-activity-count">${bucket.count}</span>
     </div>
   `).join("");
-  const faqRows = faqTopics.map((topic, index) => `
-    <li>
-      <span class="cp-faq-rank">${index + 1}</span>
-      <span class="cp-faq-label">${escapeHtml(topic.label)}</span>
-      <b>${topic.count}</b>
-    </li>
-  `).join("");
   const alertRows = alerts.map((alert) => `
     <li class="cp-alert-line ${escapeHtml(alert.level)}">
       <span class="cp-alert-line-icon" aria-hidden="true">${alert.level === "ok" ? "✓" : "!"}</span>
@@ -3214,18 +3197,35 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   `).join("");
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
-      <article class="cp-card cp-span-3 cp-performance-panel">
+      <article class="cp-card cp-span-3 cp-overview-heading-card">
         <div class="cp-card-head">
           <h3>Rendimiento del bot este mes</h3>
           <span>${escapeHtml(monthlyLabel)}</span>
         </div>
-        <div class="cp-performance-lines">
-          <div><span>Clientes atendidos:</span> <b>${monthlyCustomers.size}</b></div>
-          <div><span>Pedidos generados:</span> <b>${monthlyOrders.length}</b></div>
-          <div><span>Ventas estimadas:</span> <b>${formatMoney(estimatedSales, state.subscription.currency)}</b></div>
-          <div><span>Tiempo ahorrado:</span> <b>${savedHours.toFixed(savedHours >= 10 ? 0 : 1)} horas</b></div>
-        </div>
       </article>
+
+      <section class="cp-stats cp-span-3 cp-performance-stats-grid">
+        <article class="cp-stat cp-performance-stat">
+          <div class="cp-stat-label">Clientes atendidos</div>
+          <div class="cp-stat-value">${monthlyCustomers.size}</div>
+          <div class="cp-stat-hint">mes en curso</div>
+        </article>
+        <article class="cp-stat cp-performance-stat">
+          <div class="cp-stat-label">Pedidos generados</div>
+          <div class="cp-stat-value">${monthlyOrders.length}</div>
+          <div class="cp-stat-hint">registrados este mes</div>
+        </article>
+        <article class="cp-stat cp-performance-stat">
+          <div class="cp-stat-label">Ventas estimadas</div>
+          <div class="cp-stat-value">${formatMoney(estimatedSales, state.subscription.currency)}</div>
+          <div class="cp-stat-hint">facturacion del periodo</div>
+        </article>
+        <article class="cp-stat cp-performance-stat">
+          <div class="cp-stat-label">Tiempo ahorrado</div>
+          <div class="cp-stat-value">${savedHours.toFixed(savedHours >= 10 ? 0 : 1)} h</div>
+          <div class="cp-stat-hint">automatizacion estimada</div>
+        </article>
+      </section>
 
       <article class="cp-card cp-span-2 cp-overview-block">
         <div class="cp-card-head">
@@ -3235,16 +3235,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
         <div class="cp-activity-chart">
           ${activityRows}
         </div>
-      </article>
-
-      <article class="cp-card cp-overview-block">
-        <div class="cp-card-head">
-          <h3>Preguntas frecuentes</h3>
-          <span>clientes</span>
-        </div>
-        <ol class="cp-faq-list">
-          ${faqRows}
-        </ol>
       </article>
 
       <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel">
@@ -3907,17 +3897,29 @@ function buildOverviewAlerts({ state, payment, monthlyOrders }) {
   const catalog = Array.isArray(state?.catalog) ? state.catalog : [];
   const missingPrice = catalog.filter((item) => toNumber(item?.price) <= 0).length;
   const enabledMethods = ["cash", "debit", "transfer", "credit"].filter((key) => !!payment?.[key]).length;
+  const transferConfigured = !!payment?.transfer;
+  const missingTransferData = transferConfigured && !(
+    String(payment?.transferCbu || "").trim() ||
+    String(payment?.transferAlias || "").trim()
+  );
 
+  if (catalog.length === 0) {
+    alerts.push({ level: "warn", text: "Tu catalogo todavia no tiene productos cargados." });
+  }
   if (missingPrice > 0) {
     alerts.push({ level: "warn", text: `Tu catalogo tiene ${missingPrice} producto${missingPrice === 1 ? "" : "s"} sin precio.` });
   }
   if (enabledMethods === 0) {
     alerts.push({ level: "warn", text: "No tienes metodos de pago configurados para el bot." });
   }
+  if (missingTransferData) {
+    alerts.push({ level: "warn", text: "Tienes transferencia activa pero faltan CBU o alias para cobrar." });
+  }
   if (!["whatsapp", "combinado"].includes(String(state?.plan?.channelMode || "").toLowerCase())) {
     alerts.push({ level: "warn", text: "WhatsApp no esta activo en el plan actual del bot." });
   }
-  if (!monthlyOrders.length) {
+
+  if (!alerts.length && !monthlyOrders.length) {
     alerts.push({ level: "info", text: "Todavia no se generaron pedidos en el mes en curso." });
   }
 
