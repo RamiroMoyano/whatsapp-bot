@@ -2532,6 +2532,204 @@ body.client-ui::after {
   text-align: right;
 }
 
+.cp-overview-block {
+  position: relative;
+  overflow: hidden;
+}
+
+.cp-activity-chart {
+  display: grid;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.cp-activity-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 30px;
+  align-items: center;
+  gap: 12px;
+}
+
+.cp-activity-day,
+.cp-activity-count {
+  color: #9ab8e8;
+  font-size: 14px;
+}
+
+.cp-activity-track {
+  position: relative;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(10, 28, 62, 0.88);
+  border: 1px solid rgba(101, 167, 255, 0.16);
+  overflow: hidden;
+}
+
+.cp-activity-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3e73ff, #55dfff);
+  box-shadow: 0 0 18px rgba(85, 223, 255, 0.28);
+}
+
+.cp-faq-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.cp-faq-list li {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(99, 160, 243, 0.18);
+  background: rgba(7, 23, 57, 0.7);
+}
+
+.cp-faq-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #2d6ef2, #1bc8ff);
+  color: #f6fbff;
+  font-weight: 800;
+}
+
+.cp-faq-label {
+  color: #e8f3ff;
+  font-weight: 700;
+}
+
+.cp-faq-list b {
+  color: #9ed4ff;
+  font-size: 15px;
+}
+
+.cp-alerts-panel {
+  background: linear-gradient(180deg, rgba(17, 30, 63, 0.96), rgba(8, 18, 43, 0.92));
+}
+
+.cp-alert-lines {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+}
+
+.cp-alert-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(99, 160, 243, 0.14);
+  background: rgba(6, 19, 45, 0.72);
+  color: #ecf6ff;
+}
+
+.cp-alert-line.warn .cp-alert-line-icon {
+  color: #ffd561;
+}
+
+.cp-alert-line.info .cp-alert-line-icon {
+  color: #8ec5ff;
+}
+
+.cp-alert-line.ok .cp-alert-line-icon {
+  color: #74e2a9;
+}
+
+.cp-alert-line-icon {
+  min-width: 18px;
+  font-weight: 900;
+}
+
+.cp-conversation-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.cp-conversation-item {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cp-conversation-summary {
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) 1fr auto 52px;
+  gap: 16px;
+  align-items: center;
+  padding: 18px 20px;
+  cursor: pointer;
+}
+
+.cp-conversation-summary::-webkit-details-marker {
+  display: none;
+}
+
+.cp-conversation-client {
+  color: #f4fbff;
+  font-weight: 800;
+}
+
+.cp-conversation-last {
+  color: #9cb9e8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-conversation-time {
+  color: #86a7db;
+  text-align: right;
+  font-size: 13px;
+}
+
+.cp-conversation-body {
+  padding: 0 20px 20px;
+  border-top: 1px solid rgba(107, 162, 234, 0.18);
+}
+
+.cp-conversation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 14px 0;
+  color: #8fb4e7;
+  font-size: 13px;
+}
+
+.cp-conversation-shell {
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .cp-conversation-summary {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .cp-conversation-time {
+    text-align: left;
+  }
+
+  .cp-activity-row {
+    grid-template-columns: 82px 1fr 26px;
+  }
+}
+
 .cp-company-details,
 .cp-mini-kv,
 .cp-info-block,

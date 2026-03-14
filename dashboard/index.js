@@ -3153,11 +3153,29 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const { state } = await loadClientStateWithProvider(company);
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
+  const rules = parseJsonSafe(company.rulesJson || "{}", {});
+  const payment = extractPaymentSettings(rules);
   let monthlyOrders = [];
+  let weeklyOrders = [];
+  let recentConversationRows = [];
   try {
     monthlyOrders = await fetchCompanyOrders(company.id, monthStart, "", 500);
   } catch {
     monthlyOrders = [];
+  }
+  try {
+    weeklyOrders = await fetchCompanyOrders(company.id, weekStart, "", 500);
+  } catch {
+    weeklyOrders = [];
+  }
+  try {
+    recentConversationRows = await buildClientConversationSummary(company, {
+      limitRows: 48,
+      includeMessages: true,
+    });
+  } catch {
+    recentConversationRows = [];
   }
 
   const monthlyCustomers = new Set(
@@ -3169,6 +3187,31 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const savedMinutes = (monthlyCustomers.size * 6) + (monthlyOrders.length * 14);
   const savedHours = savedMinutes > 0 ? (savedMinutes / 60) : 0;
   const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+  const activitySeries = buildBotActivitySeries(weeklyOrders, 7);
+  const faqTopics = buildFrequentQuestions(recentConversationRows, 4);
+  const alerts = buildOverviewAlerts({ state, payment, monthlyOrders });
+  const activityRows = activitySeries.buckets.map((bucket) => `
+    <div class="cp-activity-row">
+      <span class="cp-activity-day">${escapeHtml(bucket.label)}</span>
+      <div class="cp-activity-track">
+        <div class="cp-activity-bar" style="width:${bucket.width}%"></div>
+      </div>
+      <span class="cp-activity-count">${bucket.count}</span>
+    </div>
+  `).join("");
+  const faqRows = faqTopics.map((topic, index) => `
+    <li>
+      <span class="cp-faq-rank">${index + 1}</span>
+      <span class="cp-faq-label">${escapeHtml(topic.label)}</span>
+      <b>${topic.count}</b>
+    </li>
+  `).join("");
+  const alertRows = alerts.map((alert) => `
+    <li class="cp-alert-line ${escapeHtml(alert.level)}">
+      <span class="cp-alert-line-icon" aria-hidden="true">${alert.level === "ok" ? "✓" : "!"}</span>
+      <span>${escapeHtml(alert.text)}</span>
+    </li>
+  `).join("");
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
       <article class="cp-card cp-span-3 cp-performance-panel">
@@ -3182,6 +3225,36 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
           <div><span>Ventas estimadas:</span> <b>${formatMoney(estimatedSales, state.subscription.currency)}</b></div>
           <div><span>Tiempo ahorrado:</span> <b>${savedHours.toFixed(savedHours >= 10 ? 0 : 1)} horas</b></div>
         </div>
+      </article>
+
+      <article class="cp-card cp-span-2 cp-overview-block">
+        <div class="cp-card-head">
+          <h3>Actividad del bot por dia</h3>
+          <span>ultimos 7 dias</span>
+        </div>
+        <div class="cp-activity-chart">
+          ${activityRows}
+        </div>
+      </article>
+
+      <article class="cp-card cp-overview-block">
+        <div class="cp-card-head">
+          <h3>Preguntas frecuentes</h3>
+          <span>clientes</span>
+        </div>
+        <ol class="cp-faq-list">
+          ${faqRows}
+        </ol>
+      </article>
+
+      <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel">
+        <div class="cp-card-head">
+          <h3>Alertas importantes</h3>
+          <span>revision rapida</span>
+        </div>
+        <ul class="cp-alert-lines">
+          ${alertRows}
+        </ul>
       </article>
     </section>
   `;
@@ -3746,10 +3819,123 @@ function getConversationStatusFromOrder(order, lastDirection = "in") {
   return { key: "process", label: "En proceso" };
 }
 
-async function buildClientConversationSummary(company, maxRows = 24) {
+function isSameCalendarDay(value, reference = new Date()) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return false;
+  return (
+    d.getFullYear() === reference.getFullYear() &&
+    d.getMonth() === reference.getMonth() &&
+    d.getDate() === reference.getDate()
+  );
+}
+
+function buildBotActivitySeries(orders, days = 7) {
+  const totalDays = Math.max(1, Number(days) || 7);
+  const today = new Date();
+  const buckets = [];
+  const counts = new Map();
+
+  for (let offset = totalDays - 1; offset >= 0; offset -= 1) {
+    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset);
+    const key = date.toISOString().slice(0, 10);
+    counts.set(key, 0);
+    buckets.push({
+      key,
+      label: date.toLocaleDateString("es-AR", { weekday: "long" }),
+      shortLabel: date.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" }),
+      count: 0,
+    });
+  }
+
+  for (const order of Array.isArray(orders) ? orders : []) {
+    const createdAt = String(order?.createdAt || "");
+    const key = createdAt.slice(0, 10);
+    if (!counts.has(key)) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  let max = 0;
+  for (const bucket of buckets) {
+    bucket.count = counts.get(bucket.key) || 0;
+    if (bucket.count > max) max = bucket.count;
+  }
+
+  return {
+    max,
+    buckets: buckets.map((bucket) => ({
+      ...bucket,
+      width: max > 0 ? Math.max(8, Math.round((bucket.count / max) * 100)) : 8,
+    })),
+  };
+}
+
+const FAQ_TOPIC_DEFINITIONS = [
+  { key: "price", label: "Precio", regex: /\b(precio|sale|cu[aá]nto|costo|vale|valor)\b/i },
+  { key: "shipping", label: "Envios", regex: /\b(env[ií]o|envian|env[oí]an|retiro|delivery)\b/i },
+  { key: "payment", label: "Metodos de pago", regex: /\b(pago|transferencia|transferir|efectivo|tarjeta|debito|cr[eé]dito)\b/i },
+  { key: "schedule", label: "Horarios", regex: /\b(horario|horarios|hora|abren|cierran|atienden)\b/i },
+];
+
+function buildFrequentQuestions(rows, limit = 4) {
+  const counters = new Map(FAQ_TOPIC_DEFINITIONS.map((topic) => [topic.key, { label: topic.label, count: 0 }]));
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const msg of Array.isArray(row?.messages) ? row.messages : []) {
+      if (String(msg?.direction || "").toLowerCase() === "out") continue;
+      const content = String(msg?.content || "").trim();
+      if (!content) continue;
+      for (const topic of FAQ_TOPIC_DEFINITIONS) {
+        if (topic.regex.test(content)) {
+          counters.get(topic.key).count += 1;
+          break;
+        }
+      }
+    }
+  }
+
+  const ranked = Array.from(counters.values())
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "es"));
+
+  if (!ranked.length) {
+    return FAQ_TOPIC_DEFINITIONS.slice(0, limit).map((topic) => ({ label: topic.label, count: 0 }));
+  }
+  return ranked.slice(0, limit);
+}
+
+function buildOverviewAlerts({ state, payment, monthlyOrders }) {
+  const alerts = [];
+  const catalog = Array.isArray(state?.catalog) ? state.catalog : [];
+  const missingPrice = catalog.filter((item) => toNumber(item?.price) <= 0).length;
+  const enabledMethods = ["cash", "debit", "transfer", "credit"].filter((key) => !!payment?.[key]).length;
+
+  if (missingPrice > 0) {
+    alerts.push({ level: "warn", text: `Tu catalogo tiene ${missingPrice} producto${missingPrice === 1 ? "" : "s"} sin precio.` });
+  }
+  if (enabledMethods === 0) {
+    alerts.push({ level: "warn", text: "No tienes metodos de pago configurados para el bot." });
+  }
+  if (!["whatsapp", "combinado"].includes(String(state?.plan?.channelMode || "").toLowerCase())) {
+    alerts.push({ level: "warn", text: "WhatsApp no esta activo en el plan actual del bot." });
+  }
+  if (!monthlyOrders.length) {
+    alerts.push({ level: "info", text: "Todavia no se generaron pedidos en el mes en curso." });
+  }
+
+  return alerts.length
+    ? alerts
+    : [{ level: "ok", text: "No hay alertas importantes por ahora. El bot se ve estable." }];
+}
+
+async function buildClientConversationSummary(company, options = {}) {
+  const {
+    limitRows = 24,
+    onlyToday = false,
+    includeMessages = false,
+  } = options;
   const orders = await fetchCompanyOrders(company.id, "", "", 500);
   const uniqueOrders = [];
   const seenCustomers = new Set();
+  const now = new Date();
   for (const order of orders) {
     const customerKey = String(order?.contact || order?.fromNumber || order?.name || order?.id || "")
       .trim()
@@ -3757,11 +3943,11 @@ async function buildClientConversationSummary(company, maxRows = 24) {
     if (!customerKey || seenCustomers.has(customerKey)) continue;
     seenCustomers.add(customerKey);
     uniqueOrders.push(order);
-    if (uniqueOrders.length >= maxRows) break;
+    if (uniqueOrders.length >= limitRows * 3) break;
   }
 
   const companyIdParam = encodeURIComponent(String(company.id || ""));
-  const summaryRows = await Promise.all(uniqueOrders.map(async (order) => {
+  const summaryRowsRaw = await Promise.all(uniqueOrders.map(async (order) => {
     let historyMessages = [];
     try {
       const history = await api(`/api/orders/${encodeURIComponent(order.id)}/messages?companyId=${companyIdParam}&limit=120`);
@@ -3774,6 +3960,7 @@ async function buildClientConversationSummary(company, maxRows = 24) {
     const status = getConversationStatusFromOrder(order, lastDirection);
     const customerName = String(order?.name || order?.contact || order?.fromNumber || "-").trim() || "-";
     const rawLastText = String(latestMessage?.content || "").trim() || String(order?.notes || "").trim();
+    const interactionAt = String(latestMessage?.createdAt || order?.createdAt || "");
     return {
       orderId: String(order?.id || ""),
       customerName,
@@ -3781,10 +3968,26 @@ async function buildClientConversationSummary(company, maxRows = 24) {
       statusKey: status.key,
       statusLabel: status.label,
       createdAt: order?.createdAt || "",
+      interactionAt,
+      paymentMethod: String(order?.paymentMethod || ""),
+      total: toNumber(order?.total),
+      messages: includeMessages
+        ? historyMessages.map((msg) => ({
+            createdAt: msg?.createdAt || "",
+            direction: String(msg?.direction || "").toLowerCase() === "out" ? "out" : "in",
+            content: String(msg?.content || ""),
+            mediaUrl: String(msg?.mediaUrl || ""),
+            mediaContentType: String(msg?.mediaContentType || ""),
+          }))
+        : [],
     };
   }));
 
-  summaryRows.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
+  const summaryRows = summaryRowsRaw
+    .filter((row) => !onlyToday || isSameCalendarDay(row.interactionAt || row.createdAt, now))
+    .slice(0, limitRows);
+
+  summaryRows.sort((a, b) => (Date.parse(b.interactionAt || b.createdAt) || 0) - (Date.parse(a.interactionAt || a.createdAt) || 0));
   return summaryRows;
 }
 
@@ -4541,7 +4744,11 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
   let rows = [];
   let fetchError = "";
   try {
-    rows = await buildClientConversationSummary(company, 24);
+    rows = await buildClientConversationSummary(company, {
+      limitRows: 24,
+      onlyToday: true,
+      includeMessages: true,
+    });
   } catch (e) {
     fetchError = e?.message || String(e);
   }
@@ -4552,24 +4759,51 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
     return acc;
   }, { process: 0, closed: 0, bot: 0, generated: 0 });
 
-  const tableRows = rows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.customerName)}</td>
-      <td>${escapeHtml(row.lastMessage)}</td>
-      <td>
-        <span class="cp-conv-status ${escapeHtml(row.statusKey)}">
-          <span class="cp-conv-dot" aria-hidden="true"></span>
-          ${escapeHtml(row.statusLabel)}
-        </span>
-      </td>
-      <td><a class="cp-order-link" href="/panel/pedidos/ver/${encodeURIComponent(row.orderId)}">Ver pedido</a></td>
-    </tr>
-  `).join("");
+  const conversationRows = rows.map((row) => {
+    const messagesHtml = Array.isArray(row.messages) && row.messages.length
+      ? row.messages.map((msg) => `
+        <div class="cp-order-msg ${msg.direction === "out" ? "out" : "in"}">
+          <div class="cp-order-msg-meta">
+            <span>${msg.direction === "out" ? "Bot" : "Cliente"}</span>
+            <span>${escapeHtml(formatDateLabel(msg.createdAt))}</span>
+          </div>
+          <div class="cp-order-msg-text">${escapeHtml(msg.content || "(sin texto)")}</div>
+          ${msg.mediaUrl ? `<div class="cp-order-msg-media"><a href="${escapeAttr(msg.mediaUrl)}" target="_blank" rel="noreferrer">Abrir adjunto</a></div>` : ""}
+        </div>
+      `).join("")
+      : `<div class="cp-empty">Sin mensajes asociados para esta conversacion.</div>`;
+    const interactionLabel = row.interactionAt
+      ? new Date(row.interactionAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })
+      : "-";
+    return `
+      <details class="cp-card cp-span-3 cp-conversation-item">
+        <summary class="cp-conversation-summary">
+          <span class="cp-conversation-client">${escapeHtml(row.customerName)}</span>
+          <span class="cp-conversation-last">${escapeHtml(row.lastMessage)}</span>
+          <span class="cp-conv-status ${escapeHtml(row.statusKey)}">
+            <span class="cp-conv-dot" aria-hidden="true"></span>
+            ${escapeHtml(row.statusLabel)}
+          </span>
+          <span class="cp-conversation-time">${escapeHtml(interactionLabel)}</span>
+        </summary>
+        <div class="cp-conversation-body">
+          <div class="cp-conversation-meta">
+            <span>Pedido: ${row.orderId ? `<a class="cp-order-link" href="/panel/pedidos/ver/${encodeURIComponent(row.orderId)}">${escapeHtml(row.orderId)}</a>` : "-"}</span>
+            <span>Total: ${formatMoney(row.total, "USD")}</span>
+            <span>Medio: ${escapeHtml(clientPaymentMethodLabel({ paymentMethod: row.paymentMethod }))}</span>
+          </div>
+          <div class="cp-order-detail-shell cp-conversation-shell">
+            ${messagesHtml}
+          </div>
+        </div>
+      </details>
+    `;
+  }).join("");
 
   const bodyHtml = `
     ${fetchError ? `<div class="cp-alert error">No se pudo cargar conversaciones: ${escapeHtml(fetchError)}</div>` : ""}
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Conversaciones</div><div class="cp-stat-value">${rows.length}</div><div class="cp-stat-hint">clientes activos</div></article>
+      <article class="cp-stat"><div class="cp-stat-label">Conversaciones</div><div class="cp-stat-value">${rows.length}</div><div class="cp-stat-hint">registradas hoy</div></article>
       <article class="cp-stat"><div class="cp-stat-label">En proceso</div><div class="cp-stat-value">${counts.process || 0}</div><div class="cp-stat-hint">seguimiento</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Cerradas</div><div class="cp-stat-value">${counts.closed || 0}</div><div class="cp-stat-hint">finalizadas</div></article>
       <article class="cp-stat"><div class="cp-stat-label">Bot respondiendo</div><div class="cp-stat-value">${counts.bot || 0}</div><div class="cp-stat-hint">ultima salida bot</div></article>
@@ -4578,11 +4812,10 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>Conversaciones con clientes</h3><span>${rows.length} filas</span></div>
-        <table class="cp-table cp-conv-table">
-          <thead><tr><th>Cliente</th><th>Ultimo mensaje</th><th>Estado</th><th>Accion</th></tr></thead>
-          <tbody>${tableRows || `<tr><td colspan="4">Sin conversaciones registradas todavia.</td></tr>`}</tbody>
-        </table>
+        <div class="cp-card-head"><h3>Conversaciones del dia</h3><span>${rows.length} registros</span></div>
+        <div class="cp-conversation-list">
+          ${conversationRows || `<div class="cp-empty">Sin conversaciones registradas hoy.</div>`}
+        </div>
       </article>
     </section>
   `;
