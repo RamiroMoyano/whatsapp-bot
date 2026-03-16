@@ -4802,11 +4802,6 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
 
   const bodyHtml = `
     ${fetchError ? `<div class="cp-alert error">No se pudo cargar conversaciones: ${escapeHtml(fetchError)}</div>` : ""}
-    <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Conversaciones</div><div class="cp-stat-value">${rows.length}</div><div class="cp-stat-hint">registradas hoy</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">En proceso</div><div class="cp-stat-value">${counts.process || 0}</div><div class="cp-stat-hint">seguimiento</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Cerradas</div><div class="cp-stat-value">${counts.closed || 0}</div><div class="cp-stat-hint">finalizadas</div></article>
-    </section>
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
