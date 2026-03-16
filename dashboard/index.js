@@ -3360,13 +3360,17 @@ async function fetchClientIntegrationModules(companyId) {
 }
 
 function renderClientIntegrationModulesSection(integrationModules) {
+  const moduleCount = integrationModules.length;
+  const alertCount = integrationModules.reduce((acc, module) => acc + (Array.isArray(module?.alerts) ? module.alerts.length : 0), 0);
+  const tableCount = integrationModules.reduce((acc, module) => acc + (module?.table && Array.isArray(module.table.rows) && module.table.rows.length ? 1 : 0), 0);
   const integrationCards = integrationModules.flatMap((module) => {
     const cards = Array.isArray(module?.cards) ? module.cards : [];
     return cards.map((card) => `
-      <article class="cp-stat cp-performance-stat ${normalizeIntegrationToneClass(card.tone)}">
+      <article class="cp-stat cp-performance-stat cp-integration-stat ${normalizeIntegrationToneClass(card.tone)}">
+        <div class="cp-integration-chip">${escapeHtml(module.name || module.provider || "Integracion")}</div>
         <div class="cp-stat-label">${escapeHtml(card.title || "Indicador")}</div>
         <div class="cp-stat-value">${escapeHtml(String(card.value ?? "-"))}</div>
-        <div class="cp-stat-hint">${escapeHtml(module.name || module.provider || "Integracion")}</div>
+        <div class="cp-stat-hint">dato sincronizado en vivo</div>
       </article>
     `);
   }).join("");
@@ -3395,10 +3399,10 @@ function renderClientIntegrationModulesSection(integrationModules) {
         <tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>
       `).join("");
       return `
-        <article class="cp-card cp-span-3 cp-overview-block">
+        <article class="cp-card cp-span-3 cp-overview-block cp-integration-table-card">
           <div class="cp-card-head">
             <h3>${escapeHtml(module.table.title || module.name || "Tabla externa")}</h3>
-            <span>${escapeHtml(module.name || module.provider || "Integracion")}</span>
+            <span class="cp-integration-chip subtle">${escapeHtml(module.name || module.provider || "Integracion")}</span>
           </div>
           <div class="cp-table-wrap">
             <table class="cp-table">
@@ -3412,9 +3416,9 @@ function renderClientIntegrationModulesSection(integrationModules) {
   if (!(integrationCards || integrationAlerts || integrationErrors || integrationTables)) {
     return `
       <section class="cp-grid">
-        <article class="cp-card cp-span-3 cp-overview-block">
+        <article class="cp-card cp-span-3 cp-overview-block cp-integrations-empty">
           <div class="cp-card-head">
-            <h3>Integraciones</h3>
+            <h3>🧩 Integraciones</h3>
             <span>sin modulos activos</span>
           </div>
           <p class="cp-note">No hay integraciones activas o todavia no devolvieron datos para mostrar en este dashboard.</p>
@@ -3424,19 +3428,34 @@ function renderClientIntegrationModulesSection(integrationModules) {
   }
   return `
     <section class="cp-grid cp-overview-grid">
-      <article class="cp-card cp-span-3 cp-overview-heading-card">
+      <article class="cp-card cp-span-3 cp-overview-heading-card cp-integrations-hero">
         <div class="cp-card-head">
-          <h3>Integraciones conectadas</h3>
-          <span>${integrationModules.length} modulos</span>
+          <h3>🧩 Integraciones conectadas</h3>
+          <span>${moduleCount} modulos</span>
+        </div>
+        <p class="cp-note">Este modulo muestra datos externos privados de tu empresa conectados en tiempo real.</p>
+        <div class="cp-integrations-meta">
+          <div class="cp-integrations-meta-item">
+            <span>Modulos</span>
+            <b>${moduleCount}</b>
+          </div>
+          <div class="cp-integrations-meta-item">
+            <span>Alertas</span>
+            <b>${alertCount}</b>
+          </div>
+          <div class="cp-integrations-meta-item">
+            <span>Tablas</span>
+            <b>${tableCount}</b>
+          </div>
         </div>
       </article>
 
       ${integrationCards ? `<section class="cp-stats cp-span-3 cp-performance-stats-grid">${integrationCards}</section>` : ""}
 
       ${(integrationAlerts || integrationErrors) ? `
-        <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
+        <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft cp-integrations-alerts">
           <div class="cp-card-head">
-            <h3>Alertas externas</h3>
+            <h3>⚠️ Alertas externas</h3>
             <span>integraciones</span>
           </div>
           <ul class="cp-alert-lines">
