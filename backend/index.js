@@ -5,6 +5,8 @@ import OpenAI from "openai";
 import { db, initDb } from "./db.js";
 import fetch from "node-fetch";
 import crypto from "crypto";
+import { createIntegrationId, loadCompanyIntegration, loadCompanyIntegrations } from "./integrations/load-company-integrations.js";
+import { getIntegrationRunner } from "./integrations/registry.js";
 
 dotenv.config();
 
@@ -314,6 +316,57 @@ function parseJsonSafe(raw, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function ensureObject(value, fallback = {}) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+}
+
+function normalizeIntegrationProvider(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "custom_api" ? raw : "";
+}
+
+function sanitizeIntegrationForAdmin(integration) {
+  if (!integration) return null;
+  const secrets = ensureObject(integration.secrets, {});
+  const config = ensureObject(integration.config, {});
+  return {
+    id: integration.id,
+    companyId: integration.companyId,
+    provider: integration.provider,
+    name: integration.name,
+    enabled: integration.enabled,
+    configJson: integration.configJson || JSON.stringify(config),
+    secretsJson: integration.secretsJson || JSON.stringify(secrets),
+    config,
+    secrets: {
+      token: String(secrets.token || ""),
+    },
+    createdAt: integration.createdAt,
+    updatedAt: integration.updatedAt,
+  };
+}
+
+function sanitizeIntegrationForRender(module) {
+  return {
+    integrationId: String(module?.integrationId || ""),
+    name: String(module?.name || ""),
+    provider: String(module?.provider || ""),
+    cards: Array.isArray(module?.cards) ? module.cards : [],
+    alerts: Array.isArray(module?.alerts) ? module.alerts : [],
+    table: module?.table && typeof module.table === "object" ? module.table : null,
+    meta: module?.meta && typeof module.meta === "object" ? module.meta : {},
+    error: module?.error ? String(module.error) : "",
+  };
+}
+
+async function runIntegrationModule(integration) {
+  const runner = getIntegrationRunner(integration?.provider);
+  if (!runner) {
+    throw new Error(`Provider no soportado: ${integration?.provider || "-"}`);
+  }
+  return runner(integration, { timeoutMs: 10000 });
 }
 
 const SUPPORTED_CURRENCIES = new Set(["ARS", "USD", "EUR", "GBP", "BRL"]);
@@ -2198,8 +2251,191 @@ app.post("/api/companies/:id/save", requireApiAuth, async (req, res) => {
   res.json({ ok: true, aiSync: syncResult });
 });
 
+app.get("/api/companies/:id/integrations", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const company = await db.prepare(`SELECT id FROM companies WHERE id=?`).get(companyId);
+    if (!company) return res.status(404).json({ error: "Empresa no encontrada" });
+    const integrations = await loadCompanyIntegrations(companyId, { includeSecrets: true, includeDisabled: true });
+    res.json(integrations.map((item) => sanitizeIntegrationForAdmin(item)));
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/api/companies/:id/integrations", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const company = await db.prepare(`SELECT id FROM companies WHERE id=?`).get(companyId);
+    if (!company) return res.status(404).json({ error: "Empresa no encontrada" });
+
+    const provider = normalizeIntegrationProvider(req.body.provider || "custom_api");
+    if (!provider) return res.status(400).json({ error: "Provider invalido" });
+
+    const name = String(req.body.name || "").trim() || "Nueva integracion";
+    const now = new Date().toISOString();
+    const integrationId = createIntegrationId();
+    await db.prepare(`
+      INSERT INTO company_integrations(
+        id, companyId, provider, name, enabled, configJson, secretsJson, createdAt, updatedAt
+      ) VALUES(?,?,?,?,?,?,?,?,?)
+    `).run(
+      integrationId,
+      companyId,
+      provider,
+      name,
+      1,
+      JSON.stringify({
+        baseUrl: "",
+        path: "",
+        method: "GET",
+        headers: {},
+        authType: "none",
+        authHeaderName: "x-api-key",
+        bodyJson: {},
+      }),
+      JSON.stringify({ token: "" }),
+      now,
+      now,
+    );
+
+    const created = await loadCompanyIntegration(companyId, integrationId, { includeSecrets: true });
+    res.json({ ok: true, integration: sanitizeIntegrationForAdmin(created) });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/api/companies/:id/integrations/:integrationId/save", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const integrationId = String(req.params.integrationId || "").trim();
+    const existing = await loadCompanyIntegration(companyId, integrationId, { includeSecrets: true });
+    if (!existing) return res.status(404).json({ error: "Integracion no encontrada" });
+
+    const provider = normalizeIntegrationProvider(req.body.provider || existing.provider);
+    if (!provider) return res.status(400).json({ error: "Provider invalido" });
+
+    const name = String(req.body.name || existing.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Nombre requerido" });
+
+    const enabled = req.body.enabled === true || req.body.enabled === 1 || String(req.body.enabled || "").trim() === "1";
+
+    const configJson = String(req.body.configJson || existing.configJson || "{}");
+    const secretsJson = String(req.body.secretsJson || existing.secretsJson || "{}");
+    let config;
+    let secrets;
+    try {
+      config = JSON.parse(configJson);
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw new Error("configJson debe ser un objeto");
+      }
+    } catch (error) {
+      return res.status(400).json({ error: `Config invalida: ${error?.message || error}` });
+    }
+    try {
+      secrets = JSON.parse(secretsJson);
+      if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) {
+        throw new Error("secretsJson debe ser un objeto");
+      }
+    } catch (error) {
+      return res.status(400).json({ error: `Secrets invalidos: ${error?.message || error}` });
+    }
+
+    await db.prepare(`
+      UPDATE company_integrations
+      SET provider=?, name=?, enabled=?, configJson=?, secretsJson=?, updatedAt=?
+      WHERE companyId=? AND id=?
+    `).run(
+      provider,
+      name,
+      enabled ? 1 : 0,
+      JSON.stringify(config),
+      JSON.stringify(secrets),
+      new Date().toISOString(),
+      companyId,
+      integrationId,
+    );
+
+    const updated = await loadCompanyIntegration(companyId, integrationId, { includeSecrets: true });
+    res.json({ ok: true, integration: sanitizeIntegrationForAdmin(updated) });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/api/companies/:id/integrations/:integrationId/test", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const integrationId = String(req.params.integrationId || "").trim();
+    const integration = await loadCompanyIntegration(companyId, integrationId, { includeSecrets: true });
+    if (!integration) return res.status(404).json({ error: "Integracion no encontrada" });
+
+    const result = await runIntegrationModule(integration);
+    res.json({
+      ok: true,
+      preview: {
+        cards: Array.isArray(result.cards) ? result.cards.length : 0,
+        alerts: Array.isArray(result.alerts) ? result.alerts.length : 0,
+        hasTable: !!result.table,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/api/companies/:id/integrations/:integrationId/delete", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const integrationId = String(req.params.integrationId || "").trim();
+    await db.prepare(`DELETE FROM company_integrations WHERE companyId=? AND id=?`).run(companyId, integrationId);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+app.get("/api/companies/:id/integrations/render", requireApiAuth, async (req, res) => {
+  try {
+    const companyId = String(req.params.id || "").trim();
+    const company = await db.prepare(`SELECT id FROM companies WHERE id=?`).get(companyId);
+    if (!company) return res.status(404).json({ error: "Empresa no encontrada" });
+    const integrations = await loadCompanyIntegrations(companyId, { includeSecrets: true, includeDisabled: false });
+    const modules = [];
+
+    for (const integration of integrations) {
+      try {
+        const result = await runIntegrationModule(integration);
+        modules.push(sanitizeIntegrationForRender({
+          integrationId: integration.id,
+          name: integration.name,
+          provider: integration.provider,
+          ...result,
+        }));
+      } catch (error) {
+        modules.push(sanitizeIntegrationForRender({
+          integrationId: integration.id,
+          name: integration.name,
+          provider: integration.provider,
+          cards: [],
+          alerts: [],
+          table: null,
+          meta: { source: integration.provider, updatedAt: new Date().toISOString() },
+          error: error?.message || String(error),
+        }));
+      }
+    }
+
+    res.json({ modules });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
 app.post("/api/companies/:id/delete", requireApiAuth, async (req, res) => {
   try {
+    await db.prepare(`DELETE FROM company_integrations WHERE companyId=?`).run(req.params.id);
     await db.prepare(`DELETE FROM companies WHERE id=?`).run(req.params.id);
     res.json({ ok: true });
   } catch (e) {

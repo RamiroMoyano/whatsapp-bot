@@ -265,6 +265,35 @@ async function saveCompanyRules(company, rules) {
   });
 }
 
+function prettyJson(value, fallback = "{}") {
+  try {
+    return JSON.stringify(value ?? JSON.parse(fallback), null, 2);
+  } catch {
+    return fallback;
+  }
+}
+
+function parseObjectJsonInput(raw, fieldName) {
+  const parsed = parseJsonSafe(String(raw || "").trim() || "{}", null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${fieldName} debe ser un objeto JSON`);
+  }
+  return parsed;
+}
+
+function normalizeIntegrationToneClass(toneRaw) {
+  const tone = String(toneRaw || "").trim().toLowerCase();
+  if (tone === "success") return "cp-tone-green";
+  if (tone === "warning") return "cp-tone-amber-soft";
+  if (tone === "danger") return "cp-tone-purple";
+  return "cp-tone-cyan";
+}
+
+async function fetchCompanyIntegrations(companyId) {
+  const data = await api(`/api/companies/${encodeURIComponent(companyId)}/integrations`);
+  return Array.isArray(data) ? data : [];
+}
+
 function layout({ title, active, body, notifications = 0 }) {
   const nav = `
     <a class="btn ${active === "companies" ? "primary" : "secondary"}" href="/admin">🏢 Empresas</a>
@@ -1019,6 +1048,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     ).trim();
     const botOptions = extractCatalogBotOptions(providerForPricing);
     const currentBotClass = String(plan.botClass || "").trim();
+    const integrations = await fetchCompanyIntegrations(id).catch(() => []);
     const hasCurrentBotInCatalog = currentBotClass
       ? botOptions.some((item) => item.name.toLowerCase() === currentBotClass.toLowerCase())
       : false;
@@ -1032,6 +1062,102 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         return `<option value="${escapeHtml(item.name)}" ${selected}>${escapeHtml(item.label)}</option>`;
       }),
     ].join("");
+    const integrationsHtml = integrations.length
+      ? integrations.map((integration) => {
+        const config = parseJsonSafe(integration.configJson || "{}", {});
+        const secrets = parseJsonSafe(integration.secretsJson || "{}", {});
+        const method = String(config.method || "GET").trim().toUpperCase() === "POST" ? "POST" : "GET";
+        const authType = ["none", "bearer", "header"].includes(String(config.authType || "").trim().toLowerCase())
+          ? String(config.authType || "").trim().toLowerCase()
+          : "none";
+        const authHeaderName = String(config.authHeaderName || "x-api-key").trim() || "x-api-key";
+        return `
+          <div class="card" style="margin-top:18px">
+            <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/integrations/${encodeURIComponent(integration.id)}/save" class="form">
+              <div class="grid2">
+                <div>
+                  <label>Nombre</label>
+                  <input name="name" value="${escapeHtml(integration.name || "")}" />
+                </div>
+                <div>
+                  <label>Provider</label>
+                  <select name="provider">
+                    <option value="custom_api" ${String(integration.provider || "") === "custom_api" ? "selected" : ""}>custom_api</option>
+                  </select>
+                </div>
+              </div>
+
+              <label style="display:flex;align-items:center;gap:8px;margin-top:6px">
+                <input type="checkbox" name="enabled" value="1" ${integration.enabled ? "checked" : ""} style="width:auto" />
+                Integracion activa
+              </label>
+
+              <div class="grid2">
+                <div>
+                  <label>Base URL</label>
+                  <input name="baseUrl" value="${escapeHtml(String(config.baseUrl || ""))}" placeholder="https://api.cliente.com" />
+                </div>
+                <div>
+                  <label>Path</label>
+                  <input name="path" value="${escapeHtml(String(config.path || ""))}" placeholder="/stock/resumen" />
+                </div>
+              </div>
+
+              <div class="grid2">
+                <div>
+                  <label>Metodo</label>
+                  <select name="method">
+                    <option value="GET" ${method === "GET" ? "selected" : ""}>GET</option>
+                    <option value="POST" ${method === "POST" ? "selected" : ""}>POST</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Auth type</label>
+                  <select name="authType">
+                    <option value="none" ${authType === "none" ? "selected" : ""}>none</option>
+                    <option value="bearer" ${authType === "bearer" ? "selected" : ""}>bearer</option>
+                    <option value="header" ${authType === "header" ? "selected" : ""}>header</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid2">
+                <div>
+                  <label>Header de auth</label>
+                  <input name="authHeaderName" value="${escapeHtml(authHeaderName)}" placeholder="x-api-key" />
+                </div>
+                <div>
+                  <label>Token / secreto</label>
+                  <input name="token" value="${escapeHtml(String(secrets.token || ""))}" placeholder="Se guarda en secretsJson" />
+                </div>
+              </div>
+
+              <label>Headers JSON</label>
+              <textarea name="headersJson" rows="4">${escapeHtml(prettyJson(config.headers || {}, "{}"))}</textarea>
+
+              <label>Body JSON (opcional)</label>
+              <textarea name="bodyJson" rows="4">${escapeHtml(prettyJson(config.bodyJson || {}, "{}"))}</textarea>
+
+              <div class="muted">
+                ID: <code>${escapeHtml(integration.id)}</code> | Actualizado: ${escapeHtml(integration.updatedAt || integration.createdAt || "-")}
+              </div>
+
+              <div class="actions">
+                <button class="btn primary" type="submit">Guardar integracion</button>
+              </div>
+            </form>
+            <div class="actions" style="margin-top:12px">
+              <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/integrations/${encodeURIComponent(integration.id)}/test">
+                <button class="btn secondary" type="submit">Probar conexion</button>
+              </form>
+              <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/integrations/${encodeURIComponent(integration.id)}/delete" onsubmit="return confirm('Se eliminara la integracion. Continuar?')">
+                <button class="btn danger" type="submit">Eliminar integracion</button>
+              </form>
+            </div>
+          </div>
+        `;
+      }).join("")
+      : `<div class="muted">No hay integraciones privadas configuradas todavia.</div>`;
 
     const alerts = [
       String(req.query.created || "") === "1" ? `<div class="card"><b>Empresa creada correctamente.</b></div>` : "",
@@ -1040,6 +1166,11 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
       String(req.query.manualPwd || "") === "1" ? `<div class="card"><b>Password actualizada manualmente.</b></div>` : "",
       String(req.query.generatedPwd || "") ? `<div class="card"><b>Nueva password generada:</b> <code>${escapeHtml(String(req.query.generatedPwd || ""))}</code></div>` : "",
       String(req.query.botError || "") ? `<div class="card"><b>Error al cambiar bot:</b> ${escapeHtml(String(req.query.botError || ""))}</div>` : "",
+      String(req.query.integrationCreated || "") === "1" ? `<div class="card"><b>Integracion creada.</b></div>` : "",
+      String(req.query.integrationUpdated || "") === "1" ? `<div class="card"><b>Integracion actualizada.</b></div>` : "",
+      String(req.query.integrationDeleted || "") === "1" ? `<div class="card"><b>Integracion eliminada.</b></div>` : "",
+      String(req.query.integrationTestOk || "") === "1" ? `<div class="card"><b>Conexion correcta.</b> Cards: ${escapeHtml(String(req.query.cards || "0"))} | Alertas: ${escapeHtml(String(req.query.alerts || "0"))} | Tabla: ${String(req.query.hasTable || "") === "1" ? "si" : "no"}</div>` : "",
+      String(req.query.integrationError || "") ? `<div class="card"><b>Error en integracion:</b> ${escapeHtml(String(req.query.integrationError || ""))}</div>` : "",
     ].join("");
 
     res.type("text/html").send(`<!doctype html>
@@ -1218,6 +1349,28 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
       </div>
 
       <div class="card admin-toggle-card">
+        <h3 style="margin-top:0">Integraciones</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/integrations" class="form">
+          <div class="grid2">
+            <div>
+              <label>Nombre de la integracion</label>
+              <input name="name" placeholder="Ej: Stock ERP" />
+            </div>
+            <div>
+              <label>Provider</label>
+              <select name="provider">
+                <option value="custom_api">custom_api</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit">Crear integracion</button>
+          </div>
+        </form>
+        ${integrationsHtml}
+      </div>
+
+      <div class="card admin-toggle-card">
         <h3 style="margin-top:0">Edicion avanzada</h3>
         <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
           <input type="hidden" name="name" value="${escapeHtml(c.name || c.id)}" />
@@ -1299,6 +1452,89 @@ app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
   });
 
   res.redirect(`/admin/company/${encodeURIComponent(id)}`);
+});
+
+app.post("/admin/company/:id/integrations", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  try {
+    await api(`/api/companies/${encodeURIComponent(id)}/integrations`, {
+      method: "POST",
+      body: {
+        name: String(req.body.name || "").trim() || "Nueva integracion",
+        provider: String(req.body.provider || "custom_api").trim() || "custom_api",
+      },
+    });
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationCreated=1`);
+  } catch (e) {
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationError=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/admin/company/:id/integrations/:integrationId/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const integrationId = req.params.integrationId;
+  try {
+    const config = {
+      baseUrl: String(req.body.baseUrl || "").trim(),
+      path: String(req.body.path || "").trim(),
+      method: String(req.body.method || "GET").trim().toUpperCase() === "POST" ? "POST" : "GET",
+      headers: parseObjectJsonInput(req.body.headersJson, "Headers JSON"),
+      authType: ["none", "bearer", "header"].includes(String(req.body.authType || "").trim().toLowerCase())
+        ? String(req.body.authType || "").trim().toLowerCase()
+        : "none",
+      authHeaderName: String(req.body.authHeaderName || "x-api-key").trim() || "x-api-key",
+      bodyJson: parseObjectJsonInput(req.body.bodyJson, "Body JSON"),
+    };
+    const secrets = {
+      token: String(req.body.token || "").trim(),
+    };
+    await api(`/api/companies/${encodeURIComponent(id)}/integrations/${encodeURIComponent(integrationId)}/save`, {
+      method: "POST",
+      body: {
+        name: String(req.body.name || "").trim(),
+        provider: String(req.body.provider || "custom_api").trim() || "custom_api",
+        enabled: req.body.enabled ? 1 : 0,
+        configJson: JSON.stringify(config),
+        secretsJson: JSON.stringify(secrets),
+      },
+    });
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationUpdated=1`);
+  } catch (e) {
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationError=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/admin/company/:id/integrations/:integrationId/test", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const integrationId = req.params.integrationId;
+  try {
+    const test = await api(`/api/companies/${encodeURIComponent(id)}/integrations/${encodeURIComponent(integrationId)}/test`, {
+      method: "POST",
+    });
+    const preview = test?.preview || {};
+    const params = new URLSearchParams({
+      integrationTestOk: "1",
+      cards: String(preview.cards || 0),
+      alerts: String(preview.alerts || 0),
+      hasTable: preview.hasTable ? "1" : "0",
+    });
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?${params.toString()}`);
+  } catch (e) {
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationError=${encodeURIComponent(e?.message || e)}`);
+  }
+});
+
+app.post("/admin/company/:id/integrations/:integrationId/delete", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const integrationId = req.params.integrationId;
+  try {
+    await api(`/api/companies/${encodeURIComponent(id)}/integrations/${encodeURIComponent(integrationId)}/delete`, {
+      method: "POST",
+    });
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationDeleted=1`);
+  } catch (e) {
+    res.redirect(`/admin/company/${encodeURIComponent(id)}?integrationError=${encodeURIComponent(e?.message || e)}`);
+  }
 });
 
 app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, res) => {
@@ -3180,6 +3416,13 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
   const activitySeries = buildBotActivitySeries(weeklyOrders, 7);
   const alerts = buildOverviewAlerts({ state, payment, monthlyOrders });
+  let integrationModules = [];
+  try {
+    const integrationRender = await api(`/api/companies/${encodeURIComponent(company.id)}/integrations/render`);
+    integrationModules = Array.isArray(integrationRender?.modules) ? integrationRender.modules : [];
+  } catch {
+    integrationModules = [];
+  }
   const activityRows = activitySeries.buckets.map((bucket) => `
     <div class="cp-activity-row">
       <span class="cp-activity-day">${escapeHtml(bucket.label)}</span>
@@ -3195,6 +3438,82 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
       <span>${escapeHtml(alert.text)}</span>
     </li>
   `).join("");
+  const integrationCards = integrationModules.flatMap((module) => {
+    const cards = Array.isArray(module?.cards) ? module.cards : [];
+    return cards.map((card) => `
+      <article class="cp-stat cp-performance-stat ${normalizeIntegrationToneClass(card.tone)}">
+        <div class="cp-stat-label">${escapeHtml(card.title || "Indicador")}</div>
+        <div class="cp-stat-value">${escapeHtml(String(card.value ?? "-"))}</div>
+        <div class="cp-stat-hint">${escapeHtml(module.name || module.provider || "Integracion")}</div>
+      </article>
+    `);
+  }).join("");
+  const integrationAlerts = integrationModules.flatMap((module) => {
+    const items = Array.isArray(module?.alerts) ? module.alerts : [];
+    return items.map((text) => `
+      <li class="cp-alert-line warning">
+        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
+        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(text)}</span>
+      </li>
+    `);
+  }).join("");
+  const integrationErrors = integrationModules
+    .filter((module) => String(module?.error || "").trim())
+    .map((module) => `
+      <li class="cp-alert-line danger">
+        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
+        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(String(module.error || ""))}</span>
+      </li>
+    `).join("");
+  const integrationTables = integrationModules
+    .filter((module) => module?.table && Array.isArray(module.table.columns) && Array.isArray(module.table.rows) && module.table.rows.length)
+    .map((module) => {
+      const columns = module.table.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
+      const rowsHtml = module.table.rows.map((row) => `
+        <tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>
+      `).join("");
+      return `
+        <article class="cp-card cp-span-3 cp-overview-block">
+          <div class="cp-card-head">
+            <h3>${escapeHtml(module.table.title || module.name || "Tabla externa")}</h3>
+            <span>${escapeHtml(module.name || module.provider || "Integracion")}</span>
+          </div>
+          <div class="cp-table-wrap">
+            <table class="cp-table">
+              <thead><tr>${columns}</tr></thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        </article>
+      `;
+    }).join("");
+  const integrationsSection = (integrationCards || integrationAlerts || integrationErrors || integrationTables)
+    ? `
+      <article class="cp-card cp-span-3 cp-overview-heading-card">
+        <div class="cp-card-head">
+          <h3>Integraciones conectadas</h3>
+          <span>${integrationModules.length} modulos</span>
+        </div>
+      </article>
+
+      ${integrationCards ? `<section class="cp-stats cp-span-3 cp-performance-stats-grid">${integrationCards}</section>` : ""}
+
+      ${(integrationAlerts || integrationErrors) ? `
+        <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
+          <div class="cp-card-head">
+            <h3>Alertas externas</h3>
+            <span>integraciones</span>
+          </div>
+          <ul class="cp-alert-lines">
+            ${integrationAlerts || ""}
+            ${integrationErrors || ""}
+          </ul>
+        </article>
+      ` : ""}
+
+      ${integrationTables}
+    `
+    : "";
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
       <article class="cp-card cp-span-3 cp-overview-heading-card">
@@ -3246,6 +3565,8 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
           ${alertRows}
         </ul>
       </article>
+
+      ${integrationsSection}
     </section>
   `;
 
@@ -5373,4 +5694,3 @@ app.get("/__routes", (req, res) => {
 });
 
 app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
-

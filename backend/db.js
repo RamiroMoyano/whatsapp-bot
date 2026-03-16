@@ -28,6 +28,8 @@ const ROW_KEY_MAP = {
   updatedat: "updatedAt",
   catalogjson: "catalogJson",
   rulesjson: "rulesJson",
+  configjson: "configJson",
+  secretsjson: "secretsJson",
   cartjson: "cartJson",
   datajson: "dataJson",
   lastorderid: "lastOrderId",
@@ -127,6 +129,18 @@ CREATE TABLE IF NOT EXISTS companies (
   createdAt TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS company_integrations (
+  id TEXT PRIMARY KEY,
+  companyId TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  configJson TEXT NOT NULL DEFAULT '{}',
+  secretsJson TEXT NOT NULL DEFAULT '{}',
+  createdAt TIMESTAMPTZ,
+  updatedAt TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   fromNumber TEXT PRIMARY KEY,
   state TEXT,
@@ -169,6 +183,11 @@ CREATE TABLE IF NOT EXISTS orders (
     CREATE INDEX IF NOT EXISTS idx_ai_messages_from_created ON ai_messages(fromNumber, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_messages_order_created ON ai_messages(orderId, createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_messages_company_order_created ON ai_messages(companyId, orderId, createdAt DESC);
+  `);
+
+  await db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_company_integrations_company ON company_integrations(companyId);
+    CREATE INDEX IF NOT EXISTS idx_company_integrations_company_enabled ON company_integrations(companyId, enabled);
   `);
 
   await db.exec(`
