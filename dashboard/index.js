@@ -21,6 +21,7 @@ app.get("/c/pedidos", (req, res) => res.redirect("/panel/pedidos"));
 app.get("/c/pedidos/export", (req, res) => res.redirect("/panel/pedidos/export"));
 app.get("/c/soporte", (req, res) => res.redirect("/panel/soporte"));
 app.get("/c/conversaciones", (req, res) => res.redirect("/panel/conversaciones"));
+app.get("/c/integraciones", (req, res) => res.redirect("/panel/integraciones"));
 app.get("/c/suscripcion", (req, res) => res.redirect("/panel/suscripcion"));
 app.get("/c/cuenta", (req, res) => res.redirect("/panel/cuenta"));
 
@@ -3197,7 +3198,7 @@ function buildPriceChart(values) {
   `;
 }
 
-function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess }) {
+function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess, showIntegrationsNav = false }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
   const supportUnread = getClientUnreadNotificationCount(company);
   const nav = [
@@ -3206,6 +3207,9 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
     { key: "pedidos", label: "Pedidos", href: "/panel/pedidos" },
     { key: "conversaciones", label: "Conversaciones", href: "/panel/conversaciones" },
   ];
+  if (showIntegrationsNav) {
+    nav.push({ key: "integraciones", label: "Integraciones", href: "/panel/integraciones" });
+  }
 
   const navHtml = nav.map((item) => {
     const allowed = canAccessClientSection(access, item.key);
@@ -3290,7 +3294,7 @@ function getDashboardAccessForCompany(company) {
 function canAccessClientSection(dashboardAccess, sectionKey) {
   if (!dashboardAccess?.enabled) return false;
   if (dashboardAccess.mode !== "limited") return true;
-  return ["catalogo", "suscripcion", "cuenta", "soporte", "conversaciones"].includes(sectionKey);
+  return ["catalogo", "suscripcion", "cuenta", "soporte", "conversaciones", "integraciones"].includes(sectionKey);
 }
 
 function renderClientAccessDeniedPage({ company, sectionKey, dashboardAccess }) {
@@ -3299,6 +3303,7 @@ function renderClientAccessDeniedPage({ company, sectionKey, dashboardAccess }) 
     pedidos: "Pedidos",
     soporte: "Soporte",
     conversaciones: "Conversaciones",
+    integraciones: "Integraciones",
     catalogo: "Catalogo",
     suscripcion: "Suscripcion",
     cuenta: "Cuenta",
@@ -3323,7 +3328,127 @@ function renderClientAccessDeniedPage({ company, sectionKey, dashboardAccess }) 
     subtitle: `${company?.name || company?.id || "Empresa"} - permisos del dashboard`,
     bodyHtml,
     dashboardAccess,
+    showIntegrationsNav: !!company?.__hasClientIntegrations,
   });
+}
+
+async function loadClientIntegrationFlag(req, res, next) {
+  const companyId = String(req.company?.id || "").trim();
+  req.clientHasIntegrations = false;
+  req.company.__hasClientIntegrations = false;
+  if (!companyId) return next();
+  try {
+    const payload = await api(`/api/companies/${encodeURIComponent(companyId)}/integrations`);
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const hasEnabled = items.some((item) => item && item.enabled !== false);
+    req.clientHasIntegrations = hasEnabled;
+    req.company.__hasClientIntegrations = hasEnabled;
+  } catch {
+    req.clientHasIntegrations = false;
+    req.company.__hasClientIntegrations = false;
+  }
+  return next();
+}
+
+async function fetchClientIntegrationModules(companyId) {
+  try {
+    const integrationRender = await api(`/api/companies/${encodeURIComponent(companyId)}/integrations/render`);
+    return Array.isArray(integrationRender?.modules) ? integrationRender.modules : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderClientIntegrationModulesSection(integrationModules) {
+  const integrationCards = integrationModules.flatMap((module) => {
+    const cards = Array.isArray(module?.cards) ? module.cards : [];
+    return cards.map((card) => `
+      <article class="cp-stat cp-performance-stat ${normalizeIntegrationToneClass(card.tone)}">
+        <div class="cp-stat-label">${escapeHtml(card.title || "Indicador")}</div>
+        <div class="cp-stat-value">${escapeHtml(String(card.value ?? "-"))}</div>
+        <div class="cp-stat-hint">${escapeHtml(module.name || module.provider || "Integracion")}</div>
+      </article>
+    `);
+  }).join("");
+  const integrationAlerts = integrationModules.flatMap((module) => {
+    const items = Array.isArray(module?.alerts) ? module.alerts : [];
+    return items.map((text) => `
+      <li class="cp-alert-line warning">
+        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
+        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(text)}</span>
+      </li>
+    `);
+  }).join("");
+  const integrationErrors = integrationModules
+    .filter((module) => String(module?.error || "").trim())
+    .map((module) => `
+      <li class="cp-alert-line danger">
+        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
+        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(String(module.error || ""))}</span>
+      </li>
+    `).join("");
+  const integrationTables = integrationModules
+    .filter((module) => module?.table && Array.isArray(module.table.columns) && Array.isArray(module.table.rows) && module.table.rows.length)
+    .map((module) => {
+      const columns = module.table.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
+      const rowsHtml = module.table.rows.map((row) => `
+        <tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>
+      `).join("");
+      return `
+        <article class="cp-card cp-span-3 cp-overview-block">
+          <div class="cp-card-head">
+            <h3>${escapeHtml(module.table.title || module.name || "Tabla externa")}</h3>
+            <span>${escapeHtml(module.name || module.provider || "Integracion")}</span>
+          </div>
+          <div class="cp-table-wrap">
+            <table class="cp-table">
+              <thead><tr>${columns}</tr></thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        </article>
+      `;
+    }).join("");
+  if (!(integrationCards || integrationAlerts || integrationErrors || integrationTables)) {
+    return `
+      <section class="cp-grid">
+        <article class="cp-card cp-span-3 cp-overview-block">
+          <div class="cp-card-head">
+            <h3>Integraciones</h3>
+            <span>sin modulos activos</span>
+          </div>
+          <p class="cp-note">No hay integraciones activas o todavia no devolvieron datos para mostrar en este dashboard.</p>
+        </article>
+      </section>
+    `;
+  }
+  return `
+    <section class="cp-grid cp-overview-grid">
+      <article class="cp-card cp-span-3 cp-overview-heading-card">
+        <div class="cp-card-head">
+          <h3>Integraciones conectadas</h3>
+          <span>${integrationModules.length} modulos</span>
+        </div>
+      </article>
+
+      ${integrationCards ? `<section class="cp-stats cp-span-3 cp-performance-stats-grid">${integrationCards}</section>` : ""}
+
+      ${(integrationAlerts || integrationErrors) ? `
+        <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
+          <div class="cp-card-head">
+            <h3>Alertas externas</h3>
+            <span>integraciones</span>
+          </div>
+          <ul class="cp-alert-lines">
+            ${integrationAlerts || ""}
+            ${integrationErrors || ""}
+          </ul>
+        </article>
+      ` : ""}
+
+      ${integrationTables}
+    </section>
+  `;
 }
 
 function requireClientSectionAccess(sectionKey) {
@@ -3384,7 +3509,7 @@ app.get("/c/forgot", (req, res) => res.redirect("/panel/forgot"));
 app.post("/panel/login", handleClientLogin);
 app.post("/c/login", handleClientLogin);
 
-app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async (req, res) => {
+app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const now = new Date();
@@ -3416,13 +3541,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
   const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
   const activitySeries = buildBotActivitySeries(weeklyOrders, 7);
   const alerts = buildOverviewAlerts({ state, payment, monthlyOrders });
-  let integrationModules = [];
-  try {
-    const integrationRender = await api(`/api/companies/${encodeURIComponent(company.id)}/integrations/render`);
-    integrationModules = Array.isArray(integrationRender?.modules) ? integrationRender.modules : [];
-  } catch {
-    integrationModules = [];
-  }
   const activityRows = activitySeries.buckets.map((bucket) => `
     <div class="cp-activity-row">
       <span class="cp-activity-day">${escapeHtml(bucket.label)}</span>
@@ -3438,82 +3556,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
       <span>${escapeHtml(alert.text)}</span>
     </li>
   `).join("");
-  const integrationCards = integrationModules.flatMap((module) => {
-    const cards = Array.isArray(module?.cards) ? module.cards : [];
-    return cards.map((card) => `
-      <article class="cp-stat cp-performance-stat ${normalizeIntegrationToneClass(card.tone)}">
-        <div class="cp-stat-label">${escapeHtml(card.title || "Indicador")}</div>
-        <div class="cp-stat-value">${escapeHtml(String(card.value ?? "-"))}</div>
-        <div class="cp-stat-hint">${escapeHtml(module.name || module.provider || "Integracion")}</div>
-      </article>
-    `);
-  }).join("");
-  const integrationAlerts = integrationModules.flatMap((module) => {
-    const items = Array.isArray(module?.alerts) ? module.alerts : [];
-    return items.map((text) => `
-      <li class="cp-alert-line warning">
-        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
-        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(text)}</span>
-      </li>
-    `);
-  }).join("");
-  const integrationErrors = integrationModules
-    .filter((module) => String(module?.error || "").trim())
-    .map((module) => `
-      <li class="cp-alert-line danger">
-        <span class="cp-alert-line-icon" aria-hidden="true">!</span>
-        <span><b>${escapeHtml(module.name || module.provider || "Integracion")}:</b> ${escapeHtml(String(module.error || ""))}</span>
-      </li>
-    `).join("");
-  const integrationTables = integrationModules
-    .filter((module) => module?.table && Array.isArray(module.table.columns) && Array.isArray(module.table.rows) && module.table.rows.length)
-    .map((module) => {
-      const columns = module.table.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
-      const rowsHtml = module.table.rows.map((row) => `
-        <tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>
-      `).join("");
-      return `
-        <article class="cp-card cp-span-3 cp-overview-block">
-          <div class="cp-card-head">
-            <h3>${escapeHtml(module.table.title || module.name || "Tabla externa")}</h3>
-            <span>${escapeHtml(module.name || module.provider || "Integracion")}</span>
-          </div>
-          <div class="cp-table-wrap">
-            <table class="cp-table">
-              <thead><tr>${columns}</tr></thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-          </div>
-        </article>
-      `;
-    }).join("");
-  const integrationsSection = (integrationCards || integrationAlerts || integrationErrors || integrationTables)
-    ? `
-      <article class="cp-card cp-span-3 cp-overview-heading-card">
-        <div class="cp-card-head">
-          <h3>Integraciones conectadas</h3>
-          <span>${integrationModules.length} modulos</span>
-        </div>
-      </article>
-
-      ${integrationCards ? `<section class="cp-stats cp-span-3 cp-performance-stats-grid">${integrationCards}</section>` : ""}
-
-      ${(integrationAlerts || integrationErrors) ? `
-        <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
-          <div class="cp-card-head">
-            <h3>Alertas externas</h3>
-            <span>integraciones</span>
-          </div>
-          <ul class="cp-alert-lines">
-            ${integrationAlerts || ""}
-            ${integrationErrors || ""}
-          </ul>
-        </article>
-      ` : ""}
-
-      ${integrationTables}
-    `
-    : "";
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
       <article class="cp-card cp-span-3 cp-overview-heading-card">
@@ -3565,8 +3607,6 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
           ${alertRows}
         </ul>
       </article>
-
-      ${integrationsSection}
     </section>
   `;
 
@@ -3576,10 +3616,11 @@ app.get("/panel", requireClientAuth, requireClientSectionAccess("inicio"), async
     title: "Overview",
     subtitle: `${company.name || company.id} - resumen operativo`,
     bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
   }));
 });
 
-app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
+app.get("/panel/catalogo", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("catalogo"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const rules = parseJsonSafe(company.rulesJson || "{}", {});
@@ -3921,6 +3962,7 @@ app.get("/panel/catalogo", requireClientAuth, requireClientSectionAccess("catalo
     title: "Catalogo",
     subtitle: `${company.name || company.id} - gestion de productos`,
     bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
   }));
 });
 
@@ -4314,7 +4356,7 @@ async function buildClientConversationSummary(company, options = {}) {
   return summaryRows;
 }
 
-app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   let orders = [];
   let fetchError = "";
@@ -4726,6 +4768,7 @@ app.get("/panel/pedidos", requireClientAuth, requireClientSectionAccess("pedidos
     title: "Pedidos",
     subtitle: `${company.name || company.id} - seguimiento operativo`,
     bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
   }));
 });
 
@@ -4745,7 +4788,7 @@ app.get("/panel/pedidos/:id/detail", requireClientAuth, requireClientSectionAcce
   }
 });
 
-app.get("/panel/pedidos/ver/:id", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
+app.get("/panel/pedidos/ver/:id", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
   const orderId = String(req.params.id || "").trim();
   if (!orderId) return res.redirect("/panel/pedidos");
@@ -4832,6 +4875,7 @@ app.get("/panel/pedidos/ver/:id", requireClientAuth, requireClientSectionAccess(
       title: `Pedido ${order.id || orderId}`,
       subtitle: `${company.name || company.id} - detalle operativo`,
       bodyHtml,
+      showIntegrationsNav: req.clientHasIntegrations,
     }));
   } catch (e) {
     const message = String(e?.message || e);
@@ -4848,6 +4892,7 @@ app.get("/panel/pedidos/ver/:id", requireClientAuth, requireClientSectionAccess(
           </article>
         </section>
       `,
+      showIntegrationsNav: req.clientHasIntegrations,
     }));
   }
 });
@@ -4950,7 +4995,7 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
   }
 });
 
-app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte"), async (req, res) => {
+app.get("/panel/soporte", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("soporte"), async (req, res) => {
   const company = req.company;
   const messageSent = String(req.query.messageSent || "") === "1";
   const supportError = String(req.query.supportError || req.query.error || "").trim();
@@ -5054,13 +5099,14 @@ app.get("/panel/soporte", requireClientAuth, requireClientSectionAccess("soporte
       title: "Soporte",
       subtitle: `${currentCompany.name || currentCompany.id} - soporte con admin`,
       bodyHtml,
+      showIntegrationsNav: req.clientHasIntegrations,
     }));
   } catch (e) {
     return res.status(500).send(`No se pudo cargar soporte: ${escapeHtml(e?.message || e)}`);
   }
 });
 
-app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("conversaciones"), async (req, res) => {
+app.get("/panel/conversaciones", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("conversaciones"), async (req, res) => {
   const company = req.company;
   let rows = [];
   let fetchError = "";
@@ -5140,6 +5186,21 @@ app.get("/panel/conversaciones", requireClientAuth, requireClientSectionAccess("
     title: "Conversaciones",
     subtitle: `${company.name || company.id} - resumen de interacciones con clientes`,
     bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
+  }));
+});
+
+app.get("/panel/integraciones", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("integraciones"), async (req, res) => {
+  const company = req.company;
+  const integrationModules = await fetchClientIntegrationModules(company.id);
+  const bodyHtml = renderClientIntegrationModulesSection(integrationModules);
+  return res.type("text/html").send(renderClientPage({
+    company,
+    active: "integraciones",
+    title: "Integraciones",
+    subtitle: `${company.name || company.id} - paneles y datos externos`,
+    bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
   }));
 });
 
@@ -5258,7 +5319,7 @@ app.get("/panel/pedidos/export", requireClientAuth, requireClientSectionAccess("
   }
 });
 
-app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("suscripcion"), async (req, res) => {
+app.get("/panel/suscripcion", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("suscripcion"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
   const requested = String(req.query.requested || "") === "1";
@@ -5333,6 +5394,7 @@ app.get("/panel/suscripcion", requireClientAuth, requireClientSectionAccess("sus
     title: "Suscripcion",
     subtitle: `${company.name || company.id} - estado del plan`,
     bodyHtml,
+    showIntegrationsNav: req.clientHasIntegrations,
   }));
 });
 
@@ -5386,7 +5448,7 @@ app.post("/panel/suscripcion/action", requireClientAuth, requireClientSectionAcc
   }
 });
 
-app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta"), async (req, res) => {
+app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("cuenta"), async (req, res) => {
   const company = req.company;
   const saved = String(req.query.saved || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
@@ -5562,6 +5624,7 @@ app.get("/panel/cuenta", requireClientAuth, requireClientSectionAccess("cuenta")
       title: "Cuenta",
       subtitle: `${currentCompany.name || currentCompany.id} - datos personales y suscripcion`,
       bodyHtml,
+      showIntegrationsNav: req.clientHasIntegrations,
     }));
   } catch (e) {
     return res.status(500).send(`No se pudo cargar cuenta: ${escapeHtml(e?.message || e)}`);

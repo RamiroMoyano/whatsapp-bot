@@ -1928,6 +1928,10 @@ body.client-ui::after {
   content: "\1F4AC";
 }
 
+.cp-nav-link:nth-child(5) span::before {
+  content: "\1F9E9";
+}
+
 .cp-nav-link span::before {
   font-size: 15px;
   line-height: 1;
