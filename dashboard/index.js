@@ -33,6 +33,13 @@ const API_BASE_URL = (process.env.API_BASE_URL || "").trim();
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
 const BOT_CATALOG_PROVIDER_ID = (process.env.BOT_CATALOG_PROVIDER_ID || "babystepsbots").trim().toLowerCase();
 const ADMIN_INBOX_MAX_ITEMS = 300;
+const API_RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const API_MAX_ATTEMPTS = 4;
+const API_REQUEST_TIMEOUT_MS = 12000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function signToken(token) {
   const h = crypto.createHmac("sha256", DASH_COOKIE_SECRET || "dev");
@@ -102,17 +109,67 @@ async function requireClientAuth(req, res, next) {
 
 async function api(pathname, { method = "GET", body } = {}) {
   if (!API_BASE_URL || !API_TOKEN) throw new Error("API_BASE_URL/API_TOKEN faltan en dashboard");
-  const r = await fetch(`${API_BASE_URL}${pathname}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${API_TOKEN}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || `API error ${r.status}`);
-  return data;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= API_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+
+    try {
+      const r = await fetch(`${API_BASE_URL}${pathname}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${API_TOKEN}`,
+          "Cache-Control": "no-store",
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      const raw = await r.text();
+      let data = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = { raw };
+        }
+      }
+
+      if (!r.ok) {
+        const message = data?.error || data?.message || `API error ${r.status}`;
+        const err = new Error(message);
+        err.status = r.status;
+        lastError = err;
+
+        if (API_RETRYABLE_STATUS.has(r.status) && attempt < API_MAX_ATTEMPTS) {
+          await sleep(350 * attempt + 450 * attempt * attempt);
+          continue;
+        }
+        throw err;
+      }
+
+      return data;
+    } catch (error) {
+      clearTimeout(timeout);
+
+      const isAbort = error?.name === "AbortError";
+      const status = Number(error?.status || 0);
+      const retryable = isAbort || API_RETRYABLE_STATUS.has(status);
+      lastError = error;
+
+      if (retryable && attempt < API_MAX_ATTEMPTS) {
+        await sleep(350 * attempt + 450 * attempt * attempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error("No se pudo conectar con la API");
 }
 
 async function getBotCatalogProviderCompany(currentCompany) {
