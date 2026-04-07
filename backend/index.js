@@ -69,7 +69,36 @@ async function sendTelegram(text) {
 }
 
 // ================= DB INIT =================
-await initDb();
+const DB_STARTUP_TIMEOUT_MS = Number(process.env.DB_STARTUP_TIMEOUT_MS || 15000);
+let dbInitReady = false;
+let dbInitError = null;
+
+async function withStartupTimeout(promise, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${DB_STARTUP_TIMEOUT_MS}ms`)), DB_STARTUP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function initializeDatabase() {
+  try {
+    await withStartupTimeout(initDb(), "initDb");
+    dbInitReady = true;
+    dbInitError = null;
+    console.log("DB init OK");
+  } catch (e) {
+    dbInitReady = false;
+    dbInitError = e;
+    console.error("DB init failed:", e?.message || e);
+  }
+}
+
+const dbInitPromise = initializeDatabase();
 
 // ================= OPENAI =================
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
@@ -2144,7 +2173,12 @@ async function backfillOrdersWorkflowColumns() {
   }
 }
 
-await backfillOrdersWorkflowColumns();
+dbInitPromise
+  .then(async () => {
+    if (!dbInitReady) return;
+    await backfillOrdersWorkflowColumns();
+  })
+  .catch((e) => console.error("Workflow backfill startup error:", e?.message || e));
 
 // ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÃ ==================
 // ===== API: Companies =====
@@ -3649,9 +3683,20 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 app.get("/health/db", async (_, res) => {
   try {
     const row = await db.prepare("SELECT 1 as ok").get();
-    res.json({ ok: true, db: row?.ok === 1 ? "up" : "unknown" });
+    res.json({
+      ok: true,
+      db: row?.ok === 1 ? "up" : "unknown",
+      initReady: dbInitReady,
+      initError: dbInitError ? String(dbInitError?.message || dbInitError) : null,
+    });
   } catch (e) {
-    res.status(503).json({ ok: false, db: "down", error: e?.message || String(e) });
+    res.status(503).json({
+      ok: false,
+      db: "down",
+      initReady: dbInitReady,
+      initError: dbInitError ? String(dbInitError?.message || dbInitError) : null,
+      error: e?.message || String(e),
+    });
   }
 });
 
