@@ -23,6 +23,7 @@ const pool = new Pool({
   query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS || 10000),
   statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 10000),
 });
+const DB_QUERY_TIMEOUT_MS = Number(process.env.DB_QUERY_TIMEOUT_MS || 12000);
 
 const ROW_KEY_MAP = {
   fromnumber: "fromNumber",
@@ -71,7 +72,17 @@ function toPgSql(sql) {
 
 async function query(sql, params = []) {
   const finalSql = toPgSql(sql);
-  return pool.query(finalSql, params);
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Postgres query timeout after ${DB_QUERY_TIMEOUT_MS}ms`));
+    }, DB_QUERY_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([pool.query(finalSql, params), timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export const db = {
