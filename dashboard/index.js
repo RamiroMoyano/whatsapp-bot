@@ -266,7 +266,7 @@ function getClientUnreadNotificationCount(company) {
 
 async function getAdminUnreadNotificationsTotal() {
   try {
-    const companies = await api("/api/companies");
+    const companies = await api("/api/admin-company-list");
     const list = Array.isArray(companies) ? companies : [];
     return list.reduce((acc, company) => {
       const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
@@ -706,7 +706,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const q = String(req.query.q || "").trim().toLowerCase();
     const viewRaw = String(req.query.view || "all").trim().toLowerCase();
     const view = ["all", "full", "limited", "inactive"].includes(viewRaw) ? viewRaw : "all";
-    const companies = await api("/api/companies");
+    const companies = await api("/api/admin-company-list");
     const flashCompany = String(req.query.company || "").trim();
     const dashboardSaved = String(req.query.dashboardSaved || "") === "1";
     const deleted = String(req.query.deleted || "") === "1";
@@ -1805,7 +1805,7 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
 // ================= ASIGNAR CLIENTES =================
 app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
   try {
-    const companies = await api("/api/companies");
+    const companies = await api("/api/admin-company-list");
     const mappings = await api("/api/assignments");
 
     const options = companies.map((c) =>
@@ -1908,7 +1908,7 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
     const statusFilter = ["all", "open", "resolved"].includes(statusFilterRaw) ? statusFilterRaw : "all";
     const readFilter = ["all", "unread", "read"].includes(readFilterRaw) ? readFilterRaw : "all";
 
-    const companies = await api("/api/companies");
+    const companies = await api("/api/admin-company-list");
     const companyList = Array.isArray(companies) ? companies : [];
     const messages = [];
 
@@ -2197,7 +2197,7 @@ app.post("/admin/messages/reply", requireDashboardAuth, async (req, res) => {
 
 app.post("/admin/messages/reset", requireDashboardAuth, async (req, res) => {
   try {
-    const companies = await api("/api/companies");
+    const companies = await api("/api/admin-company-list");
     const companyList = Array.isArray(companies) ? companies : [];
     let updated = 0;
 
@@ -2412,7 +2412,7 @@ async function handleClientLogin(req, res) {
     const pass = (req.body.pass || "").trim();
     if (!companyInput || !pass) return res.status(400).send("Faltan datos");
 
-    const allCompanies = await api("/api/companies");
+    const allCompanies = await api("/api/admin-company-list");
     const companies = Array.isArray(allCompanies) ? allCompanies : [];
     const lookup = companyInput.toLowerCase();
     const matched = companies.find((c) =>

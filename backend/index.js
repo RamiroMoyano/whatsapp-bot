@@ -2148,12 +2148,23 @@ await backfillOrdersWorkflowColumns();
 
 // ================== FIN PARTE 1: PEGAR PARTE 2 DESDE AQUÃ ==================
 // ===== API: Companies =====
+app.get("/api/admin-company-list", requireApiAuth, async (req, res) => {
+  try {
+    const rows = await db.prepare(`SELECT id,name,createdAt,prompt,catalogJson,rulesJson FROM companies ORDER BY id`).all();
+    res.set("Cache-Control", "no-store");
+    res.json(rows);
+  } catch (e) {
+    res.status(503).json({ error: e?.message || String(e) });
+  }
+});
+
 app.get("/api/companies", requireApiAuth, async (req, res) => {
   try {
     const rows = await db.prepare(`SELECT id,name,createdAt,prompt,catalogJson,rulesJson FROM companies ORDER BY id`).all();
+    res.set("Cache-Control", "no-store");
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(503).json({ error: e?.message || String(e) });
   }
 });
 
