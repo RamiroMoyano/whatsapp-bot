@@ -3635,8 +3635,18 @@ function respond(res, text) {
 // ================= HEALTH =================
 app.get("/", (_, res) => res.send("OK"));
 app.get("/health", (_, res) => res.json({ ok: true }));
+app.get("/health/db", async (_, res) => {
+  try {
+    const row = await db.prepare("SELECT 1 as ok").get();
+    res.json({ ok: true, db: row?.ok === 1 ? "up" : "unknown" });
+  } catch (e) {
+    res.status(503).json({ ok: false, db: "down", error: e?.message || String(e) });
+  }
+});
 
-app.listen(process.env.PORT || 3000, () => console.log("ðŸš€ Bot corriendo"));
+const PORT = Number(process.env.PORT || 3000);
+
+app.listen(PORT, () => console.log(`Bot corriendo en puerto ${PORT}`));
 
 
 
