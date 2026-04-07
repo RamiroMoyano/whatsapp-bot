@@ -706,13 +706,21 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const q = String(req.query.q || "").trim().toLowerCase();
     const viewRaw = String(req.query.view || "all").trim().toLowerCase();
     const view = ["all", "full", "limited", "inactive"].includes(viewRaw) ? viewRaw : "all";
-    const companies = await api("/api/admin-company-list");
+    let companies = [];
+    let companiesLoadError = "";
+    try {
+      const payload = await api("/api/admin-company-list");
+      companies = Array.isArray(payload) ? payload : [];
+    } catch (e) {
+      companiesLoadError = e?.message || String(e);
+    }
     const flashCompany = String(req.query.company || "").trim();
     const dashboardSaved = String(req.query.dashboardSaved || "") === "1";
     const deleted = String(req.query.deleted || "") === "1";
     const dashboardError = String(req.query.dashboardError || "").trim();
     const deleteError = String(req.query.deleteError || "").trim();
     const flashHtml = [
+      companiesLoadError ? `<div class="card"><b>Backend temporalmente lento:</b> ${escapeHtml(companiesLoadError)}<br><span class="muted">El panel admin sigue disponible. Reintentá con el botón Buscar o recargá en unos segundos.</span></div>` : "",
       dashboardSaved ? `<div class="card"><b>Dashboard actualizado:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
       deleted ? `<div class="card"><b>Empresa eliminada:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
       dashboardError ? `<div class="card"><b>Error guardando dashboard:</b> ${escapeHtml(dashboardError)}</div>` : "",
@@ -5832,4 +5840,6 @@ app.get("/__routes", (req, res) => {
   res.json(info);
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("Dashboard running"));
+const PORT = Number(process.env.PORT || 3001);
+
+app.listen(PORT, () => console.log(`Dashboard running on port ${PORT}`));
