@@ -36,6 +36,11 @@ const ADMIN_INBOX_MAX_ITEMS = 300;
 const API_RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 const API_MAX_ATTEMPTS = 4;
 const API_REQUEST_TIMEOUT_MS = 12000;
+const ADMIN_COMPANIES_CACHE_TTL_MS = Number(process.env.ADMIN_COMPANIES_CACHE_TTL_MS || 180000);
+let adminCompaniesCache = {
+  items: [],
+  updatedAt: 0,
+};
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -266,8 +271,7 @@ function getClientUnreadNotificationCount(company) {
 
 async function getAdminUnreadNotificationsTotal() {
   try {
-    const companies = await api("/api/admin-company-list");
-    const list = Array.isArray(companies) ? companies : [];
+    const { items: list } = await loadAdminCompanies({ allowStale: true, preferCache: true });
     return list.reduce((acc, company) => {
       const rulesRaw = parseJsonSafe(company?.rulesJson || "{}", {});
       const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
@@ -276,6 +280,60 @@ async function getAdminUnreadNotificationsTotal() {
     }, 0);
   } catch {
     return 0;
+  }
+}
+
+function getAdminCompaniesCacheAgeMs() {
+  if (!adminCompaniesCache.updatedAt) return Number.POSITIVE_INFINITY;
+  return Date.now() - adminCompaniesCache.updatedAt;
+}
+
+function hasFreshAdminCompaniesCache() {
+  return adminCompaniesCache.items.length > 0 && getAdminCompaniesCacheAgeMs() <= ADMIN_COMPANIES_CACHE_TTL_MS;
+}
+
+async function loadAdminCompanies({ allowStale = true, preferCache = false } = {}) {
+  if (preferCache && hasFreshAdminCompaniesCache()) {
+    return {
+      items: adminCompaniesCache.items,
+      stale: false,
+      cached: true,
+      updatedAt: adminCompaniesCache.updatedAt,
+      error: null,
+    };
+  }
+
+  try {
+    const payload = await api("/api/admin-company-list");
+    const items = Array.isArray(payload) ? payload : [];
+    adminCompaniesCache = {
+      items,
+      updatedAt: Date.now(),
+    };
+    return {
+      items,
+      stale: false,
+      cached: false,
+      updatedAt: adminCompaniesCache.updatedAt,
+      error: null,
+    };
+  } catch (error) {
+    if (allowStale && adminCompaniesCache.items.length > 0) {
+      return {
+        items: adminCompaniesCache.items,
+        stale: true,
+        cached: true,
+        updatedAt: adminCompaniesCache.updatedAt,
+        error,
+      };
+    }
+    return {
+      items: [],
+      stale: true,
+      cached: false,
+      updatedAt: adminCompaniesCache.updatedAt,
+      error,
+    };
   }
 }
 
@@ -706,21 +764,23 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const q = String(req.query.q || "").trim().toLowerCase();
     const viewRaw = String(req.query.view || "all").trim().toLowerCase();
     const view = ["all", "full", "limited", "inactive"].includes(viewRaw) ? viewRaw : "all";
-    let companies = [];
-    let companiesLoadError = "";
-    try {
-      const payload = await api("/api/admin-company-list");
-      companies = Array.isArray(payload) ? payload : [];
-    } catch (e) {
-      companiesLoadError = e?.message || String(e);
-    }
+    const companiesState = await loadAdminCompanies({ allowStale: true, preferCache: true });
+    const companies = Array.isArray(companiesState.items) ? companiesState.items : [];
     const flashCompany = String(req.query.company || "").trim();
     const dashboardSaved = String(req.query.dashboardSaved || "") === "1";
     const deleted = String(req.query.deleted || "") === "1";
     const dashboardError = String(req.query.dashboardError || "").trim();
     const deleteError = String(req.query.deleteError || "").trim();
+    const cacheSyncLabel = companiesState.updatedAt
+      ? new Date(companiesState.updatedAt).toLocaleString("es-AR")
+      : "";
     const flashHtml = [
-      companiesLoadError ? `<div class="card"><b>Backend temporalmente lento:</b> ${escapeHtml(companiesLoadError)}<br><span class="muted">El panel admin sigue disponible. Reintentá con el botón Buscar o recargá en unos segundos.</span></div>` : "",
+      companiesState.error && companiesState.cached
+        ? `<div class="card"><b>Usando datos en cache:</b> el backend respondio lento, pero mantenemos el panel operativo.<br><span class="muted">Ultima sincronizacion: ${escapeHtml(cacheSyncLabel || "hace instantes")}.</span></div>`
+        : "",
+      companiesState.error && !companiesState.cached
+        ? `<div class="card"><b>Sincronizacion pendiente:</b> no pudimos refrescar el listado de empresas todavia.<br><span class="muted">El admin sigue accesible y puedes reintentar en unos segundos.</span></div>`
+        : "",
       dashboardSaved ? `<div class="card"><b>Dashboard actualizado:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
       deleted ? `<div class="card"><b>Empresa eliminada:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
       dashboardError ? `<div class="card"><b>Error guardando dashboard:</b> ${escapeHtml(dashboardError)}</div>` : "",
@@ -1867,7 +1927,7 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
 // ================= ASIGNAR CLIENTES =================
 app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
   try {
-    const companies = await api("/api/admin-company-list");
+    const { items: companies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
     const mappings = await api("/api/assignments");
 
     const options = companies.map((c) =>
@@ -1970,7 +2030,7 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
     const statusFilter = ["all", "open", "resolved"].includes(statusFilterRaw) ? statusFilterRaw : "all";
     const readFilter = ["all", "unread", "read"].includes(readFilterRaw) ? readFilterRaw : "all";
 
-    const companies = await api("/api/admin-company-list");
+    const { items: companies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
     const companyList = Array.isArray(companies) ? companies : [];
     const messages = [];
 
@@ -2259,7 +2319,7 @@ app.post("/admin/messages/reply", requireDashboardAuth, async (req, res) => {
 
 app.post("/admin/messages/reset", requireDashboardAuth, async (req, res) => {
   try {
-    const companies = await api("/api/admin-company-list");
+    const { items: companies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
     const companyList = Array.isArray(companies) ? companies : [];
     let updated = 0;
 
@@ -2474,7 +2534,7 @@ async function handleClientLogin(req, res) {
     const pass = (req.body.pass || "").trim();
     if (!companyInput || !pass) return res.status(400).send("Faltan datos");
 
-    const allCompanies = await api("/api/admin-company-list");
+    const { items: allCompanies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
     const companies = Array.isArray(allCompanies) ? allCompanies : [];
     const lookup = companyInput.toLowerCase();
     const matched = companies.find((c) =>
@@ -5895,5 +5955,4 @@ app.get("/__routes", (req, res) => {
 });
 
 const PORT = Number(process.env.PORT || 3001);
-
 app.listen(PORT, () => console.log(`Dashboard running on port ${PORT}`));
