@@ -900,24 +900,78 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
 </html>
     `);
   } catch (e) {
-    res.status(500).type("text/html").send(`
+    const fallbackMessage = escapeHtml(String(e?.message || e || "Fallo cargando el panel admin"));
+    res.status(200).type("text/html").send(`
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/dashboard.css" />
-    <title>Error</title>
+    <title>BabySteps - Admin</title>
   </head>
-  <body class="admin-light-ui">
+  <body class="admin-home-page admin-light-ui">
     <div class="container">
-      <div class="card">
-        <h3 style="margin:0 0 10px;">Error cargando /admin</h3>
-        <div class="muted">Esto es lo que esta fallando:</div>
-        <pre style="white-space:pre-wrap; margin-top:10px;">${String(e?.message || e)}</pre>
-        <div style="margin-top:12px;">
-          <a class="btn secondary" href="/admin/logout">Volver al login</a>
+      <div class="admin-header admin-home-header">
+        <div class="brand">
+          <div>
+            <div class="title">🛰️ BabySteps</div>
+            <div class="subtitle">Admin Console</div>
+          </div>
         </div>
+        <div class="admin-header-actions">
+          <a class="btn secondary" href="/admin/logout">🚪 Logout</a>
+        </div>
+      </div>
+
+      <div class="admin-home-shell">
+        <aside class="card admin-side-menu">
+          <h3 style="margin:0">🧭 Menu</h3>
+          <a class="btn primary" href="/admin/company/new">✨ Agregar +</a>
+          <a class="btn secondary" href="/admin/messages">📨 Mensajes</a>
+          <a class="btn secondary" href="/admin/assign">🔗 Asignar clientes</a>
+        </aside>
+
+        <section class="admin-home-main">
+          <div class="card">
+            <h3 style="margin:0 0 10px;">Backend temporalmente no disponible</h3>
+            <div class="muted">El panel admin sigue accesible, pero no pudimos cargar el listado completo de empresas en este momento.</div>
+            <pre style="white-space:pre-wrap; margin-top:10px;">${fallbackMessage}</pre>
+            <div class="actions" style="margin-top:12px;">
+              <a class="btn primary" href="/admin">Reintentar</a>
+              <a class="btn secondary" href="/admin/company/new">Nueva empresa</a>
+              <a class="btn secondary" href="/admin/messages">Mensajes</a>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi">
+              <div class="label">🏢 Empresas</div>
+              <div class="value">-</div>
+              <div class="hint">sin datos por el momento</div>
+            </div>
+            <div class="kpi">
+              <div class="label">🧠 Dashboard completo</div>
+              <div class="value">-</div>
+              <div class="hint">pendiente de carga</div>
+            </div>
+            <div class="kpi">
+              <div class="label">🔒 Dashboard limitado</div>
+              <div class="value">-</div>
+              <div class="hint">pendiente de carga</div>
+            </div>
+            <div class="kpi">
+              <div class="label">⏸️ Dashboard inactivo</div>
+              <div class="value">-</div>
+              <div class="hint">pendiente de carga</div>
+            </div>
+          </div>
+
+          <div class="card" id="admin-company-list">
+            <h3 style="margin:0 0 12px;">Listado</h3>
+            <div class="muted">Todavia no se pudo consultar la API. Este fallback evita que el acceso al admin se bloquee mientras el backend se estabiliza.</div>
+          </div>
+        </section>
       </div>
     </div>
   </body>
