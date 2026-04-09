@@ -20,6 +20,11 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
+const ADMIN_COMPANY_LIST_CACHE_TTL_MS = Number(process.env.ADMIN_COMPANY_LIST_CACHE_TTL_MS || 180000);
+let adminCompanyListCache = {
+  items: [],
+  updatedAt: 0,
+};
 function requireApiAuth(req, res, next) {
   if (!API_TOKEN) return res.status(500).json({ error: "API_TOKEN no configurado" });
   const h = req.headers.authorization || "";
@@ -344,6 +349,72 @@ function parseJsonSafe(raw, fallback) {
     return parsed ?? fallback;
   } catch {
     return fallback;
+  }
+}
+
+function resolveStoredClientPassword(rules, company) {
+  const candidates = [
+    rules?.clientPassword,
+    rules?.clientPass,
+    rules?.password,
+    rules?.pass,
+    rules?.accessPassword,
+    rules?.auth?.clientPassword,
+    company?.clientPassword,
+    company?.password,
+  ];
+  for (const value of candidates) {
+    const normalized = String(value || "").trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function extractDashboardAccessForApi(rules) {
+  const rawEnabled = String(rules?.dashboardEnabled ?? "").trim().toLowerCase();
+  const enabled = rawEnabled === ""
+    ? true
+    : !["0", "false", "off", "disabled", "no"].includes(rawEnabled);
+  const rawMode = String(rules?.dashboardMode || "").trim().toLowerCase();
+  return {
+    enabled,
+    mode: rawMode === "limited" ? "limited" : "full",
+  };
+}
+
+function invalidateAdminCompanyListCache() {
+  adminCompanyListCache = {
+    items: [],
+    updatedAt: 0,
+  };
+}
+
+function hasFreshAdminCompanyListCache() {
+  return adminCompanyListCache.items.length > 0
+    && (Date.now() - adminCompanyListCache.updatedAt) <= ADMIN_COMPANY_LIST_CACHE_TTL_MS;
+}
+
+async function fetchAdminCompanyListCached({ allowStale = true } = {}) {
+  if (hasFreshAdminCompanyListCache()) {
+    return adminCompanyListCache.items;
+  }
+
+  try {
+    const rows = await db.prepare(`
+      SELECT id, name, createdAt, rulesJson
+      FROM companies
+      ORDER BY id
+    `).all();
+    adminCompanyListCache = {
+      items: Array.isArray(rows) ? rows : [],
+      updatedAt: Date.now(),
+    };
+    return adminCompanyListCache.items;
+  } catch (error) {
+    if (allowStale && adminCompanyListCache.items.length > 0) {
+      return adminCompanyListCache.items;
+    }
+    throw error;
   }
 }
 
@@ -2184,7 +2255,7 @@ dbInitPromise
 // ===== API: Companies =====
 app.get("/api/admin-company-list", requireApiAuth, async (req, res) => {
   try {
-    const rows = await db.prepare(`SELECT id,name,createdAt,prompt,catalogJson,rulesJson FROM companies ORDER BY id`).all();
+    const rows = await fetchAdminCompanyListCached({ allowStale: true });
     res.set("Cache-Control", "no-store");
     res.json(rows);
   } catch (e) {
@@ -2231,6 +2302,7 @@ app.post("/api/companies", requireApiAuth, async (req, res) => {
       new Date().toISOString()
     );
 
+    invalidateAdminCompanyListCache();
     res.json({ ok: true, id });
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
@@ -2292,8 +2364,61 @@ app.post("/api/companies/:id/save", requireApiAuth, async (req, res) => {
     id
   );
 
+  invalidateAdminCompanyListCache();
   const syncResult = await syncCompanySessionsAiMode(id, syncedRules, { force: true });
   res.json({ ok: true, aiSync: syncResult });
+});
+
+app.post("/api/client-auth", requireApiAuth, async (req, res) => {
+  try {
+    const companyInput = String(req.body.companyId || req.body.companyInput || "").trim();
+    const password = String(req.body.password || req.body.pass || "").trim();
+    if (!companyInput || !password) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    const lookup = companyInput.toLowerCase();
+    let company = await db.prepare(`
+      SELECT *
+      FROM companies
+      WHERE lower(id) = ? OR lower(name) = ?
+      LIMIT 1
+    `).get(lookup, lookup);
+
+    if (!company) {
+      const cachedList = await fetchAdminCompanyListCached({ allowStale: true }).catch(() => []);
+      const matched = (Array.isArray(cachedList) ? cachedList : []).find((item) =>
+        String(item?.id || "").trim().toLowerCase() === lookup ||
+        String(item?.name || "").trim().toLowerCase() === lookup
+      );
+      if (matched?.id) {
+        company = await db.prepare(`SELECT * FROM companies WHERE id=?`).get(String(matched.id).trim());
+      }
+    }
+
+    if (!company) {
+      return res.status(401).json({ error: "Empresa no encontrada o credenciales incorrectas" });
+    }
+
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    const expected = resolveStoredClientPassword(rules, company);
+    if (!expected) {
+      return res.status(400).json({ error: "La empresa no tiene password de cliente configurada" });
+    }
+    if (password !== expected) {
+      return res.status(401).json({ error: "Credenciales incorrectas" });
+    }
+
+    const access = extractDashboardAccessForApi(rules);
+    res.json({
+      ok: true,
+      companyId: String(company.id || "").trim(),
+      companyName: String(company.name || company.id || "").trim(),
+      access,
+    });
+  } catch (e) {
+    res.status(503).json({ error: e?.message || String(e) });
+  }
 });
 
 app.get("/api/companies/:id/integrations", requireApiAuth, async (req, res) => {
@@ -2482,6 +2607,7 @@ app.post("/api/companies/:id/delete", requireApiAuth, async (req, res) => {
   try {
     await db.prepare(`DELETE FROM company_integrations WHERE companyId=?`).run(req.params.id);
     await db.prepare(`DELETE FROM companies WHERE id=?`).run(req.params.id);
+    invalidateAdminCompanyListCache();
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });

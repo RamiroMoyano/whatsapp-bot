@@ -2533,32 +2533,20 @@ async function handleClientLogin(req, res) {
     const companyInput = (req.body.companyId || "").trim();
     const pass = (req.body.pass || "").trim();
     if (!companyInput || !pass) return res.status(400).send("Faltan datos");
-
-    const { items: allCompanies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
-    const companies = Array.isArray(allCompanies) ? allCompanies : [];
-    const lookup = companyInput.toLowerCase();
-    const matched = companies.find((c) =>
-      String(c?.id || "").trim().toLowerCase() === lookup ||
-      String(c?.name || "").trim().toLowerCase() === lookup
-    );
-    if (!matched?.id) {
+    const auth = await api("/api/client-auth", {
+      method: "POST",
+      body: {
+        companyId: companyInput,
+        password: pass,
+      },
+    });
+    const companyId = String(auth?.companyId || "").trim();
+    if (!companyId) {
       return res.status(401).send("Empresa no encontrada o credenciales incorrectas");
     }
-
-    const companyId = String(matched.id).trim();
-    const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
-    const rules = parseJsonSafe(company.rulesJson || "{}", {});
-    const expected = resolveClientPassword(rules, company);
-
-    if (!expected) {
-      return res.status(400).send("La empresa no tiene password de cliente configurada");
-    }
-
-    if (pass !== expected) {
-      return res.status(401).send("Credenciales incorrectas");
-    }
-
-    const access = extractDashboardAccessFromRules(rules);
+    const access = auth?.access && typeof auth.access === "object"
+      ? auth.access
+      : { enabled: true, mode: "full" };
     const nextPath = canAccessClientSection(access, "inicio")
       ? "/panel"
       : canAccessClientSection(access, "catalogo")
@@ -2567,8 +2555,13 @@ async function handleClientLogin(req, res) {
 
     setCookie(res, "client", `${companyId}.${signClient(companyId)}`);
     return res.redirect(nextPath);
-  } catch {
-    return res.status(401).send("Credenciales incorrectas");
+  } catch (e) {
+    const message = String(e?.message || "").trim();
+    if (message) {
+      if (/password de cliente/i.test(message)) return res.status(400).send(message);
+      if (/credenciales|empresa no encontrada/i.test(message)) return res.status(401).send(message);
+    }
+    return res.status(503).send("No se pudo validar el acceso en este momento");
   }
 }
 
