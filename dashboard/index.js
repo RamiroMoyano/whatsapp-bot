@@ -776,6 +776,44 @@ app.post("/admin/login", (req, res) => {
   return res.redirect("/admin");
 });
 
+app.get("/admin/forgot", (req, res) => {
+  res.type("text/html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/dashboard.css" />
+    <title>Recuperar acceso admin</title>
+  </head>
+  <body>
+    <div class="bs-login">
+      <div class="bs-bg" style="background-image:url('/img/login-tech-bg.png')"></div>
+      <div class="bs-vignette"></div>
+
+      <div class="bs-card">
+        <div class="bs-brand">
+          <div class="bs-dot"></div>
+          <div>
+            <div class="bs-title">BabySteps</div>
+            <div class="bs-subtitle">Admin Console</div>
+          </div>
+        </div>
+
+        <h2 class="bs-h2">Recuperar acceso admin</h2>
+        <p class="muted">La password del admin se controla desde las variables de entorno del servicio <b>whatsapp-dashboard</b> en Render.</p>
+        <p class="muted">Si no recuerdas el acceso, revisa o restablece <code>DASH_USER</code> y <code>DASH_PASS</code> en el entorno del dashboard.</p>
+
+        <div class="login-actions">
+          <a class="btn secondary" href="/admin/login">Volver al login</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+  `);
+});
+
 // Logout
 app.get("/admin/logout", (req, res) => {
   clearCookie(res, "dash");
