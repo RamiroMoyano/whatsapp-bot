@@ -79,7 +79,7 @@ if (DASHBOARD_DATABASE_URL) {
     },
     async getAdminCompaniesLite() {
       const result = await query(
-        `SELECT id, name, "createdAt", "rulesJson"
+        `SELECT id, name, createdat AS "createdAt", rulesjson AS "rulesJson"
            FROM companies
           ORDER BY id`,
       );
@@ -110,10 +110,19 @@ if (DASHBOARD_DATABASE_URL) {
     },
     async getCompanyIntegrations(companyId) {
       const result = await query(
-        `SELECT id, "companyId", provider, name, enabled, "configJson", "secretsJson", "createdAt", "updatedAt"
+        `SELECT
+            id,
+            companyid AS "companyId",
+            provider,
+            name,
+            enabled,
+            configjson AS "configJson",
+            secretsjson AS "secretsJson",
+            createdat AS "createdAt",
+            updatedat AS "updatedAt"
            FROM company_integrations
-          WHERE "companyId" = ?
-          ORDER BY "createdAt" ASC`,
+          WHERE companyid = ?
+          ORDER BY createdat ASC`,
         [String(companyId || "").trim()],
       );
       return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
