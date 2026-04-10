@@ -4,6 +4,7 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as XLSX from "xlsx";
+import { dashboardDb } from "./db.js";
 
 dotenv.config();
 
@@ -103,7 +104,13 @@ async function requireClientAuth(req, res, next) {
 
   // Cargamos la empresa para usar en el panel cliente
   try {
-    const company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+    let company = null;
+    if (dashboardDb.enabled) {
+      company = await dashboardDb.getCompanyById(companyId);
+    }
+    if (!company) {
+      company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
+    }
     req.company = company;
     req.companyId = companyId;
     next();
@@ -181,6 +188,12 @@ async function getBotCatalogProviderCompany(currentCompany) {
   const currentId = String(currentCompany?.id || "").trim().toLowerCase();
   if (currentCompany && currentId === BOT_CATALOG_PROVIDER_ID) {
     return currentCompany;
+  }
+  if (dashboardDb.enabled) {
+    try {
+      const company = await dashboardDb.getCompanyById(BOT_CATALOG_PROVIDER_ID);
+      if (company) return company;
+    } catch {}
   }
   try {
     return await api(`/api/companies/${encodeURIComponent(BOT_CATALOG_PROVIDER_ID)}`);
@@ -304,8 +317,13 @@ async function loadAdminCompanies({ allowStale = true, preferCache = false } = {
   }
 
   try {
-    const payload = await api("/api/admin-company-list");
-    const items = Array.isArray(payload) ? payload : [];
+    let items = [];
+    if (dashboardDb.enabled) {
+      items = await dashboardDb.getAdminCompaniesLite();
+    } else {
+      const payload = await api("/api/admin-company-list");
+      items = Array.isArray(payload) ? payload : [];
+    }
     adminCompaniesCache = {
       items,
       updatedAt: Date.now(),
@@ -406,6 +424,12 @@ function normalizeIntegrationToneClass(toneRaw) {
 }
 
 async function fetchCompanyIntegrations(companyId) {
+  if (dashboardDb.enabled) {
+    try {
+      const rows = await dashboardDb.getCompanyIntegrations(companyId);
+      if (Array.isArray(rows)) return rows;
+    } catch {}
+  }
   const data = await api(`/api/companies/${encodeURIComponent(companyId)}/integrations`);
   return Array.isArray(data) ? data : [];
 }
@@ -1201,7 +1225,13 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
 
   try {
-    const c = await api(`/api/companies/${encodeURIComponent(id)}`);
+    let c = null;
+    if (dashboardDb.enabled) {
+      c = await dashboardDb.getCompanyById(id);
+    }
+    if (!c) {
+      c = await api(`/api/companies/${encodeURIComponent(id)}`);
+    }
     const adminUnreadNotifications = await getAdminUnreadNotificationsTotal();
     const providerCompany = await getBotCatalogProviderCompany(c);
     const providerForPricing = providerCompany || c;
@@ -2533,20 +2563,41 @@ async function handleClientLogin(req, res) {
     const companyInput = (req.body.companyId || "").trim();
     const pass = (req.body.pass || "").trim();
     if (!companyInput || !pass) return res.status(400).send("Faltan datos");
-    const auth = await api("/api/client-auth", {
-      method: "POST",
-      body: {
-        companyId: companyInput,
-        password: pass,
-      },
-    });
-    const companyId = String(auth?.companyId || "").trim();
+    let companyId = "";
+    let access = { enabled: true, mode: "full" };
+
+    if (dashboardDb.enabled) {
+      const company = await dashboardDb.findCompanyByIdentifier(companyInput);
+      if (!company) {
+        return res.status(401).send("Empresa no encontrada o credenciales incorrectas");
+      }
+      const rules = parseJsonSafe(company.rulesJson || "{}", {});
+      const expectedPassword = String(resolveClientPassword(rules, company) || "").trim();
+      if (!expectedPassword) {
+        return res.status(400).send("La empresa no tiene password de cliente configurada");
+      }
+      if (expectedPassword !== pass) {
+        return res.status(401).send("Empresa no encontrada o credenciales incorrectas");
+      }
+      companyId = String(company.id || "").trim();
+      access = extractDashboardAccessFromRules(rules);
+    } else {
+      const auth = await api("/api/client-auth", {
+        method: "POST",
+        body: {
+          companyId: companyInput,
+          password: pass,
+        },
+      });
+      companyId = String(auth?.companyId || "").trim();
+      access = auth?.access && typeof auth.access === "object"
+        ? auth.access
+        : { enabled: true, mode: "full" };
+    }
+
     if (!companyId) {
       return res.status(401).send("Empresa no encontrada o credenciales incorrectas");
     }
-    const access = auth?.access && typeof auth.access === "object"
-      ? auth.access
-      : { enabled: true, mode: "full" };
     const nextPath = canAccessClientSection(access, "inicio")
       ? "/panel"
       : canAccessClientSection(access, "catalogo")
