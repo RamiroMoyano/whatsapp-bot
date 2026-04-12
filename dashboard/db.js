@@ -46,6 +46,9 @@ function createDisabledDb() {
     findCompanyByIdentifier: unavailable,
     getCompanyIntegrations: unavailable,
     saveCompanyById: unavailable,
+    getAssignments: unavailable,
+    saveAssignment: unavailable,
+    deleteAssignment: unavailable,
   };
 }
 
@@ -150,6 +153,47 @@ if (DASHBOARD_DATABASE_URL) {
         [nextName, nextPrompt, nextCatalogJson, nextRulesJson, id],
       );
       return result.rows?.[0] ? normalizeRowKeys(result.rows[0]) : null;
+    },
+    async getAssignments() {
+      const result = await query(
+        `SELECT
+            fromnumber AS "fromNumber",
+            companyid AS "companyId",
+            updatedat AS "updatedAt"
+           FROM customer_company
+          ORDER BY updatedat DESC, fromnumber ASC`,
+      );
+      return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
+    },
+    async saveAssignment(fromNumber, companyId) {
+      const normalizedFrom = String(fromNumber || "").trim();
+      const normalizedCompanyId = String(companyId || "").trim();
+      if (!normalizedFrom) throw new Error("fromNumber requerido");
+      if (!normalizedCompanyId) throw new Error("companyId requerido");
+      await query(
+        `INSERT INTO customer_company(fromnumber, companyid, updatedat)
+         VALUES (?, ?, NOW())
+         ON CONFLICT(fromnumber) DO UPDATE SET
+           companyid = EXCLUDED.companyid,
+           updatedat = EXCLUDED.updatedat`,
+        [normalizedFrom, normalizedCompanyId],
+      );
+      const result = await query(
+        `SELECT
+            fromnumber AS "fromNumber",
+            companyid AS "companyId",
+            updatedat AS "updatedAt"
+           FROM customer_company
+          WHERE fromnumber = ?
+          LIMIT 1`,
+        [normalizedFrom],
+      );
+      return result.rows?.[0] ? normalizeRowKeys(result.rows[0]) : null;
+    },
+    async deleteAssignment(fromNumber) {
+      const normalizedFrom = String(fromNumber || "").trim();
+      if (!normalizedFrom) throw new Error("fromNumber requerido");
+      await query(`DELETE FROM customer_company WHERE fromnumber = ?`, [normalizedFrom]);
     },
   };
 }

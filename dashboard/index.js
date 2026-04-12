@@ -2082,7 +2082,9 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
 app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
   try {
     const { items: companies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
-    const mappings = await api("/api/assignments");
+    const mappings = dashboardDb.enabled
+      ? await dashboardDb.getAssignments()
+      : await api("/api/assignments");
 
     const options = companies.map((c) =>
       `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} - ${escapeHtml(c.name || "")}</option>`
@@ -2141,13 +2143,17 @@ app.get("/admin/assign", requireDashboardAuth, async (req, res) => {
 
 app.post("/admin/assign", requireDashboardAuth, async (req, res) => {
   try {
-    await api("/api/assignments", {
-      method: "POST",
-      body: {
-        fromNumber: req.body.fromNumber,
-        companyId: req.body.companyId,
-      }
-    });
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveAssignment(req.body.fromNumber, req.body.companyId);
+    } else {
+      await api("/api/assignments", {
+        method: "POST",
+        body: {
+          fromNumber: req.body.fromNumber,
+          companyId: req.body.companyId,
+        }
+      });
+    }
     res.redirect("/admin/assign");
   } catch (e) {
     res.status(500).type("text/html").send(layout({
@@ -2161,7 +2167,11 @@ app.post("/admin/assign", requireDashboardAuth, async (req, res) => {
 
 app.post("/admin/assign/delete", requireDashboardAuth, async (req, res) => {
   try {
-    await api("/api/assignments/delete", { method: "POST", body: { fromNumber: req.body.fromNumber } });
+    if (dashboardDb.enabled) {
+      await dashboardDb.deleteAssignment(req.body.fromNumber);
+    } else {
+      await api("/api/assignments/delete", { method: "POST", body: { fromNumber: req.body.fromNumber } });
+    }
     res.redirect("/admin/assign");
   } catch (e) {
     res.status(500).type("text/html").send(layout({
