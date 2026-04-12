@@ -388,6 +388,16 @@ function renderSupportToolIcon({ href, count = 0, className = "", title = "Sopor
 }
 
 async function saveCompanyRules(company, rules) {
+  if (dashboardDb.enabled) {
+    await dashboardDb.saveCompanyById(company.id, {
+      name: company.name || company.id,
+      prompt: company.prompt || "",
+      catalogJson: company.catalogJson || "[]",
+      rulesJson: JSON.stringify(rules || {}),
+    });
+    adminCompaniesCache.updatedAt = 0;
+    return;
+  }
   await api(`/api/companies/${encodeURIComponent(company.id)}/save`, {
     method: "POST",
     body: {
@@ -397,6 +407,7 @@ async function saveCompanyRules(company, rules) {
       rulesJson: JSON.stringify(rules || {}),
     },
   });
+  adminCompaniesCache.updatedAt = 0;
 }
 
 function prettyJson(value, fallback = "{}") {
@@ -1689,15 +1700,26 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
 app.post("/admin/company/:id/save", requireDashboardAuth, async (req, res) => {
   const id = req.params.id;
 
-  await api(`/api/companies/${encodeURIComponent(id)}/save`, {
-    method: "POST",
-    body: {
+  if (dashboardDb.enabled) {
+    await dashboardDb.saveCompanyById(id, {
       name: req.body.name,
       prompt: req.body.prompt,
       catalogJson: req.body.catalogJson,
       rulesJson: req.body.rulesJson,
-    },
-  });
+    });
+    adminCompaniesCache.updatedAt = 0;
+  } else {
+    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+      method: "POST",
+      body: {
+        name: req.body.name,
+        prompt: req.body.prompt,
+        catalogJson: req.body.catalogJson,
+        rulesJson: req.body.rulesJson,
+      },
+    });
+    adminCompaniesCache.updatedAt = 0;
+  }
 
   res.redirect(`/admin/company/${encodeURIComponent(id)}`);
 });
@@ -1797,21 +1819,37 @@ app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, 
   params.set("company", id);
 
   try {
-    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    let company = null;
+    if (dashboardDb.enabled) {
+      company = await dashboardDb.getCompanyById(id);
+    }
+    if (!company) {
+      company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    }
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
     rules.dashboardEnabled = dashboardEnabled;
     rules.dashboardMode = dashboardMode;
 
-    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
-      method: "POST",
-      body: {
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveCompanyById(id, {
         name: company.name || id,
         prompt: company.prompt || "",
         catalogJson: company.catalogJson || "[]",
         rulesJson: JSON.stringify(rules),
-      },
-    });
+      });
+    } else {
+      await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: {
+          name: company.name || id,
+          prompt: company.prompt || "",
+          catalogJson: company.catalogJson || "[]",
+          rulesJson: JSON.stringify(rules),
+        },
+      });
+    }
+    adminCompaniesCache.updatedAt = 0;
 
     params.set("dashboardSaved", "1");
     return res.redirect(`/admin?${params.toString()}`);
@@ -1844,7 +1882,13 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
   const id = req.params.id;
 
   try {
-    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    let company = null;
+    if (dashboardDb.enabled) {
+      company = await dashboardDb.getCompanyById(id);
+    }
+    if (!company) {
+      company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    }
     const providerCompany = await getBotCatalogProviderCompany(company);
     const providerForPricing = providerCompany || company;
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
@@ -1884,15 +1928,25 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
       fallbackPrompt: company.prompt || "",
     });
 
-    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
-      method: "POST",
-      body: {
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveCompanyById(id, {
         name: nextName,
         prompt: nextPrompt,
         catalogJson: company.catalogJson || "[]",
         rulesJson: JSON.stringify(rules),
-      },
-    });
+      });
+    } else {
+      await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: {
+          name: nextName,
+          prompt: nextPrompt,
+          catalogJson: company.catalogJson || "[]",
+          rulesJson: JSON.stringify(rules),
+        },
+      });
+    }
+    adminCompaniesCache.updatedAt = 0;
 
     const passwordFlag = manualPassword ? "&manualPwd=1" : "";
     res.redirect(`/admin/company/${encodeURIComponent(id)}?updated=1${passwordFlag}`);
@@ -1909,7 +1963,13 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
   const id = req.params.id;
 
   try {
-    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    let company = null;
+    if (dashboardDb.enabled) {
+      company = await dashboardDb.getCompanyById(id);
+    }
+    if (!company) {
+      company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    }
     const providerCompany = await getBotCatalogProviderCompany(company);
     const providerForPricing = providerCompany || company;
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
@@ -1945,15 +2005,25 @@ app.post("/admin/company/:id/bot/save", requireDashboardAuth, async (req, res) =
       rules.channels = channelsFromMode(inferredChannel);
     }
 
-    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
-      method: "POST",
-      body: {
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveCompanyById(id, {
         name: company.name || id,
         prompt: company.prompt || "",
         catalogJson: company.catalogJson || "[]",
         rulesJson: JSON.stringify(rules),
-      },
-    });
+      });
+    } else {
+      await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: {
+          name: company.name || id,
+          prompt: company.prompt || "",
+          catalogJson: company.catalogJson || "[]",
+          rulesJson: JSON.stringify(rules),
+        },
+      });
+    }
+    adminCompaniesCache.updatedAt = 0;
 
     res.redirect(`/admin/company/${encodeURIComponent(id)}?botUpdated=1`);
   } catch (e) {
@@ -1967,20 +2037,36 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
   const nextPassword = requested || generateClientPassword(10);
 
   try {
-    const company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    let company = null;
+    if (dashboardDb.enabled) {
+      company = await dashboardDb.getCompanyById(id);
+    }
+    if (!company) {
+      company = await api(`/api/companies/${encodeURIComponent(id)}`);
+    }
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
     assignClientPassword(rules, nextPassword);
 
-    await api(`/api/companies/${encodeURIComponent(id)}/save`, {
-      method: "POST",
-      body: {
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveCompanyById(id, {
         name: company.name || id,
         prompt: company.prompt || "",
         catalogJson: company.catalogJson || "[]",
         rulesJson: JSON.stringify(rules),
-      },
-    });
+      });
+    } else {
+      await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: {
+          name: company.name || id,
+          prompt: company.prompt || "",
+          catalogJson: company.catalogJson || "[]",
+          rulesJson: JSON.stringify(rules),
+        },
+      });
+    }
+    adminCompaniesCache.updatedAt = 0;
 
     res.redirect(`/admin/company/${encodeURIComponent(id)}?generatedPwd=${encodeURIComponent(nextPassword)}`);
   } catch (e) {

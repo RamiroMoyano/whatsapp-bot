@@ -45,6 +45,7 @@ function createDisabledDb() {
     getCompanyById: unavailable,
     findCompanyByIdentifier: unavailable,
     getCompanyIntegrations: unavailable,
+    saveCompanyById: unavailable,
   };
 }
 
@@ -126,6 +127,29 @@ if (DASHBOARD_DATABASE_URL) {
         [String(companyId || "").trim()],
       );
       return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
+    },
+    async saveCompanyById(companyId, payload = {}) {
+      const id = String(companyId || "").trim();
+      if (!id) throw new Error("Company ID requerido");
+      const current = await this.getCompanyById(id);
+      if (!current) throw new Error("Empresa no encontrada");
+
+      const nextName = String(payload.name ?? current.name ?? id).trim() || id;
+      const nextPrompt = String(payload.prompt ?? current.prompt ?? "").trim();
+      const nextCatalogJson = String(payload.catalogJson ?? current.catalogJson ?? "[]");
+      const nextRulesJson = String(payload.rulesJson ?? current.rulesJson ?? "{}");
+
+      const result = await query(
+        `UPDATE companies
+            SET name = ?,
+                prompt = ?,
+                catalogjson = ?,
+                rulesjson = ?
+          WHERE id = ?
+        RETURNING *`,
+        [nextName, nextPrompt, nextCatalogJson, nextRulesJson, id],
+      );
+      return result.rows?.[0] ? normalizeRowKeys(result.rows[0]) : null;
     },
   };
 }
