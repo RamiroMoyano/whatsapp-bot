@@ -588,6 +588,17 @@ function parseClientOrdersFilters(query) {
 }
 
 async function fetchCompanyOrders(companyId, filterFrom, filterTo, limit = 500) {
+  if (dashboardDb.enabled) {
+    try {
+      return await dashboardDb.getCompanyOrders(companyId, {
+        from: filterFrom || null,
+        to: filterTo || null,
+        limit,
+      });
+    } catch {
+      // fallback a API si la consulta directa falla
+    }
+  }
   const params = new URLSearchParams();
   params.set("companyId", String(companyId));
   params.set("limit", String(Math.max(1, Math.min(5000, Number(limit) || 500))));

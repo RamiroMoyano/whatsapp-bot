@@ -45,6 +45,7 @@ function createDisabledDb() {
     getCompanyById: unavailable,
     findCompanyByIdentifier: unavailable,
     getCompanyIntegrations: unavailable,
+    getCompanyOrders: unavailable,
     saveCompanyById: unavailable,
     getAssignments: unavailable,
     saveAssignment: unavailable,
@@ -128,6 +129,52 @@ if (DASHBOARD_DATABASE_URL) {
           WHERE companyid = ?
           ORDER BY createdat ASC`,
         [String(companyId || "").trim()],
+      );
+      return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
+    },
+    async getCompanyOrders(companyId, options = {}) {
+      const normalizedCompanyId = String(companyId || "").trim();
+      if (!normalizedCompanyId) return [];
+      const filterFrom = options.from ? new Date(options.from) : null;
+      const filterTo = options.to ? new Date(options.to) : null;
+      const limit = Math.max(1, Math.min(5000, Number(options.limit) || 500));
+      const clauses = [`companyid = ?`];
+      const params = [normalizedCompanyId];
+      if (filterFrom && !Number.isNaN(filterFrom.getTime())) {
+        clauses.push(`createdat >= ?`);
+        params.push(filterFrom.toISOString());
+      }
+      if (filterTo && !Number.isNaN(filterTo.getTime())) {
+        clauses.push(`createdat <= ?`);
+        params.push(filterTo.toISOString());
+      }
+      params.push(limit);
+      const result = await query(
+        `SELECT
+            id,
+            createdat AS "createdAt",
+            fromnumber AS "fromNumber",
+            companyid AS "companyId",
+            name,
+            contact,
+            notes,
+            itemsjson AS "itemsJson",
+            itemsdetailedjson AS "itemsDetailedJson",
+            total,
+            paymentstatus AS "paymentStatus",
+            paymentmethod AS "paymentMethod",
+            orderstatus AS "orderStatus",
+            deliveredat AS "deliveredAt",
+            category,
+            workflowstate AS "workflowState",
+            archived,
+            archivedat AS "archivedAt",
+            archivereason AS "archiveReason"
+           FROM orders
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY createdat DESC
+          LIMIT ?`,
+        params,
       );
       return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
     },
