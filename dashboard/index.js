@@ -3996,6 +3996,79 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
   }));
 });
 
+app.get("/panel/catalogo/template", requireClientAuth, requireClientSectionAccess("catalogo"), async (req, res) => {
+  const templateRows = [
+    {
+      id: "1",
+      producto: "Bot WhatsApp Base",
+      precio: "70",
+      stock: "Disponible",
+      categoria: "Bots",
+      rubro: "Tecnologia",
+      seccion: "Automatizacion",
+      subseccion: "WhatsApp",
+      talle: "",
+      color: "",
+      sku: "BOT-WA-BASE",
+      descripcion: "Bot inicial para WhatsApp con flujo base.",
+      tags: "bot,whatsapp,base",
+    },
+    {
+      id: "2",
+      producto: "Bot WhatsApp AI Pro",
+      precio: "230",
+      stock: "Disponible",
+      categoria: "Bots",
+      rubro: "Tecnologia",
+      seccion: "Automatizacion",
+      subseccion: "WhatsApp",
+      talle: "",
+      color: "",
+      sku: "BOT-WA-PRO",
+      descripcion: "Bot con AI y mas contexto de memoria.",
+      tags: "bot,whatsapp,ai,pro",
+    },
+    {
+      id: "3",
+      producto: "Almendras 100g",
+      precio: "4.5",
+      stock: "25",
+      categoria: "Frutos secos",
+      rubro: "Alimentos",
+      seccion: "Granel",
+      subseccion: "Frutos secos",
+      talle: "",
+      color: "",
+      sku: "ALM-100",
+      descripcion: "Bolsa de almendras por 100 gramos.",
+      tags: "almendras,100g,granel",
+    },
+  ];
+  const headers = [
+    "id",
+    "producto",
+    "precio",
+    "stock",
+    "categoria",
+    "rubro",
+    "seccion",
+    "subseccion",
+    "talle",
+    "color",
+    "sku",
+    "descripcion",
+    "tags",
+  ];
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(templateRows, { header: headers });
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Catalogo");
+  const fileBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="catalogo-plantilla.xlsx"');
+  res.send(fileBuffer);
+});
+app.get("/c/catalogo/template", (req, res) => res.redirect("/panel/catalogo/template"));
+
 app.get("/panel/catalogo", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("catalogo"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
@@ -4114,6 +4187,9 @@ app.get("/panel/catalogo", requireClientAuth, loadClientIntegrationFlag, require
         <div class="cp-card-toggle-body">
           <form id="catalogImportForm" method="POST" action="/panel/catalogo/import" class="cp-form">
             <p class="cp-note">Sube .xlsx/.xls/.csv. Encabezados soportados: ID, producto, precio, stock, categoria, rubro, seccion, subseccion, talle, color, sku, descripcion, tags.</p>
+            <div class="cp-actions">
+              <a class="cp-btn secondary" href="/panel/catalogo/template">Descargar plantilla de ejemplo</a>
+            </div>
             <label>Archivo Excel</label>
             <input id="catalogExcelFile" type="file" accept=".xlsx,.xls,.csv" required />
             <input id="catalogExcelBase64" type="hidden" name="excelBase64" value="" />
