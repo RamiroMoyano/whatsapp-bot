@@ -1512,7 +1512,8 @@ async function appendOrderNote(orderIdRaw, noteRaw) {
 
 async function resolvePendingSessionOrder(session) {
   const sessionOrderId = String(session?.lastOrderId || "").trim();
-  if (!sessionOrderId) return null;
+  const checkoutOrderId = String(session?.data?.checkoutOrderId || "").trim();
+  if (!sessionOrderId || !checkoutOrderId || sessionOrderId !== checkoutOrderId) return null;
   const row = await db.prepare(`
     SELECT id, companyId, workflowState, archived, category, orderStatus, paymentStatus
     FROM orders
@@ -1525,6 +1526,57 @@ async function resolvePendingSessionOrder(session) {
     String(session?.data?.companyId || "babystepsbots").trim().toLowerCase();
   if (!sameCompany || workflow.archived || workflow.state !== "pending") return null;
   return row;
+}
+
+const RECENT_ORDER_LINK_WINDOW_MS = Math.max(5 * 60 * 1000, Number(process.env.RECENT_ORDER_LINK_WINDOW_MS || 6 * 60 * 60 * 1000));
+const CART_REMINDER_AFTER_MS = Math.max(5 * 60 * 1000, Number(process.env.CART_REMINDER_AFTER_MS || 30 * 60 * 1000));
+
+async function resolveRecentReceiptOrder(session) {
+  const orderId = String(session?.data?.recentOrderId || session?.lastOrderId || "").trim();
+  if (!orderId) return null;
+  const recentAtRaw = Number(session?.data?.recentOrderAt || 0);
+  if (!recentAtRaw || (Date.now() - recentAtRaw) > RECENT_ORDER_LINK_WINDOW_MS) return null;
+  const row = await db.prepare(`
+    SELECT id, companyId, workflowState, archived, category, orderStatus, paymentStatus, paymentMethod
+    FROM orders
+    WHERE id=?
+  `).get(orderId);
+  if (!row) return null;
+  const sameCompany =
+    String(row.companyId || "").trim().toLowerCase() ===
+    String(session?.data?.companyId || "babystepsbots").trim().toLowerCase();
+  if (!sameCompany) return null;
+  return row;
+}
+
+function markRecentOrder(session, orderIdRaw, paymentMethodRaw = "") {
+  const orderId = String(orderIdRaw || "").trim();
+  if (!orderId) return;
+  session.lastOrderId = orderId;
+  session.data.recentOrderId = orderId;
+  session.data.recentOrderAt = Date.now();
+  const paymentMethod = normalizePaymentMethodInput(paymentMethodRaw || "");
+  if (paymentMethod) {
+    session.data.recentOrderPaymentMethod = paymentMethod;
+  } else {
+    delete session.data.recentOrderPaymentMethod;
+  }
+}
+
+function clearCheckoutProgress(session, options = {}) {
+  const keepRecentOrder = options.keepRecentOrder !== false;
+  session.state = "MENU";
+  session.data.name = "";
+  session.data.contact = "";
+  session.data.notes = "";
+  delete session.data.paymentMethodHint;
+  delete session.data.checkoutOrderId;
+  if (!keepRecentOrder) {
+    delete session.data.recentOrderId;
+    delete session.data.recentOrderAt;
+    delete session.data.recentOrderPaymentMethod;
+    session.lastOrderId = null;
+  }
 }
 
 async function buildUniqueOrderId() {
@@ -1657,17 +1709,20 @@ function buildOrderRegisteredReply(company, orderId, total, paymentMethodRaw) {
     lines.push(paymentMethodsReplyText(company, { orderId }));
     lines.push("");
     lines.push("Si queres, envia comprobante (opcional) o indica cuando realizas la transferencia.");
+    lines.push("Si despues queres sumar otro producto, iniciamos un pedido nuevo.");
     return lines.join("\n");
   }
 
   if (paymentMethod === "efectivo") {
     lines.push("Perfecto. Indica lugar y horario para coordinar pago en efectivo y entrega.");
+    lines.push("Si queres comprar algo mas, armamos otro pedido aparte.");
     return lines.join("\n");
   }
 
   if (paymentMethod === "debito" || paymentMethod === "tarjeta") {
     lines.push("Perfecto. Si queres, envia el comprobante del pago con tarjeta de forma opcional para agilizar la validacion.");
     lines.push("Tambien podes indicar cualquier detalle util sobre el pago o la entrega.");
+    lines.push("Si despues queres agregar otro producto, iniciamos un pedido nuevo.");
     return lines.join("\n");
   }
 
@@ -2662,6 +2717,11 @@ app.post("/api/assignments", requireApiAuth, async (req, res) => {
         data.notes = "";
         delete data.paymentMethodHint;
         delete data.checkoutOrderId;
+        delete data.recentOrderId;
+        delete data.recentOrderAt;
+        delete data.recentOrderPaymentMethod;
+        delete data.cartUpdatedAt;
+        delete data.lastCartReminderAt;
       }
       data.companyId = companyId;
       const tempSession = { data };
@@ -2990,6 +3050,11 @@ app.post("/whatsapp", async (req, res) => {
     session.data.notes = "";
     delete session.data.paymentMethodHint;
     delete session.data.checkoutOrderId;
+    delete session.data.recentOrderId;
+    delete session.data.recentOrderAt;
+    delete session.data.recentOrderPaymentMethod;
+    delete session.data.cartUpdatedAt;
+    delete session.data.lastCartReminderAt;
     session.data.companyId = map.companyId;
     sessionDirty = true;
   }
@@ -3006,9 +3071,40 @@ app.post("/whatsapp", async (req, res) => {
   const pendingOrderForSession = await resolvePendingSessionOrder(session);
   const activeOrderId = String(pendingOrderForSession?.id || "").trim();
   const hasActiveOrder = !!activeOrderId;
+  const recentReceiptOrder = await resolveRecentReceiptOrder(session);
+  const recentReceiptMethod = normalizePaymentMethodInput(
+    recentReceiptOrder?.paymentMethod || session?.data?.recentOrderPaymentMethod || ""
+  );
+  const canLinkRecentReceipt = ["transferencia", "debito", "tarjeta"].includes(recentReceiptMethod);
+  const receiptOrderId = String((canLinkRecentReceipt ? recentReceiptOrder?.id : "") || activeOrderId || "").trim();
+  const cartReminderDue =
+    session.state === "MENU" &&
+    Array.isArray(session?.cart) &&
+    session.cart.length > 0 &&
+    !hasActiveOrder &&
+    (() => {
+      const cartUpdatedAt = Number(session?.data?.cartUpdatedAt || 0);
+      const lastReminderAt = Number(session?.data?.lastCartReminderAt || 0);
+      if (!cartUpdatedAt) return false;
+      const elapsed = Date.now() - cartUpdatedAt;
+      if (elapsed < CART_REMINDER_AFTER_MS) return false;
+      return !lastReminderAt || (Date.now() - lastReminderAt) >= CART_REMINDER_AFTER_MS;
+    })();
+  let cartReminderPrefix = "";
+  if (cartReminderDue) {
+    const reminderCompany = await getCompanySafe(session);
+    cartReminderPrefix =
+      `Recordatorio: tenes productos guardados en tu carrito.\n\n${await cartText(session)}\n\n` +
+      `Si queres seguir, podes agregar algo mas o escribir checkout.\n\n`;
+    session.data.lastCartReminderAt = Date.now();
+    sessionDirty = true;
+  }
 
   const respondAndLog = async (textOut, options = {}) => {
-    const message = String(textOut || "");
+    let message = String(textOut || "");
+    if (cartReminderPrefix && !options.skipCartReminder) {
+      message = `${cartReminderPrefix}${message}`.trim();
+    }
     if (!cmd.startsWith("admin")) {
       await logWhatsappMessage({
         fromNumber: from,
@@ -3037,7 +3133,7 @@ app.post("/whatsapp", async (req, res) => {
   }
 
   if (hasMedia && !cmd.startsWith("admin")) {
-    const orderId = activeOrderId;
+    const orderId = session.cart.length ? "" : receiptOrderId;
     const mediaCount = Math.max(1, Math.min(10, numMedia));
 
     for (let i = 0; i < mediaCount; i += 1) {
@@ -3156,6 +3252,11 @@ app.post("/whatsapp", async (req, res) => {
         s2.data.notes = "";
         delete s2.data.paymentMethodHint;
         delete s2.data.checkoutOrderId;
+        delete s2.data.recentOrderId;
+        delete s2.data.recentOrderAt;
+        delete s2.data.recentOrderPaymentMethod;
+        delete s2.data.cartUpdatedAt;
+        delete s2.data.lastCartReminderAt;
       }
       await syncSessionAiModeFromCompany(s2, { force: true });
       await saveSession(s2);
@@ -3304,7 +3405,7 @@ app.post("/whatsapp", async (req, res) => {
     session.data.humanNotified = false;
     await saveSession(session);
     const company = await getCompanySafe(session);
-    return respondAndLog(menuText(company));
+    return respondAndLog(menuText(company), { skipCartReminder: text === "hola" ? false : true });
   }
 
   if (text === "catalogo") {
@@ -3325,14 +3426,11 @@ app.post("/whatsapp", async (req, res) => {
   }
 
   if (text === "cancelar") {
-    session.state = "MENU";
     session.cart = [];
-    session.data.name = "";
-    session.data.contact = "";
-    session.data.notes = "";
     session.data.humanNotified = false;
-    delete session.data.paymentMethodHint;
-    delete session.data.checkoutOrderId;
+    clearCheckoutProgress(session, { keepRecentOrder: true });
+    delete session.data.cartUpdatedAt;
+    delete session.data.lastCartReminderAt;
     await saveSession(session);
     return respondAndLog("Listo, reinicie el flujo. Escribi catalogo para empezar una nueva compra.");
   }
@@ -3386,10 +3484,11 @@ app.post("/whatsapp", async (req, res) => {
     ["listo", "ok", "ya", "hecho", "transferi", "ya transferi", "pague", "ya pague"].includes(text) ||
     text.includes("ya transfer") ||
     text.includes("comprobante");
-  if (session.state === "MENU" && hasActiveOrder && !hasMedia && !session.cart.length && looksLikePaymentReady) {
+  if (session.state === "MENU" && receiptOrderId && !hasMedia && !session.cart.length && looksLikePaymentReady) {
     return respondAndLog(
-      `Perfecto. Para avanzar con la validacion del pedido ${activeOrderId}, envia el comprobante cuando lo tengas.\n` +
-      `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`
+      `Perfecto. Para avanzar con la validacion del pedido ${receiptOrderId}, envia el comprobante cuando lo tengas.\n` +
+      `Si ya lo enviaste, no hace falta repetirlo: te confirmamos por este chat.`,
+      { orderId: receiptOrderId }
     );
   }
 
@@ -3435,6 +3534,8 @@ app.post("/whatsapp", async (req, res) => {
     const p = (company.catalog || []).find((x) => Number(x.id) === id);
     if (!p) return respondAndLog("Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
     session.cart.push(id);
+    session.data.cartUpdatedAt = Date.now();
+    delete session.data.lastCartReminderAt;
     await saveSession(session);
     return respondAndLog(`Agregado ${p.name}\n\n${await cartText(session)}\n\n¿Deseas agregar o ver algo mas? Podes escribir otro producto, su ID o "catalogo".\nPara finalizar: checkout`);
   }
@@ -3465,6 +3566,8 @@ app.post("/whatsapp", async (req, res) => {
 
     if (canAutoAddFromNaturalText) {
       for (const id of detected.selectedIds) session.cart.push(Number(id));
+      session.data.cartUpdatedAt = Date.now();
+      delete session.data.lastCartReminderAt;
       await saveSession(session);
       const added = summarizeCatalogSelection(detected.selectedIds, company.catalog || []);
       const addedText = added.length ? `Agregados: ${added.join(", ")}` : "Productos agregados al carrito.";
@@ -3505,8 +3608,10 @@ app.post("/whatsapp", async (req, res) => {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
       await notifyTelegramOrderCreated(company, from, created);
-      session.state = "ASK_PAYMENT_DETAILS";
-      delete session.data.paymentMethodHint;
+      markRecentOrder(session, created.orderId, created.paymentMethod);
+      clearCheckoutProgress(session, { keepRecentOrder: true });
+      delete session.data.cartUpdatedAt;
+      delete session.data.lastCartReminderAt;
       await saveSession(session);
       return respondAndLog(
         buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
@@ -3631,8 +3736,10 @@ app.post("/whatsapp", async (req, res) => {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
       await notifyTelegramOrderCreated(company, from, created);
-      session.state = "ASK_PAYMENT_DETAILS";
-      delete session.data.paymentMethodHint;
+      markRecentOrder(session, created.orderId, created.paymentMethod);
+      clearCheckoutProgress(session, { keepRecentOrder: true });
+      delete session.data.cartUpdatedAt;
+      delete session.data.lastCartReminderAt;
       await saveSession(session);
       return respondAndLog(
         buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
@@ -3675,8 +3782,10 @@ app.post("/whatsapp", async (req, res) => {
     }
 
     await notifyTelegramOrderCreated(company, from, created);
-    session.state = "ASK_PAYMENT_DETAILS";
-    delete session.data.paymentMethodHint;
+    markRecentOrder(session, created.orderId, created.paymentMethod);
+    clearCheckoutProgress(session, { keepRecentOrder: true });
+    delete session.data.cartUpdatedAt;
+    delete session.data.lastCartReminderAt;
     await saveSession(session);
     return respondAndLog(
       buildOrderRegisteredReply(company, created.orderId, created.total, created.paymentMethod),
