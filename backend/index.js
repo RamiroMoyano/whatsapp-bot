@@ -484,6 +484,38 @@ dbInitPromise
   })
   .catch((e) => console.error("Workflow backfill startup error:", e?.message || e));
 
+// ================= WEBHOOK HELPERS =================
+function resetSessionForCompanyChange(session, companyId) {
+  resetAiMemoryForMode(session.data);
+  session.state = "MENU";
+  session.cart = [];
+  session.lastOrderId = null;
+  session.data.humanNotified = false;
+  session.data.name = "";
+  session.data.contact = "";
+  session.data.notes = "";
+  delete session.data.paymentMethodHint;
+  delete session.data.checkoutOrderId;
+  delete session.data.recentOrderId;
+  delete session.data.recentOrderAt;
+  delete session.data.recentOrderPaymentMethod;
+  delete session.data.cartUpdatedAt;
+  delete session.data.lastCartReminderAt;
+  session.data.companyId = companyId;
+}
+
+async function updateOrderPaymentMethod(orderId, method) {
+  await db.prepare(`
+    UPDATE orders
+    SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
+    WHERE id=?
+  `).run(method, "pending", "confirmed", "pending", false, null, "", "pending", orderId);
+  await appendOrderNote(
+    orderId,
+    `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(method)}`
+  );
+}
+
 // ===== API ROUTES =====
 app.use(createApiRouter({
   syncCompanySessionsAiMode,
@@ -548,22 +580,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
   const map = await db.prepare(`SELECT companyId FROM customer_company WHERE fromNumber=?`).get(from);
   if (map?.companyId && session.data.companyId !== map.companyId) {
-    resetAiMemoryForMode(session.data);
-    session.state = "MENU";
-    session.cart = [];
-    session.lastOrderId = null;
-    session.data.humanNotified = false;
-    session.data.name = "";
-    session.data.contact = "";
-    session.data.notes = "";
-    delete session.data.paymentMethodHint;
-    delete session.data.checkoutOrderId;
-    delete session.data.recentOrderId;
-    delete session.data.recentOrderAt;
-    delete session.data.recentOrderPaymentMethod;
-    delete session.data.cartUpdatedAt;
-    delete session.data.lastCartReminderAt;
-    session.data.companyId = map.companyId;
+    resetSessionForCompanyChange(session, map.companyId);
     sessionDirty = true;
   }
 
@@ -748,23 +765,10 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
       const s2 = await getSession(target);
       const previousCompanyId = String(s2.data.companyId || "babystepsbots").trim().toLowerCase();
-      s2.data.companyId = companyId;
       if (previousCompanyId !== companyId) {
-        resetAiMemoryForMode(s2.data);
-        s2.state = "MENU";
-        s2.cart = [];
-        s2.lastOrderId = null;
-        s2.data.humanNotified = false;
-        s2.data.name = "";
-        s2.data.contact = "";
-        s2.data.notes = "";
-        delete s2.data.paymentMethodHint;
-        delete s2.data.checkoutOrderId;
-        delete s2.data.recentOrderId;
-        delete s2.data.recentOrderAt;
-        delete s2.data.recentOrderPaymentMethod;
-        delete s2.data.cartUpdatedAt;
-        delete s2.data.lastCartReminderAt;
+        resetSessionForCompanyChange(s2, companyId);
+      } else {
+        s2.data.companyId = companyId;
       }
       await syncSessionAiModeFromCompany(s2, { force: true });
       await saveSession(s2);
@@ -959,25 +963,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     const company = await getCompanySafe(session);
     const methodFromText = normalizePaymentMethodInput(body);
     if (hasActiveOrder && methodFromText) {
-      await db.prepare(`
-        UPDATE orders
-        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
-        WHERE id=?
-      `).run(
-        methodFromText,
-        "pending",
-        "confirmed",
-        "pending",
-        false,
-        null,
-        "",
-        "pending",
-        activeOrderId
-      );
-      await appendOrderNote(
-        activeOrderId,
-        `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(methodFromText)}`
-      );
+      await updateOrderPaymentMethod(activeOrderId, methodFromText);
       return respondAndLog(
         `Actualizado. El pedido ${activeOrderId} ahora figura con medio de pago: ${paymentMethodLabel(methodFromText)}.\n\n` +
         `${paymentMethodsReplyText(company, { orderId: activeOrderId })}`,
@@ -1003,25 +989,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
   if (session.state === "MENU" && hasActiveOrder && !hasMedia && !session.cart.length) {
     const directMethod = normalizePaymentMethodInput(body);
     if (directMethod) {
-      await db.prepare(`
-        UPDATE orders
-        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
-        WHERE id=?
-      `).run(
-        directMethod,
-        "pending",
-        "confirmed",
-        "pending",
-        false,
-        null,
-        "",
-        "pending",
-        activeOrderId
-      );
-      await appendOrderNote(
-        activeOrderId,
-        `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(directMethod)}`
-      );
+      await updateOrderPaymentMethod(activeOrderId, directMethod);
       const company = await getCompanySafe(session);
       return respondAndLog(
         `Actualizado. El pedido ${activeOrderId} ahora figura con medio de pago: ${paymentMethodLabel(directMethod)}.\n\n` +
@@ -1314,22 +1282,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
     const maybeMethodChange = normalizePaymentMethodInput(body);
     if (maybeMethodChange) {
-      await db.prepare(`
-        UPDATE orders
-        SET paymentMethod=?, paymentStatus=?, orderStatus=?, workflowState=?, archived=?, archivedAt=?, archiveReason=?, category=?
-        WHERE id=?
-      `).run(
-        maybeMethodChange,
-        "pending",
-        "confirmed",
-        "pending",
-        false,
-        null,
-        "",
-        "pending",
-        orderId
-      );
-      await appendOrderNote(orderId, `[Cambio medio de pago ${new Date().toISOString()}] ${paymentMethodLabel(maybeMethodChange)}`);
+      await updateOrderPaymentMethod(orderId, maybeMethodChange);
       await saveSession(session);
       return respondAndLog(
         `Actualizado. El pedido ${orderId} ahora queda con medio de pago: ${paymentMethodLabel(maybeMethodChange)}.\n` +
