@@ -19,6 +19,15 @@ const DASH_COOKIE_SECRET = (process.env.DASH_COOKIE_SECRET || "").trim();
 const API_BASE_URL = (process.env.API_BASE_URL || "").trim();
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function signToken(token) {
   const h = crypto.createHmac("sha256", DASH_COOKIE_SECRET || "dev");
   h.update(token);
@@ -118,7 +127,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
   const companies = await api("/api/companies");
   const rows = companies.map(c => `
     <li>
-      <b>${c.id}</b> — ${c.name || ""} 
+      <b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name)}
       <a href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
     </li>
   `).join("");
@@ -155,23 +164,23 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <link rel="stylesheet" href="/dashboard.css" />
-        <title>Editar ${c.id}</title>
+        <title>Editar ${escapeHtml(c.id)}</title>
       </head>
       <body class="dark">
         <div class="center-card large">
-          <h2>Editar ${c.id}</h2>
+          <h2>Editar ${escapeHtml(c.id)}</h2>
           <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/save" class="form">
             <label>Nombre</label>
-            <input name="name" value="${(c.name || "").replaceAll('"', '&quot;')}" />
+            <input name="name" value="${escapeHtml(c.name)}" />
 
             <label>Prompt</label>
-            <textarea name="prompt" rows="5">${c.prompt || ""}</textarea>
+            <textarea name="prompt" rows="5">${escapeHtml(c.prompt)}</textarea>
 
             <label>Catalog JSON</label>
-            <textarea name="catalogJson" rows="6">${c.catalogJson || "[]"}</textarea>
+            <textarea name="catalogJson" rows="6">${escapeHtml(c.catalogJson || "[]")}</textarea>
 
             <label>Rules JSON</label>
-            <textarea name="rulesJson" rows="6">${c.rulesJson || "{}"}</textarea>
+            <textarea name="rulesJson" rows="6">${escapeHtml(c.rulesJson || "{}")}</textarea>
 
             <div class="actions">
               <button class="btn primary">Guardar</button>
