@@ -67,6 +67,7 @@ const dbInitPromise = initializeDatabase();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const AI_GLOBAL = (process.env.AI_GLOBAL || "on").trim().toLowerCase();
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 15000);
 const BOT_CATALOG_PROVIDER_ID = (process.env.BOT_CATALOG_PROVIDER_ID || "babystepsbots").trim().toLowerCase();
 
 // ================= ADMIN =================
@@ -216,12 +217,17 @@ Reglas:
     { role: "user", content: text },
   ];
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
   try {
-    const resp = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: inputMessages,
-      instructions: `${prompt}\nMEDIOS DE PAGO:\n${paymentPrompt}`,
-    });
+    const resp = await openai.responses.create(
+      {
+        model: "gpt-4o-mini",
+        input: inputMessages,
+        instructions: `${prompt}\nMEDIOS DE PAGO:\n${paymentPrompt}`,
+      },
+      { signal: controller.signal }
+    );
 
     const answer = (resp.output_text || "").trim();
     session.data.aiCount = Number(session.data.aiCount || 0) + 1;
@@ -234,8 +240,14 @@ Reglas:
 
     return answer || null;
   } catch (e) {
-    console.error("aiReply failed:", e?.message || e);
+    if (e?.name === "AbortError" || controller.signal.aborted) {
+      console.error(`aiReply timeout after ${OPENAI_TIMEOUT_MS}ms`);
+    } else {
+      console.error("aiReply failed:", e?.message || e);
+    }
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
