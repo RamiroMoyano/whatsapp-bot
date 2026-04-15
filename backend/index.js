@@ -498,6 +498,7 @@ function validateTwilioSignature(req, res, next) {
 }
 
 app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
+  try {
   const fromRaw = req.body.From || "unknown";
   const from = normalizeWhatsappFromNumber(fromRaw) || String(fromRaw || "unknown").trim() || "unknown";
   const body = (req.body.Body || "").trim();
@@ -510,10 +511,15 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
   // Deduplicación: ignorar mensajes ya procesados (reintentos de Twilio)
   if (twilioSid) {
-    const already = await db.prepare(`SELECT id FROM ai_messages WHERE twilioSid = ? LIMIT 1`).get(twilioSid);
-    if (already) {
-      res.set("Content-Type", "text/xml");
-      return res.send("<Response></Response>");
+    try {
+      const already = await db.prepare(`SELECT id FROM ai_messages WHERE twilioSid = ? LIMIT 1`).get(twilioSid);
+      if (already) {
+        res.set("Content-Type", "text/xml");
+        return res.send("<Response></Response>");
+      }
+    } catch (dedupErr) {
+      console.error("[webhook] dedup check failed:", dedupErr?.message || dedupErr);
+      // continuar — mejor procesar dos veces que no procesar
     }
   }
 
@@ -1393,6 +1399,11 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     contextualCheckoutFallback(session, company, { activeOrderId })
   );
   }); // withUserLock
+  } catch (err) {
+    console.error("[webhook] unhandled error:", err?.message || err);
+    res.set("Content-Type", "text/xml");
+    res.status(500).send("<Response></Response>");
+  }
 });
 // ================= RESPUESTA =================
 function respond(res, text) {
