@@ -1,3 +1,4 @@
 .env
+.env.local
 orders.jsonl
 node_modules/

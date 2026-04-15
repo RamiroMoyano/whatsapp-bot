@@ -7,6 +7,9 @@ import fetch from "node-fetch";
 import crypto from "crypto";
 import { createIntegrationId, loadCompanyIntegration, loadCompanyIntegrations } from "./integrations/load-company-integrations.js";
 import { getIntegrationRunner } from "./integrations/registry.js";
+import { parseJsonSafe, normalizeTextForMatch, normalizeCurrencyCode, getCompanyCatalogCurrency, formatChatMoney, normalizeWhatsappFromNumber, isTruthyFlag, isReserved, isHumanTrigger, newOrderId, roundMoney } from "./services/utils.js";
+import { extractCompanyPaymentConfig, paymentMethodsPromptText, paymentMethodsReplyText, normalizePaymentMethodInput, normalizePaymentStatusInput, isPaidStatusValue, paymentMethodLabel, availablePaymentMethodKeys, paymentMethodSelectionPrompt, extractCheckoutFieldsFromText } from "./services/payment.js";
+import { pickCatalogEmoji, normalizeCatalogMatchText, extractCatalogSelectionsFromText, summarizeCatalogSelection, buildCatalogInfoReply, buildCatalogFilteredReply, contextualCheckoutFallback, looksLikeCheckoutOperationalMessage, formatCatalogChoices, normalizeCatalogEntries } from "./services/catalog.js";
 
 dotenv.config();
 
@@ -20,6 +23,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
+const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const ADMIN_COMPANY_LIST_CACHE_TTL_MS = Number(process.env.ADMIN_COMPANY_LIST_CACHE_TTL_MS || 180000);
 let adminCompanyListCache = {
   items: [],
@@ -32,46 +36,8 @@ function requireApiAuth(req, res, next) {
   next();
 }
 
-// ================= TELEGRAM (UNICO, ARRIBA) =================
-const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
-const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
-
-async function sendTelegram(text) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log("Telegram not configured (missing TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)");
-    return false;
-  }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  try {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 8000);
-
-    const r = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text,
-        disable_web_page_preview: true,
-      }),
-    });
-
-    clearTimeout(t);
-
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || data.ok === false) {
-      console.error("Telegram API error:", r.status, data);
-      return false;
-    }
-
-    return true;
-  } catch (e) {
-    console.error("Telegram notify failed:", e?.message || e);
-    return false;
-  }
-}
+// ================= TELEGRAM =================
+import { sendTelegram } from "./services/telegram.js";
 
 // ================= DB INIT =================
 const DB_STARTUP_TIMEOUT_MS = Number(process.env.DB_STARTUP_TIMEOUT_MS || 15000);
@@ -141,6 +107,25 @@ async function getCompanySafe(session) {
   return (await getCompany(id)) || fallback;
 }
 
+// ================= SESSION LOCK =================
+// Serializa mensajes del mismo usuario para evitar race conditions
+const _sessionLocks = new Map();
+
+async function withUserLock(from, fn) {
+  while (_sessionLocks.has(from)) {
+    await _sessionLocks.get(from);
+  }
+  let release;
+  const lock = new Promise((r) => { release = r; });
+  _sessionLocks.set(from, lock);
+  try {
+    return await fn();
+  } finally {
+    _sessionLocks.delete(from);
+    release();
+  }
+}
+
 // ================= SESSION =================
 async function getSession(from) {
   const r = await db.prepare(`SELECT * FROM sessions WHERE fromNumber=?`).get(from);
@@ -191,19 +176,6 @@ const menuText = (c) => `${String.fromCodePoint(0x1F44B)} Hola! Soy el asistente
 - checkout
 - humano`;
 
-function pickCatalogEmoji(itemRaw, index = 0) {
-  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
-  const text = normalizeTextForMatch(
-    `${item?.name || ""} ${item?.category || ""} ${item?.rubro || ""} ${item?.seccion || ""}`
-  );
-  if (text.includes("perro") || text.includes("mascota")) return String.fromCodePoint(0x1F436);
-  if (text.includes("gato")) return String.fromCodePoint(0x1F431);
-  if (text.includes("ropa") || text.includes("remera") || text.includes("pantalon") || text.includes("campera")) return String.fromCodePoint(0x1F455);
-  if (text.includes("accesorio")) return String.fromCodePoint(0x1F9F0);
-  if (text.includes("comida") || text.includes("alimento")) return String.fromCodePoint(0x1F35D);
-  const fallback = [0x1F539, 0x1F537, 0x1F535, 0x1F7E2];
-  return String.fromCodePoint(fallback[index % fallback.length]);
-}
 
 const catalogText = (c) =>
   `Catalogo ${c.name}\n` +
@@ -220,13 +192,19 @@ const cartText = async (s) => {
   if (!s.cart.length) return `${String.fromCodePoint(0x1F9FA)} Carrito vacio.`;
   let total = 0;
   const out = {};
-  s.cart.forEach((id) => (out[id] = (out[id] || 0) + 1));
-  const lines = Object.entries(out).map(([id, q]) => {
+  s.cart.forEach((item) => {
+    const id = typeof item === "object" ? item.id : item;
+    const lockedPrice = typeof item === "object" ? item.price : null;
+    const key = Number(id);
+    if (!out[key]) out[key] = { qty: 0, lockedPrice };
+    out[key].qty += 1;
+  });
+  const lines = Object.entries(out).map(([id, { qty, lockedPrice }]) => {
     const p = (c.catalog || []).find((x) => Number(x.id) === Number(id));
-    const unit = Number(p?.price || 0);
-    const sub = unit * q;
+    const unit = lockedPrice != null ? lockedPrice : Number(p?.price || 0);
+    const sub = unit * qty;
     total += sub;
-    return `- ${p?.name || "Producto"} x${q} - ${formatChatMoney(sub, getCompanyCatalogCurrency(c))}`;
+    return `- ${p?.name || "Producto"} x${qty} - ${formatChatMoney(sub, getCompanyCatalogCurrency(c))}`;
   });
   return `${String.fromCodePoint(0x1F9FE)} ${c.name}\n${lines.join("\n")}\nTotal: ${formatChatMoney(total, getCompanyCatalogCurrency(c))}`;
 };
@@ -332,26 +310,6 @@ Reglas:
 }
 
 // ================= UTILIDADES =================
-const newOrderId = () => "PED-" + Math.random().toString(36).slice(2, 8).toUpperCase();
-
-const isReserved = (t) =>
-  [
-    "menu","hola","catalogo","carrito","checkout",
-    "pago","pagar","pagado","confirmar","cancelar","ayuda",
-    "humano","asesor","hablar con humano"
-  ].includes(t);
-
-const isHumanTrigger = (t) => ["humano","asesor","hablar con humano"].includes(t);
-
-function parseJsonSafe(raw, fallback) {
-  try {
-    const parsed = JSON.parse(raw ?? "");
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function resolveStoredClientPassword(rules, company) {
   const candidates = [
     rules?.clientPassword,
@@ -469,1016 +427,24 @@ async function runIntegrationModule(integration) {
   return runner(integration, { timeoutMs: 10000 });
 }
 
-const SUPPORTED_CURRENCIES = new Set(["ARS", "USD", "EUR", "GBP", "BRL"]);
-
-function normalizeCurrencyCode(value, fallback = "USD") {
-  const raw = String(value || "").trim().toUpperCase();
-  if (SUPPORTED_CURRENCIES.has(raw)) return raw;
-  return fallback;
-}
-
-function getCompanyCatalogCurrency(company) {
-  const rules = company?.rules && typeof company.rules === "object" ? company.rules : {};
-  return normalizeCurrencyCode(
-    rules.catalogCurrency ||
-    rules.subscriptionCurrency ||
-    "USD"
-  );
-}
-
-function formatChatMoney(value, currencyCode = "USD") {
-  const amount = Number(value || 0);
-  const currency = normalizeCurrencyCode(currencyCode);
-  if (!Number.isFinite(amount)) return `${currency} 0`;
-  try {
-    return new Intl.NumberFormat("es-AR", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${currency} ${Math.round(amount * 100) / 100}`;
-  }
-}
-
-function normalizeWhatsappFromNumber(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (raw.toLowerCase() === "unknown") return "unknown";
-
-  let phone = raw;
-  if (phone.toLowerCase().startsWith("whatsapp:")) {
-    phone = phone.slice("whatsapp:".length).trim();
-  }
-
-  if (!phone) return "";
-  let compact = phone.replace(/[^\d+]/g, "");
-  if (!compact) return "";
-
-  if (compact.startsWith("+")) {
-    compact = `+${compact.slice(1).replace(/\+/g, "")}`;
-  } else {
-    compact = `+${compact.replace(/\+/g, "")}`;
-  }
-
-  return `whatsapp:${compact}`;
-}
-
-function isTruthyFlag(value) {
-  if (value === true) return true;
-  const raw = String(value || "").trim().toLowerCase();
-  return ["1", "true", "on", "si", "yes"].includes(raw);
-}
-
-function extractCompanyPaymentConfig(rulesRaw) {
-  const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-  const methodsRaw = rules.paymentMethods && typeof rules.paymentMethods === "object"
-    ? rules.paymentMethods
-    : {};
-  const transferRaw = rules.paymentTransfer && typeof rules.paymentTransfer === "object"
-    ? rules.paymentTransfer
-    : {};
-
-  const transfer = {
-    bankName: String(transferRaw.bankName || rules.paymentTransferBankName || rules.paymentTransferBank || "").trim(),
-    accountHolder: String(
-      transferRaw.accountHolder ||
-      rules.paymentTransferAccountHolder ||
-      rules.razonSocial ||
-      rules.businessName ||
-      ""
-    ).trim(),
-    taxId: String(
-      transferRaw.taxId ||
-      rules.paymentTransferTaxId ||
-      rules.paymentTransferCuit ||
-      rules.cuit ||
-      rules.taxId ||
-      ""
-    ).trim(),
-    cbu: String(transferRaw.cbu || rules.paymentTransferCbu || rules.cbu || "").trim(),
-    alias: String(transferRaw.alias || rules.paymentTransferAlias || rules.alias || "").trim(),
-    accountType: String(transferRaw.accountType || rules.paymentTransferAccountType || "").trim(),
-    note: String(transferRaw.note || rules.paymentTransferNote || "").trim(),
-  };
-
-  const enabled = {
-    cash: isTruthyFlag(methodsRaw.cash ?? methodsRaw.efectivo ?? rules.paymentCash ?? rules.paymentEfectivo),
-    debit: isTruthyFlag(methodsRaw.debit ?? methodsRaw.debito ?? rules.paymentDebit ?? rules.paymentDebito),
-    transfer: isTruthyFlag(
-      methodsRaw.transfer ??
-      methodsRaw.transferencia ??
-      rules.paymentTransferEnabled ??
-      rules.paymentTransfer
-    ),
-    credit: isTruthyFlag(methodsRaw.credit ?? methodsRaw.credito ?? rules.paymentCredit ?? rules.paymentCredito),
-  };
-
-  if (transfer.cbu || transfer.alias || transfer.accountHolder || transfer.bankName) {
-    enabled.transfer = true;
-  }
-
-  return {
-    enabled,
-    transfer,
-    publicNote: String(rules.paymentInstructions || rules.paymentPublicNote || "").trim(),
-  };
-}
-
-function paymentMethodsPromptText(company) {
-  const payment = extractCompanyPaymentConfig(company?.rules || {});
-  const methods = [];
-  if (payment.enabled.cash) methods.push("Efectivo");
-  if (payment.enabled.debit) methods.push("Debito");
-  if (payment.enabled.transfer) methods.push("Transferencia");
-  if (payment.enabled.credit) methods.push("Tarjeta de credito");
-
-  const lines = [];
-  lines.push(methods.length ? methods.join(", ") : "No configurados");
-
-  if (payment.enabled.transfer) {
-    const transferParts = [];
-    if (payment.transfer.bankName) transferParts.push(`Banco: ${payment.transfer.bankName}`);
-    if (payment.transfer.accountHolder) transferParts.push(`Titular: ${payment.transfer.accountHolder}`);
-    if (payment.transfer.taxId) transferParts.push(`CUIT/CUIL: ${payment.transfer.taxId}`);
-    if (payment.transfer.cbu) transferParts.push(`CBU: ${payment.transfer.cbu}`);
-    if (payment.transfer.alias) transferParts.push(`Alias: ${payment.transfer.alias}`);
-    if (payment.transfer.accountType) transferParts.push(`Tipo: ${payment.transfer.accountType}`);
-    if (transferParts.length) lines.push(transferParts.join(" | "));
-  }
-
-  if (payment.publicNote) lines.push(`Notas: ${payment.publicNote}`);
-  lines.push("Comprobante de transferencia: opcional (no bloquea el pedido).");
-  return lines.join("\n");
-}
-
-function paymentMethodsReplyText(company, options = {}) {
-  const { orderId = "" } = options;
-  const payment = extractCompanyPaymentConfig(company?.rules || {});
-  const methods = [];
-  if (payment.enabled.cash) methods.push("Efectivo");
-  if (payment.enabled.debit) methods.push("Debito");
-  if (payment.enabled.transfer) methods.push("Transferencia");
-  if (payment.enabled.credit) methods.push("Tarjeta de credito");
-
-  const lines = [];
-  lines.push(`Medios de pago de ${company?.name || "la empresa"}:`);
-
-  if (!methods.length) {
-    lines.push("- Aun no hay medios de pago configurados.");
-  } else {
-    lines.push(`- Disponibles: ${methods.join(", ")}`);
-  }
-
-  if (payment.enabled.transfer) {
-    lines.push("");
-    lines.push("Datos para transferencia:");
-    if (payment.transfer.bankName) lines.push(`- Banco: ${payment.transfer.bankName}`);
-    if (payment.transfer.accountHolder) lines.push(`- Razon social / titular: ${payment.transfer.accountHolder}`);
-    if (payment.transfer.taxId) lines.push(`- CUIT/CUIL: ${payment.transfer.taxId}`);
-    if (payment.transfer.cbu) lines.push(`- CBU: ${payment.transfer.cbu}`);
-    if (payment.transfer.alias) lines.push(`- Alias: ${payment.transfer.alias}`);
-    if (payment.transfer.accountType) lines.push(`- Tipo de cuenta: ${payment.transfer.accountType}`);
-    if (payment.transfer.note) lines.push(`- Nota: ${payment.transfer.note}`);
-    lines.push("- Si queres, podes enviar comprobante (opcional).");
-  }
-
-  if (payment.publicNote) {
-    lines.push("");
-    lines.push(`Info adicional: ${payment.publicNote}`);
-  }
-
-  if (orderId) {
-    lines.push("");
-    lines.push(`Pedido asociado: ${orderId}`);
-  }
-
-  return lines.join("\n");
-}
-
-function normalizeTextForMatch(value) {
-  return String(value || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalizePaymentMethodInput(value) {
-  const raw = normalizeTextForMatch(value);
-  if (!raw) return "";
-  if (
-    raw.includes("transfer") ||
-    raw.includes("banco") ||
-    raw.includes("cbu") ||
-    raw.includes("alias")
-  ) {
-    return "transferencia";
-  }
-  if (raw.includes("debito") || raw.includes("debit")) return "debito";
-  if (raw.includes("credito") || raw.includes("credit") || raw.includes("tarjeta")) return "tarjeta";
-  if (raw.includes("efectivo") || raw.includes("cash")) return "efectivo";
-  return "";
-}
-
-function normalizePaymentStatusInput(value) {
-  const raw = normalizeTextForMatch(value);
-  if (!raw) return "";
-  if (
-    raw.includes("paid") ||
-    raw.includes("pagado") ||
-    raw.includes("approved") ||
-    raw.includes("aprobado") ||
-    raw.includes("settled") ||
-    raw.includes("cobrado")
-  ) {
-    return "paid";
-  }
-  if (
-    raw.includes("pending") ||
-    raw.includes("pendiente") ||
-    raw.includes("no pag") ||
-    raw.includes("unpaid")
-  ) {
-    return "pending";
-  }
-  if (
-    raw.includes("failed") ||
-    raw.includes("fallido") ||
-    raw.includes("rechaz") ||
-    raw.includes("cancel")
-  ) {
-    return "failed";
-  }
-  return "";
-}
-
-function isPaidStatusValue(value) {
-  return normalizePaymentStatusInput(value) === "paid";
-}
-
-function paymentMethodLabel(methodRaw) {
-  const method = normalizePaymentMethodInput(methodRaw);
-  if (method === "transferencia") return "Transferencia";
-  if (method === "debito") return "Debito";
-  if (method === "tarjeta") return "Tarjeta de credito";
-  if (method === "efectivo") return "Efectivo";
-  return "No definido";
-}
-
-function availablePaymentMethodKeys(company) {
-  const payment = extractCompanyPaymentConfig(company?.rules || {});
-  const methods = [];
-  if (payment.enabled.cash) methods.push("efectivo");
-  if (payment.enabled.debit) methods.push("debito");
-  if (payment.enabled.transfer) methods.push("transferencia");
-  if (payment.enabled.credit) methods.push("tarjeta");
-  return methods.length ? methods : ["efectivo", "debito", "transferencia", "tarjeta"];
-}
-
-function paymentMethodSelectionPrompt(company) {
-  const methods = availablePaymentMethodKeys(company).map((item) => paymentMethodLabel(item));
-  return (
-    `Perfecto. Ahora elegi medio de pago: ${methods.join(", ")}.\n` +
-    `Ejemplo: efectivo / transferencia / debito / tarjeta`
-  );
-}
-
-function extractCheckoutFieldsFromText(textRaw) {
-  const text = String(textRaw || "").trim();
-  const paymentMethod = normalizePaymentMethodInput(text);
-
-  const phoneMatch = text.match(/\+?\d[\d\s\-()]{6,}\d/g);
-  const contact = phoneMatch?.length
-    ? String(phoneMatch[0] || "").trim().replace(/\s+/g, " ")
-    : "";
-
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  let name = "";
-  for (const line of lines) {
-    const normalized = normalizeTextForMatch(line);
-    if (!normalized) continue;
-    if (normalizePaymentMethodInput(line)) continue;
-    if (/\d{6,}/.test(normalized)) continue;
-    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "maÃ±ana"].includes(normalized)) continue;
-    name = line;
-    break;
-  }
-
-  if (!name && lines.length === 1) {
-    let single = lines[0];
-    if (contact) single = single.replace(contact, " ");
-    single = single
-      .replace(/efectivo/gi, " ")
-      .replace(/transferencia/gi, " ")
-      .replace(/transfer/gi, " ")
-      .replace(/debito/gi, " ")
-      .replace(/d[eÃ©]bito/gi, " ")
-      .replace(/tarjeta/gi, " ")
-      .replace(/credito/gi, " ")
-      .replace(/cr[eÃ©]dito/gi, " ")
-      .replace(/cash/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (/[a-zA-Z]/.test(single)) name = single;
-  }
-
-  return { name, contact, paymentMethod };
-}
-
-function normalizeCatalogMatchText(value) {
-  return normalizeTextForMatch(value)
-    .replace(/[^a-z0-9\s,+\-\/x]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isMeaningfulCatalogValue(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  return !!raw && !["-", "n/a", "na", "null", "undefined", "sin dato", "s/d"].includes(raw);
-}
-
-function buildCatalogCategoryPathFromItem(itemRaw) {
-  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
-  const categoryRaw = String(item.category ?? item.type ?? "").trim();
-  if (isMeaningfulCatalogValue(categoryRaw)) return categoryRaw;
-
-  const parts = [item.rubro, item.seccion, item.subseccion]
-    .map((value) => String(value ?? "").trim())
-    .filter((value) => isMeaningfulCatalogValue(value));
-  if (!parts.length) return "-";
-
-  const unique = [];
-  const seen = new Set();
-  for (const part of parts) {
-    const key = part.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(part);
-  }
-  return unique.length ? unique.join(" > ") : "-";
-}
-
-function getCatalogGroupKeyset(itemRaw) {
-  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
-  const sources = [
-    buildCatalogCategoryPathFromItem(item),
-    item.rubro,
-    item.seccion,
-    item.subseccion,
-    item.category,
-    item.type,
-    item.tags,
-  ];
-
-  const keywords = new Set();
-  for (const source of sources) {
-    const values = Array.isArray(source) ? source : [source];
-    for (const value of values) {
-      const normalized = normalizeCatalogMatchText(value);
-      if (!normalized) continue;
-      keywords.add(normalized);
-      for (const token of normalized.split(" ")) {
-        if (token.length >= 3) keywords.add(token);
-      }
-    }
-  }
-  return keywords;
-}
-
-function extractWeightGramsFromText(value) {
-  const raw = normalizeCatalogMatchText(value);
-  if (!raw) return 0;
-  const kgMatch = raw.match(/\b(\d+(?:[.,]\d+)?)\s*(kg|kilo|kilos)\b/);
-  if (kgMatch) {
-    const n = Number(String(kgMatch[1]).replace(",", "."));
-    if (Number.isFinite(n) && n > 0) return Math.round(n * 1000);
-  }
-  const gMatch = raw.match(/\b(\d+(?:[.,]\d+)?)\s*(g|gr|grs|gramo|gramos)\b/);
-  if (gMatch) {
-    const n = Number(String(gMatch[1]).replace(",", "."));
-    if (Number.isFinite(n) && n > 0) return Math.round(n);
-  }
-  return 0;
-}
-
-function extractNameTokensForCatalogSearch(value) {
-  const raw = normalizeCatalogMatchText(value);
-  if (!raw) return [];
-  const clean = ` ${raw} `
-    .replace(/\b\d+(?:[.,]\d+)?\s*(kg|kilo|kilos|g|gr|grs|gramo|gramos)\b/g, " ")
-    .replace(/\b\d+\s*(x|unidades?|u|uds?)\b/g, " ")
-    .replace(/\b\d+\b/g, " ")
-    .replace(/\b(de|del|la|el|los|las|para|con|sin|quiero|agregar|agregame|sumame|sumar|suma|comprar|compra|pedido|carrito|checkout|info|informacion|detalle|detalles|contame|cuentame|mas|sobre|mostrame|mostrar|ver|me|interesa)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!clean) return [];
-  return clean.split(" ").filter((token) => token.length >= 3);
-}
-
-function scoreCatalogItemByTokens(item, tokens) {
-  if (!tokens.length) return 0;
-  const text = normalizeCatalogMatchText(
-    `${item?.name || ""} ${item?.category || ""} ${item?.rubro || ""} ${item?.seccion || ""} ${item?.subseccion || ""}`
-  );
-  if (!text) return 0;
-  let hits = 0;
-  for (const token of tokens) {
-    if (text.includes(token)) hits += 1;
-  }
-  return hits;
-}
-
-function computeWeightedSelectionByGrams(textRaw, catalogRaw) {
-  const requestedGrams = extractWeightGramsFromText(textRaw);
-  if (!requestedGrams) return [];
-  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
-  const tokens = extractNameTokensForCatalogSearch(textRaw);
-
-  const candidates = catalog
-    .map((item) => {
-      const id = Number(item?.id);
-      const weight = extractWeightGramsFromText(item?.name || "");
-      if (!Number.isFinite(id) || !weight) return null;
-      const score = scoreCatalogItemByTokens(item, tokens);
-      return { id, weight, score };
-    })
-    .filter(Boolean)
-    .filter((item) => (tokens.length ? item.score > 0 : true));
-
-  if (!candidates.length) return [];
-
-  const bestScore = Math.max(...candidates.map((c) => c.score));
-  const scoped = candidates
-    .filter((c) => c.score === bestScore)
-    .sort((a, b) => b.weight - a.weight);
-  const maxWeight = scoped[0]?.weight || 0;
-  const minWeight = scoped[scoped.length - 1]?.weight || 0;
-  if (!maxWeight || !minWeight) return [];
-
-  const maxUnits = Math.min(60, Math.ceil(requestedGrams / minWeight) + 8);
-  const limit = Math.max(requestedGrams + maxWeight * 2, requestedGrams);
-  const dp = Array.from({ length: limit + 1 }, () => null);
-  dp[0] = { units: 0, counts: Array(scoped.length).fill(0) };
-
-  for (let total = 0; total <= limit; total += 1) {
-    const state = dp[total];
-    if (!state) continue;
-    if (state.units >= maxUnits) continue;
-    for (let i = 0; i < scoped.length; i += 1) {
-      const nextTotal = total + scoped[i].weight;
-      if (nextTotal > limit) continue;
-      const nextUnits = state.units + 1;
-      const current = dp[nextTotal];
-      if (current && current.units <= nextUnits) continue;
-      const counts = state.counts.slice();
-      counts[i] += 1;
-      dp[nextTotal] = { units: nextUnits, counts };
-    }
-  }
-
-  let bestTotal = -1;
-  let bestExcess = Number.POSITIVE_INFINITY;
-  let bestUnits = Number.POSITIVE_INFINITY;
-  for (let total = 0; total <= limit; total += 1) {
-    const state = dp[total];
-    if (!state || !state.units) continue;
-    const excess = total >= requestedGrams ? total - requestedGrams : Number.POSITIVE_INFINITY;
-    if (excess < bestExcess || (excess === bestExcess && state.units < bestUnits)) {
-      bestExcess = excess;
-      bestUnits = state.units;
-      bestTotal = total;
-    }
-  }
-
-  if (bestTotal < 0 || !dp[bestTotal]) return [];
-  const selectedIds = [];
-  dp[bestTotal].counts.forEach((qty, idx) => {
-    for (let i = 0; i < qty; i += 1) selectedIds.push(scoped[idx].id);
-  });
-  return selectedIds;
-}
-
-function isPureCatalogSelectionText(textRaw) {
-  const raw = normalizeCatalogMatchText(textRaw);
-  if (!raw) return false;
-
-  const compact = ` ${raw} `
-    .replace(/\b(\d{1,2})\s*x\s*(\d{1,3})\b/g, " ")
-    .replace(/\b\d{1,3}\b/g, " ")
-    .replace(/\b(y|e|and|,|\/|\+|-|del|de|el|la|los|las)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return !compact;
-}
-
-function looksLikeCatalogInfoIntent(textRaw) {
-  const raw = normalizeCatalogMatchText(textRaw);
-  if (!raw) return false;
-  const keywords = [
-    "contame",
-    "cuentame",
-    "info",
-    "informacion",
-    "mas",
-    "detalle",
-    "detalles",
-    "caracteristica",
-    "caracteristicas",
-    "que incluye",
-    "que trae",
-    "como funciona",
-    "diferencia",
-    "explicame",
-  ];
-  if (raw.includes("?")) return true;
-  return keywords.some((word) => raw.includes(word));
-}
-
-function looksLikeCatalogAddIntent(textRaw) {
-  const raw = normalizeCatalogMatchText(textRaw);
-  if (!raw) return false;
-  const keywords = [
-    "agrega",
-    "agregame",
-    "agregar",
-    "sumame",
-    "sumar",
-    "suma",
-    "anadi",
-    "aÃ±adi",
-    "aniadi",
-    "adiciona",
-    "quiero",
-    "me interesa",
-    "llevo",
-    "comprar",
-    "compra",
-    "adquirir",
-    "elijo",
-    "elegi",
-  ];
-  return keywords.some((word) => raw.includes(word));
-}
-
-function looksLikeCatalogSelectionIntent(textRaw) {
-  return (
-    isPureCatalogSelectionText(textRaw) ||
-    looksLikeCatalogAddIntent(textRaw) ||
-    looksLikeCatalogInfoIntent(textRaw) ||
-    extractWeightGramsFromText(textRaw) > 0
-  );
-}
-
-function extractCatalogSelectionsFromText(textRaw, catalogRaw) {
-  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
-  const normalizedText = normalizeCatalogMatchText(textRaw);
-  const isInfoIntent = looksLikeCatalogInfoIntent(textRaw);
-  const isAddIntent = looksLikeCatalogAddIntent(textRaw);
-  const isPureSelection = isPureCatalogSelectionText(textRaw);
-  const idToProduct = new Map();
-  for (const item of catalog) {
-    const id = Number(item?.id);
-    if (!Number.isFinite(id)) continue;
-    idToProduct.set(id, item);
-  }
-
-  const selectedIds = [];
-  const selectedOnce = new Set();
-  const invalidIds = [];
-  let weightedMatched = false;
-
-  const addId = (id, qty = 1, explicitQuantity = false) => {
-    if (!idToProduct.has(id)) {
-      if (!invalidIds.includes(id)) invalidIds.push(id);
-      return;
-    }
-    if (explicitQuantity) {
-      const safeQty = Math.max(1, Math.min(20, Number(qty) || 1));
-      for (let i = 0; i < safeQty; i += 1) selectedIds.push(id);
-      selectedOnce.add(id);
-      return;
-    }
-    if (selectedOnce.has(id)) return;
-    selectedIds.push(id);
-    selectedOnce.add(id);
-  };
-
-  let working = ` ${normalizedText} `;
-  working = working.replace(/\b\d+(?:[.,]\d+)?\s*(kg|kilo|kilos|g|gr|grs|gramo|gramos)\b/g, " ");
-  const qtyPattern = /\b(\d{1,2})\s*x\s*(\d{1,3})\b/g;
-  for (const match of normalizedText.matchAll(qtyPattern)) {
-    const qty = Number(match[1]);
-    const id = Number(match[2]);
-    if (Number.isFinite(id)) addId(id, qty, true);
-  }
-  working = working.replace(qtyPattern, " ");
-
-  const numericPattern = /\b(\d{1,3})\b/g;
-  for (const match of working.matchAll(numericPattern)) {
-    const id = Number(match[1]);
-    if (!Number.isFinite(id)) continue;
-    addId(id, 1, false);
-  }
-
-  const genericWords = new Set([
-    "bot",
-    "whatsapp",
-    "con",
-    "sin",
-    "para",
-    "de",
-    "del",
-    "la",
-    "el",
-    "los",
-    "las",
-    "ai",
-  ]);
-
-  for (const [id, item] of idToProduct.entries()) {
-    if (selectedOnce.has(id)) continue;
-    const itemName = normalizeCatalogMatchText(item?.name || "");
-    if (!itemName) continue;
-
-    if (working.includes(` ${itemName} `)) {
-      addId(id, 1, false);
-      continue;
-    }
-
-    const strongTokens = itemName
-      .split(" ")
-      .map((token) => token.trim())
-      .filter((token) => token.length > 2 && !genericWords.has(token));
-    if (!strongTokens.length) continue;
-
-    const allTokensPresent = strongTokens.every((token) => working.includes(token));
-    if (allTokensPresent) addId(id, 1, false);
-  }
-
-  // Natural quantity by product name (ej: "2 unidades de almendras")
-  const unitsByNameMatch = normalizedText.match(/\b(\d{1,2})\s*(?:x|unidades?|u|uds?)?\s+(?:de\s+)?(.+)$/);
-  if (unitsByNameMatch) {
-    const qty = Math.max(1, Math.min(20, Number(unitsByNameMatch[1]) || 1));
-    const targetText = unitsByNameMatch[2] || "";
-    const targetTokens = extractNameTokensForCatalogSearch(targetText);
-    if (targetTokens.length) {
-      const scored = [...idToProduct.entries()]
-        .map(([id, item]) => ({ id, score: scoreCatalogItemByTokens(item, targetTokens) }))
-        .filter((row) => row.score > 0)
-        .sort((a, b) => b.score - a.score);
-      if (scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)) {
-        addId(scored[0].id, qty, true);
-      }
-    }
-  }
-
-  // Weight-aware selection (ej: "200 gr de almendras", "600 gramos de almendras")
-  if ((isAddIntent || isPureSelection) && !isInfoIntent) {
-    const weightedIds = computeWeightedSelectionByGrams(textRaw, catalog);
-    if (weightedIds.length) {
-      weightedMatched = true;
-      for (const id of weightedIds) addId(id, 1, true);
-    }
-  }
-
-  const groupStopWords = new Set([
-    "catalogo",
-    "producto",
-    "productos",
-    "opcion",
-    "opciones",
-    "quiero",
-    "agregar",
-    "agregame",
-    "sumame",
-    "sumar",
-    "suma",
-    "compra",
-    "comprar",
-    "pedido",
-    "pedidos",
-    "carrito",
-    "checkout",
-    "info",
-    "informacion",
-    "detalle",
-    "detalles",
-    "contame",
-    "cuentame",
-    "mas",
-    "sobre",
-    "del",
-    "de",
-    "la",
-    "el",
-    "los",
-    "las",
-    "para",
-    "con",
-    "sin",
-    "mostrame",
-    "mostrar",
-    "ver",
-    "tengo",
-    "que",
-    "me",
-    "interesa",
-  ]);
-
-  const queryTokens = normalizedText
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !/^\d+$/.test(token) && !groupStopWords.has(token));
-
-  const groupMatchesRaw = [];
-  if (queryTokens.length) {
-    for (const [id, item] of idToProduct.entries()) {
-      const keyset = getCatalogGroupKeyset(item);
-      if (!keyset.size) continue;
-
-      const keyList = [...keyset];
-      let hits = 0;
-      for (const token of queryTokens) {
-        const matched = keyList.some((key) => {
-          if (key === token) return true;
-          if (key.length >= 4 && key.includes(token)) return true;
-          if (token.length >= 5 && token.includes(key)) return true;
-          return false;
-        });
-        if (matched) hits += 1;
-      }
-
-      if (hits > 0) {
-        groupMatchesRaw.push({
-          id,
-          hits,
-          category: buildCatalogCategoryPathFromItem(item),
-        });
-      }
-    }
-  }
-
-  let groupMatchedIds = [];
-  let groupLabels = [];
-  if (groupMatchesRaw.length) {
-    groupMatchesRaw.sort((a, b) => b.hits - a.hits || a.id - b.id);
-    const minHits = queryTokens.length > 1 ? 2 : 1;
-    const filtered = groupMatchesRaw.filter((row) => row.hits >= minHits);
-    const scoped = filtered.length ? filtered : groupMatchesRaw;
-
-    const uniqueIds = [];
-    const seenIds = new Set();
-    for (const row of scoped) {
-      if (selectedOnce.has(row.id)) continue;
-      if (seenIds.has(row.id)) continue;
-      seenIds.add(row.id);
-      uniqueIds.push(row.id);
-    }
-    groupMatchedIds = uniqueIds;
-
-    const labels = [];
-    const seenLabels = new Set();
-    for (const row of scoped) {
-      const label = String(row.category || "-").trim();
-      if (!isMeaningfulCatalogValue(label)) continue;
-      const key = label.toLowerCase();
-      if (seenLabels.has(key)) continue;
-      seenLabels.add(key);
-      labels.push(label);
-      if (labels.length >= 3) break;
-    }
-    groupLabels = labels;
-  }
-
-  return {
-    selectedIds,
-    invalidIds,
-    groupMatchedIds,
-    groupLabels,
-    hasSelectionIntent: looksLikeCatalogSelectionIntent(textRaw),
-    isInfoIntent,
-    isAddIntent,
-    isPureSelection,
-    weightedMatched,
-  };
-}
-
-function summarizeCatalogSelection(idsRaw, catalogRaw) {
-  const ids = Array.isArray(idsRaw) ? idsRaw : [];
-  const catalog = Array.isArray(catalogRaw) ? catalogRaw : [];
-  const counts = new Map();
-  for (const id of ids) {
-    const key = Number(id);
-    if (!Number.isFinite(key)) continue;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const lines = [];
-  for (const [id, qty] of counts.entries()) {
-    const product = catalog.find((item) => Number(item?.id) === id);
-    const label = product?.name || `Producto ${id}`;
-    lines.push(qty > 1 ? `${label} x${qty}` : label);
-  }
-  return lines;
-}
-
-function catalogItemDetailsText(itemRaw, currencyCode = "USD") {
-  const item = itemRaw && typeof itemRaw === "object" ? itemRaw : {};
-  const name = String(item.name || "Producto").trim();
-  const priceText = formatChatMoney(Number(item.price || 0), currencyCode);
-  const explicitDescription = String(
-    item.description || item.details || item.detail || item.summary || item.info || ""
-  ).trim();
-
-  if (explicitDescription) {
-    return `${name} - ${priceText}\n${explicitDescription}`;
-  }
-
-  const normalizedName = normalizeTextForMatch(name);
-  if (normalizedName.includes("base")) {
-    return `${name} - ${priceText}\nIncluye flujo comercial base sin IA avanzada, ideal para empezar.`;
-  }
-  if (normalizedName.includes("lite")) {
-    return `${name} - ${priceText}\nIncluye IA LITE con memoria/contexto moderado y asistencia comercial.`;
-  }
-  if (normalizedName.includes("pro")) {
-    return `${name} - ${priceText}\nIncluye IA PRO con mayor memoria/contexto y respuestas mas personalizadas.`;
-  }
-  if (normalizedName.includes("dashboard")) {
-    return `${name} - ${priceText}\nPanel con metricas operativas para seguimiento comercial y pedidos.`;
-  }
-  return `${name} - ${priceText}\nSi queres, te detallo alcance y casos de uso para este producto.`;
-}
-
-function buildCatalogInfoReply(company, selectedIdsRaw) {
-  const selectedIds = Array.isArray(selectedIdsRaw) ? selectedIdsRaw : [];
-  const catalog = Array.isArray(company?.catalog) ? company.catalog : [];
-  const uniqueIds = [...new Set(selectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
-  const selectedItems = uniqueIds
-    .map((id) => catalog.find((item) => Number(item?.id) === id))
-    .filter(Boolean);
-
-  if (!selectedItems.length) {
-    return (
-      "Decime que opcion queres revisar (por ID o nombre).\n" +
-      "Ejemplo: info 2, info bot ai lite."
-    );
-  }
-
-  const lines = [];
-  const currency = getCompanyCatalogCurrency(company);
-  lines.push(`Te paso info de ${selectedItems.length} opcion(es):`);
-  lines.push("");
-  for (const item of selectedItems) {
-    lines.push(`${pickCatalogEmoji(item, Number(item?.id || 0))} ${catalogItemDetailsText(item, currency)}`);
-    lines.push("");
-  }
-  lines.push("Si queres agregar al carrito, escribi: agregar <id> (ej: agregar 2).");
-  lines.push("Tambien podes agregar varios por nombre o por IDs.");
-  return lines.join("\n").trim();
-}
-
-function buildCatalogFilteredReply(company, selectedIdsRaw, labelsRaw = []) {
-  const selectedIds = Array.isArray(selectedIdsRaw) ? selectedIdsRaw : [];
-  const labels = Array.isArray(labelsRaw) ? labelsRaw.filter(Boolean) : [];
-  const catalog = Array.isArray(company?.catalog) ? company.catalog : [];
-  const uniqueIds = [...new Set(selectedIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
-  const selectedItems = uniqueIds
-    .map((id) => catalog.find((item) => Number(item?.id) === id))
-    .filter(Boolean);
-
-  if (!selectedItems.length) {
-    return "No encontre productos para ese rubro/seccion. Escribi catalogo para ver opciones.";
-  }
-
-  const lines = [];
-  const currency = getCompanyCatalogCurrency(company);
-  const context = labels.length ? ` en ${labels.join(" / ")}` : "";
-  lines.push(`Encontre ${selectedItems.length} producto(s)${context}:`);
-  lines.push("");
-  for (const [idx, item] of selectedItems.slice(0, 40).entries()) {
-    const category = buildCatalogCategoryPathFromItem(item);
-    const suffix = category !== "-" ? ` [${category}]` : "";
-    lines.push(`${pickCatalogEmoji(item, idx)} ${item.name} - ${formatChatMoney(Number(item.price || 0), currency)}${suffix} (ID ${item.id})`);
-  }
-  if (selectedItems.length > 40) {
-    lines.push("");
-    lines.push(`Mostrando 40 de ${selectedItems.length}. Pedi un filtro mas especifico para acotar.`);
-  }
-  lines.push("");
-  lines.push("Para agregar al carrito: agregar <id>  (ej: agregar 2)");
-  lines.push("Para ver detalle: info <id>");
-  return lines.join("\n");
-}
-
-function contextualCheckoutFallback(session, company, options = {}) {
-  const state = String(session?.state || "MENU");
-  const cartCount = Array.isArray(session?.cart) ? session.cart.length : 0;
-  const activeOrderId = String(options.activeOrderId || "").trim();
-
-  if (state === "ASK_NAME") {
-    return "Necesito tu nombre para continuar con el pedido.";
-  }
-  if (state === "ASK_CONTACT") {
-    return "Necesito un telefono de contacto para continuar.";
-  }
-  if (state === "ASK_NOTES") {
-    return (
-      "Agrega notas u observaciones para el pedido (opcional).\n" +
-      "Si no queres agregar nada, dejalo vacio o responde: ok"
-    );
-  }
-  if (state === "ASK_PAYMENT_METHOD") {
-    return paymentMethodSelectionPrompt(company);
-  }
-  if (state === "ASK_PAYMENT_DETAILS") {
-    return (
-      `Contame detalle de coordinacion para el pedido ${activeOrderId || "(sin ID)"}.\n` +
-      "Ejemplo: dia, horario y lugar. Si no aplica, responde con -"
-    );
-  }
-  if (state === "MENU" && activeOrderId && !cartCount) {
-    return (
-      `Tenes un pedido activo (${activeOrderId}).\n` +
-      "Podes enviar detalle de pago/entrega o escribir menu para iniciar un nuevo flujo."
-    );
-  }
-  if (state === "MENU" && cartCount > 0) {
-    const hasName = !!String(session?.data?.name || "").trim();
-    const hasContact = !!String(session?.data?.contact || "").trim();
-    const hasPayment = !!String(session?.data?.paymentMethodHint || "").trim();
-    const missing = [];
-    if (!hasName) missing.push("nombre");
-    if (!hasContact) missing.push("contacto");
-    if (!hasPayment) missing.push("medio de pago");
-
-    if (!missing.length) {
-      return (
-        "Ya tengo carrito y datos base. Escribi checkout para continuar,\n" +
-        "o envia todo junto: nombre + telefono + medio de pago.\n" +
-        "Si queres ver detalles de un producto: info <id>."
-      );
-    }
-    return (
-      `Ya tengo tu carrito. Falta: ${missing.join(", ")}.\n` +
-      "Tambien podes enviar todo en un solo mensaje (ej: Pedro 3812345678 efectivo).\n" +
-      "Si queres ver detalles de un producto: info <id>."
-    );
-  }
-  return "No entendi. Escribi: menu / catalogo / ayuda";
-}
-
-function looksLikeCheckoutOperationalMessage(textRaw) {
-  const raw = normalizeTextForMatch(textRaw);
-  if (!raw) return false;
-  if (/^\d+$/.test(raw)) return true;
-
-  const keywords = [
-    "catalogo",
-    "carrito",
-    "checkout",
-    "agregar",
-    "comprar",
-    "compra",
-    "pedido",
-    "pago",
-    "pagado",
-    "comprobante",
-    "transfer",
-    "efectivo",
-    "debito",
-    "credito",
-    "tarjeta",
-    "confirmar",
-    "me interesa",
-    "quiero el",
-    "quiero esos",
-    "sumame",
-    "sumar",
-    "llevo",
-  ];
-  if (keywords.some((word) => raw.includes(word))) return true;
-
-  const extracted = extractCheckoutFieldsFromText(textRaw);
-  return !!(extracted.contact || extracted.paymentMethod);
-}
-
 function buildCheckoutItemsFromSession(session, company) {
-  const items = Array.isArray(session?.cart) ? [...session.cart] : [];
+  const raw = Array.isArray(session?.cart) ? [...session.cart] : [];
   let total = 0;
   const grouped = {};
-  items.forEach((id) => {
+  raw.forEach((item) => {
+    const id = typeof item === "object" ? item.id : item;
+    const lockedPrice = typeof item === "object" ? item.price : null;
     const key = Number(id);
     if (!Number.isFinite(key)) return;
-    grouped[key] = (grouped[key] || 0) + 1;
+    if (!grouped[key]) grouped[key] = { qty: 0, lockedPrice };
+    grouped[key].qty += 1;
   });
 
-  const itemsDetailed = Object.entries(grouped).map(([id, qty]) => {
+  const items = raw.map((item) => (typeof item === "object" ? item.id : item));
+
+  const itemsDetailed = Object.entries(grouped).map(([id, { qty, lockedPrice }]) => {
     const p = (company?.catalog || []).find((x) => Number(x.id) === Number(id));
-    const unit = Number(p?.price || 0);
+    const unit = lockedPrice != null ? lockedPrice : Number(p?.price || 0);
     const subtotal = unit * qty;
     total += subtotal;
     return { id: Number(id), name: p?.name || `Producto ${id}`, qty, unit, subtotal };
@@ -1938,31 +904,6 @@ async function syncCompanySessionsAiMode(companyIdRaw, rulesRaw, options = {}) {
   return { mode, scanned, updated, skippedManual };
 }
 
-function formatCatalogChoices(catalogItems) {
-  if (!catalogItems.length) return "Sin opciones de catalogo.";
-  return catalogItems
-    .map((item) => `- ${item.id ? `${item.id}) ` : ""}${item.name}`)
-    .join("\n");
-}
-
-function roundMoney(value) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return 0;
-  return Math.round(n * 100) / 100;
-}
-
-function normalizeCatalogEntries(catalogRaw) {
-  if (!Array.isArray(catalogRaw)) return [];
-  return catalogRaw
-    .map((item, idx) => ({
-      id: String(item?.id ?? "").trim(),
-      idLower: String(item?.id ?? "").trim().toLowerCase(),
-      name: String(item?.name || item?.title || `Producto ${idx + 1}`).trim(),
-      nameLower: String(item?.name || item?.title || `Producto ${idx + 1}`).trim().toLowerCase(),
-      price: roundMoney(item?.price ?? item?.amount ?? 0),
-    }))
-    .filter((item) => item.name);
-}
 
 async function getCatalogProviderRow() {
   return await db.prepare(`SELECT id,name,catalogJson FROM companies WHERE id=?`).get(BOT_CATALOG_PROVIDER_ID);
@@ -2759,6 +1700,8 @@ app.get("/api/orders", requireApiAuth, async (req, res) => {
     const companyId = String(req.query.companyId || "").trim();
     const limitRaw = Number(req.query.limit || 100);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 1000) : 100;
+    const offsetRaw = Number(req.query.offset || 0);
+    const offset = Number.isFinite(offsetRaw) ? Math.max(Math.trunc(offsetRaw), 0) : 0;
 
     const parseDateParam = (value, endOfDay = false) => {
       const raw = String(value || "").trim();
@@ -2811,10 +1754,10 @@ app.get("/api/orders", requireApiAuth, async (req, res) => {
       FROM orders
       ${whereSql}
       ORDER BY createdAt DESC
-      LIMIT ?
+      LIMIT ? OFFSET ?
     `;
 
-    const rows = await db.prepare(sql).all(...params, limit);
+    const rows = await db.prepare(sql).all(...params, limit, offset);
     const normalized = rows.map((row) => normalizeOrderRow(row)).filter(Boolean);
     res.json(normalized);
   } catch (e) {
@@ -3022,7 +1965,26 @@ app.post("/api/orders/:id/payment-status", requireApiAuth, async (req, res) => {
 });
 
 // ================= WEBHOOK =================
-app.post("/whatsapp", async (req, res) => {
+function validateTwilioSignature(req, res, next) {
+  if (!TWILIO_AUTH_TOKEN) {
+    console.warn("[twilio] TWILIO_AUTH_TOKEN no configurado — omitiendo validación de firma");
+    return next();
+  }
+  const valid = twilio.validateRequest(
+    TWILIO_AUTH_TOKEN,
+    req.headers["x-twilio-signature"] || "",
+    `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+    req.body
+  );
+  if (!valid) {
+    console.warn("[twilio] Firma inválida rechazada desde", req.ip);
+    res.set("Content-Type", "text/xml");
+    return res.status(403).send("<Response></Response>");
+  }
+  next();
+}
+
+app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
   const fromRaw = req.body.From || "unknown";
   const from = normalizeWhatsappFromNumber(fromRaw) || String(fromRaw || "unknown").trim() || "unknown";
   const body = (req.body.Body || "").trim();
@@ -3033,6 +1995,16 @@ app.post("/whatsapp", async (req, res) => {
   const hasMedia = Number.isFinite(numMedia) && numMedia > 0;
   const twilioSid = String(req.body.MessageSid || "").trim();
 
+  // Deduplicación: ignorar mensajes ya procesados (reintentos de Twilio)
+  if (twilioSid) {
+    const already = await db.prepare(`SELECT id FROM ai_messages WHERE twilioSid = ? LIMIT 1`).get(twilioSid);
+    if (already) {
+      res.set("Content-Type", "text/xml");
+      return res.send("<Response></Response>");
+    }
+  }
+
+  await withUserLock(from, async () => {
   if (from && from !== "unknown" && !cmd.startsWith("admin")) await setSetting("last_customer", from);
 
   const session = await getSession(from);
@@ -3533,7 +2505,7 @@ app.post("/whatsapp", async (req, res) => {
     const company = await getCompanySafe(session);
     const p = (company.catalog || []).find((x) => Number(x.id) === id);
     if (!p) return respondAndLog("Ese producto no existe. Escribi catalogo y elegi una opcion valida.");
-    session.cart.push(id);
+    session.cart.push({ id, price: Number(p.price || 0) });
     session.data.cartUpdatedAt = Date.now();
     delete session.data.lastCartReminderAt;
     await saveSession(session);
@@ -3565,7 +2537,10 @@ app.post("/whatsapp", async (req, res) => {
       !looksLikeCheckoutData;
 
     if (canAutoAddFromNaturalText) {
-      for (const id of detected.selectedIds) session.cart.push(Number(id));
+      for (const id of detected.selectedIds) {
+        const cp = (company.catalog || []).find((x) => Number(x.id) === Number(id));
+        session.cart.push({ id: Number(id), price: Number(cp?.price || 0) });
+      }
       session.data.cartUpdatedAt = Date.now();
       delete session.data.lastCartReminderAt;
       await saveSession(session);
@@ -3904,6 +2879,7 @@ app.post("/whatsapp", async (req, res) => {
   return respondAndLog(
     contextualCheckoutFallback(session, company, { activeOrderId })
   );
+  }); // withUserLock
 });
 // ================= RESPUESTA =================
 function respond(res, text) {
