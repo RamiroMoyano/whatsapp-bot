@@ -2644,14 +2644,20 @@ app.post("/admin/messages/reset", requireDashboardAuth, async (req, res) => {
 app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
+    const filterCompanyId = String(req.query.companyId || "").trim();
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 10), 200);
 
     // requiere backend /api/orders
     const params = new URLSearchParams();
     if (q) params.set("q", q);
+    if (filterCompanyId) params.set("companyId", filterCompanyId);
     params.set("limit", String(limit));
 
-    const orders = await api(`/api/orders?${params.toString()}`);
+    const [orders, companiesResult] = await Promise.all([
+      api(`/api/orders?${params.toString()}`),
+      loadAdminCompanies({ preferCache: true }),
+    ]);
+    const companies = companiesResult.items || [];
 
     const totalOrders = orders.length;
     const totalRevenue = orders.reduce((acc, o) => acc + Number(o.total || 0), 0);
@@ -2691,7 +2697,16 @@ app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
               ${[10,25,50,100,200].map(n => `<option value="${n}" ${n===limit?"selected":""}>${n} ultimos</option>`).join("")}
             </select>
           </div>
-          <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="grid2" style="margin-top:8px">
+            <div>
+              <label>Empresa</label>
+              <select name="companyId">
+                <option value="">Todas las empresas</option>
+                ${companies.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === filterCompanyId ? "selected" : ""}>${escapeHtml(c.name || c.id)}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
             <button class="btn primary">Buscar</button>
             <a class="btn secondary" href="/admin/orders">Limpiar</a>
             <a class="btn secondary" href="/admin/orders/export.csv?${params.toString()}">Export CSV</a>
@@ -4886,13 +4901,13 @@ function buildOverviewAlerts({ state, payment, monthlyOrders }) {
 async function buildClientConversationSummary(company, options = {}) {
   const {
     limitRows = 24,
-    onlyToday = false,
     includeMessages = false,
+    filterFrom = null,
+    filterTo = null,
   } = options;
-  const orders = await fetchCompanyOrders(company.id, "", "", 500);
+  const orders = await fetchCompanyOrders(company.id, filterFrom, filterTo, 500);
   const uniqueOrders = [];
   const seenCustomers = new Set();
-  const now = new Date();
   for (const order of orders) {
     const customerKey = String(order?.contact || order?.fromNumber || order?.name || order?.id || "")
       .trim()
@@ -4940,10 +4955,7 @@ async function buildClientConversationSummary(company, options = {}) {
     };
   }));
 
-  const summaryRows = summaryRowsRaw
-    .filter((row) => !onlyToday || isSameCalendarDay(row.interactionAt || row.createdAt, now))
-    .slice(0, limitRows);
-
+  const summaryRows = summaryRowsRaw.slice(0, limitRows);
   summaryRows.sort((a, b) => (Date.parse(b.interactionAt || b.createdAt) || 0) - (Date.parse(a.interactionAt || a.createdAt) || 0));
   return summaryRows;
 }
@@ -4955,6 +4967,7 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
   const updatedCategory = String(req.query.updatedCategory || "") === "1";
   const updatedPayment = String(req.query.updatedPayment || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
+  const searchQuery = String(req.query.q || "").trim();
   const {
     selectedRange,
     selectedStatus,
@@ -4981,11 +4994,20 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
   const rejectedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "rejected").length;
   const archivedCount = ordersWithWorkflow.filter((order) => order.workflow.archived).length;
 
-  const visibleOrders = selectedStatus === "all"
+  const statusFiltered = selectedStatus === "all"
     ? ordersWithWorkflow.filter((order) => !order.workflow.archived)
     : selectedStatus === "archived"
       ? ordersWithWorkflow.filter((order) => order.workflow.archived)
       : ordersWithWorkflow.filter((order) => !order.workflow.archived && order.workflow.state === selectedStatus);
+
+  const searchLower = searchQuery.toLowerCase();
+  const visibleOrders = searchLower
+    ? statusFiltered.filter((order) => {
+        const haystack = [order.name, order.contact, order.fromNumber, order.id]
+          .filter(Boolean).join(" ").toLowerCase();
+        return haystack.includes(searchLower);
+      })
+    : statusFiltered;
 
   const createdCount = ordersWithWorkflow.length;
   const closedCount = ordersWithWorkflow.filter((order) => ["completed", "rejected"].includes(order.workflow.state)).length;
@@ -4998,6 +5020,7 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
   exportParams.set("status", selectedStatus);
   if (fromInput) exportParams.set("from", fromInput);
   if (toInput) exportParams.set("to", toInput);
+  if (searchQuery) exportParams.set("q", searchQuery);
   const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
 
   const rows = visibleOrders.map((order) => {
@@ -5123,6 +5146,11 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
               <label>Hasta</label>
               <input type="date" name="to" value="${escapeHtml(toInput)}" />
             </div>
+          </div>
+
+          <div>
+            <label>Buscar cliente</label>
+            <input type="text" name="q" value="${escapeHtml(searchQuery)}" placeholder="Nombre, contacto o ID de pedido..." />
           </div>
 
           <div class="cp-actions">
@@ -5700,13 +5728,22 @@ app.get("/panel/soporte", requireClientAuth, loadClientIntegrationFlag, requireC
 
 app.get("/panel/conversaciones", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("conversaciones"), async (req, res) => {
   const company = req.company;
+  const {
+    selectedRange,
+    filterFrom,
+    filterTo,
+    rangeLabel,
+    fromInput,
+    toInput,
+  } = parseClientOrdersFilters({ ...req.query, range: req.query.range || "today" });
   let rows = [];
   let fetchError = "";
   try {
     rows = await buildClientConversationSummary(company, {
-      limitRows: 24,
-      onlyToday: true,
+      limitRows: 50,
       includeMessages: true,
+      filterFrom,
+      filterTo,
     });
   } catch (e) {
     fetchError = e?.message || String(e);
@@ -5727,12 +5764,12 @@ app.get("/panel/conversaciones", requireClientAuth, loadClientIntegrationFlag, r
             <span>${escapeHtml(formatDateLabel(msg.createdAt))}</span>
           </div>
           <div class="cp-order-msg-text">${escapeHtml(msg.content || "(sin texto)")}</div>
-          ${msg.mediaUrl ? `<div class="cp-order-msg-media"><a href="${escapeAttr(msg.mediaUrl)}" target="_blank" rel="noreferrer">Abrir adjunto</a></div>` : ""}
+          ${msg.mediaUrl ? `<div class="cp-order-msg-media"><a href="${escapeHtml(msg.mediaUrl)}" target="_blank" rel="noreferrer">Abrir adjunto</a></div>` : ""}
         </div>
       `).join("")
       : `<div class="cp-empty">Sin mensajes asociados para esta conversacion.</div>`;
     const interactionLabel = row.interactionAt
-      ? new Date(row.interactionAt).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })
+      ? new Date(row.interactionAt).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
       : "-";
     return `
       <details class="cp-card cp-span-3 cp-conversation-item">
@@ -5764,12 +5801,58 @@ app.get("/panel/conversaciones", requireClientAuth, loadClientIntegrationFlag, r
 
     <section class="cp-grid">
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>💬 Conversaciones del dia</h3><span>${rows.length} registros</span></div>
+        <div class="cp-card-head"><h3>Filtros</h3><span>${escapeHtml(rangeLabel)}</span></div>
+        <form method="GET" action="/panel/conversaciones" class="cp-form">
+          <div class="cp-grid-2">
+            <div>
+              <label>Periodo</label>
+              <select id="convRangeSelect" name="range">
+                <option value="today" ${selectedRange === "today" ? "selected" : ""}>Del dia</option>
+                <option value="week" ${selectedRange === "week" ? "selected" : ""}>De la semana</option>
+                <option value="month" ${selectedRange === "month" ? "selected" : ""}>Ultimo mes</option>
+                <option value="3months" ${selectedRange === "3months" ? "selected" : ""}>Ultimos 3 meses</option>
+                <option value="custom" ${selectedRange === "custom" ? "selected" : ""}>Personalizado</option>
+              </select>
+            </div>
+          </div>
+          <div id="convCustomRange" class="cp-grid-2 ${selectedRange === "custom" ? "" : "cp-hidden"}">
+            <div>
+              <label>Desde</label>
+              <input type="date" name="from" value="${escapeHtml(fromInput)}" />
+            </div>
+            <div>
+              <label>Hasta</label>
+              <input type="date" name="to" value="${escapeHtml(toInput)}" />
+            </div>
+          </div>
+          <div class="cp-actions">
+            <button class="cp-btn primary" type="submit">Aplicar filtros</button>
+            <a class="cp-btn" href="/panel/conversaciones">Limpiar</a>
+          </div>
+        </form>
+      </article>
+
+      <article class="cp-card cp-span-3">
+        <div class="cp-card-head"><h3>💬 Conversaciones</h3><span>${rows.length} registros &mdash; ${escapeHtml(rangeLabel)}</span></div>
         <div class="cp-conversation-list">
-          ${conversationRows || `<div class="cp-empty">Sin conversaciones registradas hoy.</div>`}
+          ${conversationRows || `<div class="cp-empty">Sin conversaciones para este periodo.</div>`}
         </div>
       </article>
     </section>
+    <script>
+      (() => {
+        const range = document.getElementById("convRangeSelect");
+        const custom = document.getElementById("convCustomRange");
+        if (range && custom) {
+          const sync = () => {
+            if (range.value === "custom") custom.classList.remove("cp-hidden");
+            else custom.classList.add("cp-hidden");
+          };
+          range.addEventListener("change", sync);
+          sync();
+        }
+      })();
+    </script>
   `;
 
   return res.type("text/html").send(renderClientPage({
