@@ -894,8 +894,10 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         plan.fullLabel,
         accessLabel,
       ].map((value) => String(value || "").toLowerCase()).join(" ");
+      const dotClass = !dashboardAccess.enabled ? "company-dot-inactive" : dashboardAccess.mode === "limited" ? "company-dot-limited" : "company-dot-active";
       const html = `
       <a class="company-item company-item-link" href="/admin/company/${encodeURIComponent(c.id)}">
+        <span class="company-dot ${dotClass}" title="Dashboard: ${accessLabel}"></span>
         <div class="admin-company-meta">
           <div class="admin-company-name"><b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name || "")}</div>
           <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | ${escapeHtml(profile.ownerEmail || "-")}</div>
@@ -961,8 +963,8 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         <aside class="card admin-side-menu">
           <h3 style="margin:0">🧭 Menu</h3>
           <a class="btn primary" href="/admin/company/new">✨ Agregar +</a>
-          <a class="btn secondary" href="/admin/messages">📨 Mensajes</a>
-          <a class="btn secondary" href="#admin-company-list">🗑️ Eliminar</a>
+          <a class="btn secondary" href="/admin/messages">📨 Mensajes ${unreadAdminNotifications > 0 ? `<span class="admin-side-badge">${unreadAdminNotifications > 99 ? "99+" : unreadAdminNotifications}</span>` : ""}</a>
+          <a class="btn secondary" href="/admin/orders">📦 Pedidos</a>
           <a class="btn secondary" href="/admin/assign">🔗 Asignar clientes</a>
         </aside>
 
@@ -2547,10 +2549,11 @@ app.get("/admin/orders", requireDashboardAuth, async (req, res) => {
     const avgTicket = totalOrders ? (totalRevenue / totalOrders) : 0;
 
     const cards = `
-      <div class="grid3">
-        <div class="card"><div class="muted">Pedidos</div><div style="font-size:24px;font-weight:700">${totalOrders}</div></div>
-        <div class="card"><div class="muted">Ventas</div><div style="font-size:24px;font-weight:700">$${Math.round(totalRevenue)}</div></div>
-        <div class="card"><div class="muted">Ticket prom.</div><div style="font-size:24px;font-weight:700">$${Math.round(avgTicket)}</div></div>
+      <div class="kpis">
+        <div class="kpi"><div class="label">📦 Pedidos</div><div class="value">${totalOrders}</div><div class="hint">en este listado</div></div>
+        <div class="kpi"><div class="label">💸 Ventas totales</div><div class="value">$${Math.round(totalRevenue).toLocaleString("es-AR")}</div><div class="hint">suma de totales</div></div>
+        <div class="kpi"><div class="label">🎯 Ticket promedio</div><div class="value">$${Math.round(avgTicket).toLocaleString("es-AR")}</div><div class="hint">por pedido</div></div>
+        <div class="kpi"><div class="label">✅ Con pago</div><div class="value">${orders.filter(o => ["paid","pagado","transferencia","efectivo"].includes(String(o.paymentStatus||o.orderStatus||"").toLowerCase())).length}</div><div class="hint">estado pago confirmado</div></div>
       </div>
     `;
 
@@ -5803,55 +5806,64 @@ app.get("/panel/suscripcion", requireClientAuth, loadClientIntegrationFlag, requ
         : "Actualizacion";
 
   const bodyHtml = `
-    ${requested ? `<div class="cp-alert success">Solicitud de ${escapeHtml(actionLabel)} enviada al admin para revision.</div>` : ""}
+    ${requested ? `<div class="cp-alert success">Solicitud de ${escapeHtml(actionLabel)} enviada. El admin la revisara y aplicara el cambio.</div>` : ""}
     ${errorMsg ? `<div class="cp-alert error">${escapeHtml(errorMsg)}</div>` : ""}
+
     <section class="cp-stats">
-      <article class="cp-stat"><div class="cp-stat-label">Plan</div><div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div><div class="cp-stat-hint">actual</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Canales</div><div class="cp-stat-value">${escapeHtml(state.plan.channelLabel)}</div><div class="cp-stat-hint">activos</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Clase bot</div><div class="cp-stat-value">${escapeHtml(state.plan.botClass)}</div><div class="cp-stat-hint">asignada</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Estado</div><div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div><div class="cp-stat-hint">cuenta</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Monto actual</div><div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div></article>
-      <article class="cp-stat"><div class="cp-stat-label">Cobro siguiente</div><div class="cp-stat-value">${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</div><div class="cp-stat-hint">${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</div></article>
+      <article class="cp-stat">
+        <div class="cp-stat-label">Plan activo</div>
+        <div class="cp-stat-value">${escapeHtml(state.plan.planLabel)}</div>
+        <div class="cp-stat-hint">${escapeHtml(state.plan.channelLabel)}</div>
+      </article>
+      <article class="cp-stat">
+        <div class="cp-stat-label">Estado</div>
+        <div class="cp-stat-value">${escapeHtml(state.subscription.status)}</div>
+        <div class="cp-stat-hint">cuenta</div>
+      </article>
+      <article class="cp-stat">
+        <div class="cp-stat-label">Monto mensual</div>
+        <div class="cp-stat-value">${formatMoney(state.subscription.amount, state.subscription.currency)}</div>
+        <div class="cp-stat-hint">${escapeHtml(state.subscription.cycle)}</div>
+      </article>
+      <article class="cp-stat">
+        <div class="cp-stat-label">Proxima renovacion</div>
+        <div class="cp-stat-value" style="font-size:18px">${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</div>
+        <div class="cp-stat-hint">${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</div>
+      </article>
     </section>
 
     <section class="cp-grid">
       <article class="cp-card cp-span-2">
-        <h3>Detalle de suscripcion</h3>
-        <div class="cp-kv"><span>Tipo de bot</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
-        <div class="cp-kv"><span>Canales</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
-        <div class="cp-kv"><span>Clase asignada</span><b>${escapeHtml(state.plan.botClass)}</b></div>
-        <div class="cp-kv"><span>Fuente de precios</span><b>${escapeHtml(state.subscription.pricingSourceCompanyId || "-")}</b></div>
+        <h3>Detalle del plan</h3>
+        <div class="cp-kv"><span>Plan</span><b>${escapeHtml(state.plan.planLabel)}</b></div>
+        <div class="cp-kv"><span>Canales incluidos</span><b>${escapeHtml(state.plan.channelLabel)}</b></div>
         <div class="cp-kv"><span>Estado</span><b>${escapeHtml(state.subscription.status)}</b></div>
-        <div class="cp-kv"><span>Inicio plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.startAt))}</b></div>
-        <div class="cp-kv"><span>Fin plan en curso</span><b>${escapeHtml(formatDateLabel(state.subscription.endAt))}</b></div>
-        <div class="cp-kv"><span>Ciclo</span><b>${escapeHtml(state.subscription.cycle)}</b></div>
-        <div class="cp-kv"><span>Monto</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
-        <div class="cp-kv"><span>Cobro mes siguiente</span><b>${formatMoney(state.subscription.nextAmount, state.subscription.currency)}</b></div>
-        <div class="cp-kv"><span>Prorrateo upgrade</span><b>${formatMoney(state.subscription.prorationDueNow, state.subscription.currency)}</b></div>
-        <div class="cp-kv"><span>Proxima fecha</span><b>${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
+        <div class="cp-kv"><span>Inicio del ciclo actual</span><b>${escapeHtml(formatDateLabel(state.subscription.startAt))}</b></div>
+        <div class="cp-kv"><span>Fin del ciclo actual</span><b>${escapeHtml(formatDateLabel(state.subscription.endAt))}</b></div>
+        <div class="cp-kv"><span>Monto actual</span><b>${formatMoney(state.subscription.amount, state.subscription.currency)}</b></div>
+        <div class="cp-kv"><span>Proximo cobro</span><b>${formatMoney(state.subscription.nextAmount, state.subscription.currency)} — ${escapeHtml(formatDateLabel(state.subscription.renewalAt))}</b></div>
         <div class="cp-kv"><span>Renovacion</span><b>${state.subscription.autoRenew ? "Automatica" : "Manual"}</b></div>
-        <p class="cp-note" style="margin-top:10px">Los botones envian una solicitud al admin. El cambio se aplica cuando el admin lo confirme.</p>
+        <p class="cp-note" style="margin-top:12px">Los cambios de plan requieren aprobacion del equipo. Te contactaremos para confirmar.</p>
         <div class="cp-actions" style="margin-top:12px">
           <form method="POST" action="/panel/suscripcion/action">
-            <input type="hidden" name="action" value="downgrade" />
-            <button class="cp-btn" type="submit">Downgrade</button>
+            <input type="hidden" name="action" value="upgrade" />
+            <button class="cp-btn primary" type="submit">Solicitar upgrade</button>
           </form>
           <form method="POST" action="/panel/suscripcion/action">
-            <input type="hidden" name="action" value="upgrade" />
-            <button class="cp-btn primary" type="submit">Upgrade</button>
+            <input type="hidden" name="action" value="downgrade" />
+            <button class="cp-btn" type="submit">Solicitar downgrade</button>
           </form>
-          <form method="POST" action="/panel/suscripcion/action" onsubmit="return confirm('Se cancelara la suscripcion. Continuar?')">
+          <form method="POST" action="/panel/suscripcion/action" onsubmit="return confirm('Se enviara una solicitud de cancelacion. Continuar?')">
             <input type="hidden" name="action" value="cancel" />
-            <button class="cp-btn danger" type="submit">Cancelar suscripcion</button>
+            <button class="cp-btn danger" type="submit">Solicitar cancelacion</button>
           </form>
         </div>
       </article>
 
       <article class="cp-card">
-        <h3>Bot y servicio</h3>
-        <div class="cp-kv"><span>Derivacion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
-        <div class="cp-kv"><span>Tono</span><b>${escapeHtml(state.rules.tone || "No definido")}</b></div>
-        <div class="cp-kv"><span>Productos</span><b>${state.catalog.length}</b></div>
+        <h3>Tu bot</h3>
+        <div class="cp-kv"><span>Productos configurados</span><b>${state.catalog.length}</b></div>
+        <div class="cp-kv"><span>Atencion humana</span><b>${state.rules.allowHuman ? "Activa" : "Inactiva"}</b></div>
         <div class="cp-kv"><span>Ultima actualizacion</span><b>${escapeHtml(formatDateLabel(company.updatedAt || company.createdAt))}</b></div>
       </article>
     </section>
