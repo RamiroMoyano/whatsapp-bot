@@ -6333,10 +6333,10 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
     `;
 
     return res.type("text/html").send(renderClientPage({
-      company: currentCompany,
+      company,
       active: "cuenta",
       title: "Cuenta",
-      subtitle: `${currentCompany.name || currentCompany.id} - datos personales y suscripcion`,
+      subtitle: `${company.name || company.id} - datos personales y suscripcion`,
       bodyHtml,
       showIntegrationsNav: req.clientHasIntegrations,
     }));
