@@ -6064,8 +6064,7 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
         : "Actualizacion";
 
   try {
-    const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
-    const { state } = await loadClientStateWithProvider(currentCompany);
+    const { state } = await loadClientStateWithProvider(company);
     const payment = extractPaymentSettings(state.rules || {});
 
     const bodyHtml = `
@@ -6077,7 +6076,7 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
         <details class="cp-card cp-span-2 cp-card-toggle">
           <summary>
             <span>Datos de cuenta</span>
-            <span class="cp-details-hint">${escapeHtml(currentCompany.id)}</span>
+            <span class="cp-details-hint">${escapeHtml(company.id)}</span>
           </summary>
           <div class="cp-card-toggle-body">
             <form method="POST" action="/panel/cuenta/save" class="cp-form cp-form-sections">
