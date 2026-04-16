@@ -906,7 +906,7 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         <span class="company-item-arrow">→</span>
       </a>
     `;
-      return { html, searchText, dashboardAccess, unreadAdminMessages };
+      return { html, searchText, dashboardAccess, unreadAdminMessages, companyId: c.id, companyName: c.name || c.id };
     });
 
     const byView = rowsData.filter((row) => {
@@ -993,6 +993,27 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
               <div class="hint">sin acceso</div>
             </a>
           </div>
+
+          ${(() => {
+            const withUnread = rowsData
+              .filter(r => r.unreadAdminMessages > 0)
+              .sort((a, b) => b.unreadAdminMessages - a.unreadAdminMessages)
+              .slice(0, 8);
+            if (!withUnread.length) return "";
+            const items = withUnread.map(r => `
+              <a class="admin-pending-item" href="/admin/messages?companyId=${encodeURIComponent(r.companyId)}">
+                <span class="admin-pending-name">${escapeHtml(r.companyName || r.companyId)}</span>
+                <span class="admin-pending-badge">${r.unreadAdminMessages > 99 ? "99+" : r.unreadAdminMessages}</span>
+              </a>`).join("");
+            return `
+            <div class="card admin-pending-card">
+              <div class="admin-pending-head">
+                <span>📬 Mensajes sin leer</span>
+                <a href="/admin/messages?read=unread">Ver todos →</a>
+              </div>
+              <div class="admin-pending-list">${items}</div>
+            </div>`;
+          })()}
 
           <div class="card" id="admin-company-list">
             <form method="GET" action="/admin" class="form" style="margin-bottom:12px">
@@ -1211,6 +1232,7 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
     rules.ownerRole = String(req.body.ownerRole || "Dueno/CEO").trim();
     rules.ownerEmail = String(req.body.ownerEmail || "").trim();
     rules.ownerPhone = String(req.body.ownerPhone || "").trim();
+    rules.botPhone = String(req.body.botPhone || "").trim();
     rules.companyAddress = String(req.body.companyAddress || "").trim();
     rules.companyCity = String(req.body.companyCity || "").trim();
     rules.companyCountry = String(req.body.companyCountry || "").trim();
@@ -1526,8 +1548,15 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
               <input name="ownerEmail" value="${escapeHtml(profile.ownerEmail)}" />
             </div>
             <div>
-              <label>Telefono</label>
+              <label>Telefono del dueno</label>
               <input name="ownerPhone" value="${escapeHtml(profile.ownerPhone)}" />
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div>
+              <label>Numero de WhatsApp del bot</label>
+              <input name="botPhone" value="${escapeHtml(profile.botPhone)}" placeholder="+5491112345678" />
             </div>
           </div>
 
@@ -1920,6 +1949,7 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
     rules.ownerRole = String(req.body.ownerRole || "").trim();
     rules.ownerEmail = String(req.body.ownerEmail || "").trim();
     rules.ownerPhone = String(req.body.ownerPhone || "").trim();
+    rules.botPhone = String(req.body.botPhone || "").trim();
     rules.companyAddress = String(req.body.companyAddress || "").trim();
     rules.companyCity = String(req.body.companyCity || "").trim();
     rules.companyCountry = String(req.body.companyCountry || "").trim();
@@ -3326,6 +3356,7 @@ function extractCompanyProfile(rules) {
     ownerRole: String(rules?.ownerRole || rules?.ceoRole || "Dueno/CEO"),
     ownerEmail: String(rules?.ownerEmail || rules?.email || ""),
     ownerPhone: String(rules?.ownerPhone || rules?.phone || ""),
+    botPhone: String(rules?.botPhone || rules?.whatsappBotPhone || ""),
     companyAddress: String(rules?.companyAddress || rules?.address || ""),
     companyCity: String(rules?.companyCity || rules?.city || ""),
     companyCountry: String(rules?.companyCountry || rules?.country || ""),
@@ -3908,6 +3939,7 @@ app.post("/c/login", handleClientLogin);
 app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
   const { state } = await loadClientStateWithProvider(company);
+  const profile = extractCompanyProfile(state.rules);
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
@@ -4003,6 +4035,23 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
           ${alertRows}
         </ul>
       </article>
+
+      ${profile.botPhone ? `
+      <article class="cp-card cp-span-3 cp-share-widget">
+        <div class="cp-share-inner">
+          <div class="cp-share-icon">💬</div>
+          <div class="cp-share-body">
+            <div class="cp-share-title">Compartí tu bot de WhatsApp</div>
+            <div class="cp-share-number">${escapeHtml(profile.botPhone)}</div>
+            <div class="cp-share-hint">Enviá este link a tus clientes para que puedan escribirte</div>
+          </div>
+          <div class="cp-share-actions">
+            <a class="cp-btn primary" href="https://wa.me/${encodeURIComponent(profile.botPhone.replace(/\D/g, ""))}" target="_blank" rel="noopener">Abrir chat</a>
+            <button class="cp-btn" type="button" onclick="navigator.clipboard.writeText('https://wa.me/${encodeURIComponent(profile.botPhone.replace(/\D/g, ""))}').then(()=>{this.textContent='Copiado';setTimeout(()=>this.textContent='Copiar link',2000)})">Copiar link</button>
+          </div>
+        </div>
+      </article>
+      ` : ""}
     </section>
   `;
 

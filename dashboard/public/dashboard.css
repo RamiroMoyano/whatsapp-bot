@@ -2543,38 +2543,59 @@ body.client-ui::after {
 
 .cp-activity-chart {
   display: grid;
-  gap: 14px;
-  margin-top: 10px;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .cp-activity-row {
   display: grid;
-  grid-template-columns: 110px 1fr 30px;
+  grid-template-columns: 90px 1fr 36px;
   align-items: center;
   gap: 12px;
 }
 
-.cp-activity-day,
-.cp-activity-count {
+.cp-activity-day {
   color: #9ab8e8;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cp-activity-count {
+  color: #c8dfff;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
 }
 
 .cp-activity-track {
   position: relative;
-  height: 14px;
+  height: 20px;
   border-radius: 999px;
-  background: rgba(10, 28, 62, 0.88);
-  border: 1px solid rgba(101, 167, 255, 0.16);
+  background: rgba(10, 28, 62, 0.85);
+  border: 1px solid rgba(101, 167, 255, 0.14);
   overflow: hidden;
+}
+
+@keyframes bar-grow {
+  from { width: 0; }
 }
 
 .cp-activity-bar {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #3e73ff, #55dfff);
-  box-shadow: 0 0 18px rgba(85, 223, 255, 0.28);
+  min-width: 4px;
+  background: linear-gradient(90deg, #3b6fd4, #38bdf8, #34d399);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.35);
+  animation: bar-grow 0.5s ease both;
 }
+
+.cp-activity-row:nth-child(1) .cp-activity-bar { animation-delay: 0.0s; }
+.cp-activity-row:nth-child(2) .cp-activity-bar { animation-delay: 0.05s; }
+.cp-activity-row:nth-child(3) .cp-activity-bar { animation-delay: 0.1s; }
+.cp-activity-row:nth-child(4) .cp-activity-bar { animation-delay: 0.15s; }
+.cp-activity-row:nth-child(5) .cp-activity-bar { animation-delay: 0.2s; }
+.cp-activity-row:nth-child(6) .cp-activity-bar { animation-delay: 0.25s; }
+.cp-activity-row:nth-child(7) .cp-activity-bar { animation-delay: 0.3s; }
 
 .cp-faq-list {
   list-style: none;
@@ -4382,6 +4403,131 @@ body.admin-home-page {
 .company-dot-inactive {
   background: #475569;
   box-shadow: none;
+}
+
+/* --- Admin: mensajes pendientes por empresa ------------------------ */
+.admin-pending-card {
+  padding: 14px 16px;
+}
+
+.admin-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 800;
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+
+.admin-pending-head a {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--neon);
+}
+
+.admin-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-pending-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.admin-pending-item:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.06);
+  text-decoration: none;
+  color: var(--text);
+}
+
+.admin-pending-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  flex-shrink: 0;
+}
+
+/* --- Cliente: widget compartir bot --------------------------------- */
+.cp-share-widget {
+  padding: 18px 20px;
+}
+
+.cp-share-inner {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.cp-share-icon {
+  font-size: 36px;
+  flex-shrink: 0;
+}
+
+.cp-share-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.cp-share-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0b1f4a;
+  margin-bottom: 2px;
+}
+
+.cp-share-number {
+  font-size: 20px;
+  font-weight: 900;
+  color: #1a56d6;
+  letter-spacing: 0.01em;
+  margin-bottom: 4px;
+}
+
+.cp-share-hint {
+  font-size: 12px;
+  color: #6b7ea8;
+}
+
+.cp-share-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .cp-share-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cp-share-actions {
+    width: 100%;
+  }
 }
 
 /* --- Message items: hover neon ------------------------------------- */
