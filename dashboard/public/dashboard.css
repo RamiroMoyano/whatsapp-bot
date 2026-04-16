@@ -4311,6 +4311,39 @@ body.admin-home-page {
 .admin-msg-pill.resolved { box-shadow: 0 0 6px rgba(52,  211, 153, 0.3); }
 .admin-msg-pill.unread   { box-shadow: 0 0 6px rgba(248, 113, 113, 0.35); }
 
+/* --- Company list: simple row -------------------------------------- */
+.company-item-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.company-item-link:hover {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.admin-company-name {
+  font-size: 15px;
+  margin-bottom: 3px;
+}
+
+.company-item-arrow {
+  font-size: 20px;
+  color: var(--neon);
+  opacity: 0.7;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.company-item-link:hover .company-item-arrow {
+  transform: translateX(4px);
+  opacity: 1;
+}
+
 /* --- Message items: hover neon ------------------------------------- */
 .admin-msg-item {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;

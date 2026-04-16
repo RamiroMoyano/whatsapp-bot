@@ -895,45 +895,14 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         accessLabel,
       ].map((value) => String(value || "").toLowerCase()).join(" ");
       const html = `
-      <div class="company-item">
+      <a class="company-item company-item-link" href="/admin/company/${encodeURIComponent(c.id)}">
         <div class="admin-company-meta">
-          <div><b>${c.id}</b> - ${c.name || ""}</div>
-          <div class="muted">Creada: ${c.createdAt || "-"}</div>
-          <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | Email: ${escapeHtml(profile.ownerEmail || "-")}</div>
+          <div class="admin-company-name"><b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name || "")}</div>
+          <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | ${escapeHtml(profile.ownerEmail || "-")}</div>
           <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)} | Dashboard: ${accessLabel}</div>
         </div>
-        <div class="admin-company-actions">
-          <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/dashboard/save" class="admin-company-access-form">
-            <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
-            <input type="hidden" name="view" value="${escapeHtml(view)}" />
-            <div class="admin-company-access-grid">
-              <div>
-                <label>Dashboard</label>
-                <select name="dashboardEnabled">
-                  <option value="1" ${dashboardAccess.enabled ? "selected" : ""}>Activo</option>
-                  <option value="0" ${dashboardAccess.enabled ? "" : "selected"}>Inactivo</option>
-                </select>
-              </div>
-              <div>
-                <label>Visualizacion</label>
-                <select name="dashboardMode">
-                  <option value="full" ${dashboardAccess.mode === "full" ? "selected" : ""}>Completo</option>
-                  <option value="limited" ${dashboardAccess.mode === "limited" ? "selected" : ""}>Limitado</option>
-                </select>
-              </div>
-              <button class="btn secondary small" type="submit">Guardar</button>
-            </div>
-          </form>
-          <div class="admin-company-inline-actions">
-            <a class="btn secondary small" href="/admin/company/${encodeURIComponent(c.id)}">Editar</a>
-            <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/delete" onsubmit="return confirm('Se eliminara la empresa y su configuracion. Continuar?')">
-              <input type="hidden" name="q" value="${escapeHtml(String(req.query.q || ""))}" />
-              <input type="hidden" name="view" value="${escapeHtml(view)}" />
-              <button class="btn danger small" type="submit">Eliminar</button>
-            </form>
-          </div>
-        </div>
-      </div>
+        <span class="company-item-arrow">→</span>
+      </a>
     `;
       return { html, searchText, dashboardAccess, unreadAdminMessages };
     });
@@ -1316,6 +1285,7 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
       state.rules?.goal ||
       ""
     ).trim();
+    const dashboardAccess = extractDashboardAccessFromRules(state.rules);
     const botOptions = extractCatalogBotOptions(providerForPricing);
     const currentBotClass = String(plan.botClass || "").trim();
     const integrations = await fetchCompanyIntegrations(id).catch(() => []);
@@ -1658,6 +1628,42 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
           </div>
         </form>
       </div>
+
+      <div class="card admin-toggle-card">
+        <h3 style="margin-top:0">Acceso al panel</h3>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/dashboard/save" class="form">
+          <div class="grid2">
+            <div>
+              <label>Dashboard del cliente</label>
+              <select name="dashboardEnabled">
+                <option value="1" ${dashboardAccess?.enabled ? "selected" : ""}>Activo</option>
+                <option value="0" ${dashboardAccess?.enabled ? "" : "selected"}>Inactivo</option>
+              </select>
+            </div>
+            <div>
+              <label>Nivel de acceso</label>
+              <select name="dashboardMode">
+                <option value="full"    ${dashboardAccess?.mode === "full"    ? "selected" : ""}>Completo</option>
+                <option value="limited" ${dashboardAccess?.mode === "limited" ? "selected" : ""}>Limitado</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit">Guardar acceso</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card admin-toggle-card">
+        <h3 style="margin-top:0">Zona peligrosa</h3>
+        <p class="muted">Esta accion es irreversible. Se eliminara la empresa y toda su configuracion.</p>
+        <form method="POST" action="/admin/company/${encodeURIComponent(c.id)}/delete" onsubmit="return confirm('Se eliminara la empresa y su configuracion. Esta accion no se puede deshacer. Continuar?')">
+          <div class="actions">
+            <button class="btn danger" type="submit">Eliminar empresa</button>
+          </div>
+        </form>
+      </div>
+
     </div>
     <script>
       (() => {
