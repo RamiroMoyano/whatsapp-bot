@@ -102,7 +102,16 @@ async function requireClientAuth(req, res, next) {
 
   if (signClient(companyId) !== sig) return res.redirect("/panel/login");
 
-  // Cargamos la empresa para usar en el panel cliente
+  // En writes (POST/PUT) invalidar cache para que el proximo GET vea datos frescos
+  if (req.method !== "GET") _clientCompanyCache.delete(companyId);
+
+  // Cargamos la empresa para usar en el panel cliente (con cache de 60s)
+  const cached = getCachedClientCompany(companyId);
+  if (cached) {
+    req.company = cached;
+    req.companyId = companyId;
+    return next();
+  }
   try {
     let company = null;
     if (dashboardDb.enabled) {
@@ -111,6 +120,7 @@ async function requireClientAuth(req, res, next) {
     if (!company) {
       company = await api(`/api/companies/${encodeURIComponent(companyId)}`);
     }
+    setCachedClientCompany(company);
     req.company = company;
     req.companyId = companyId;
     next();
@@ -184,19 +194,50 @@ async function api(pathname, { method = "GET", body } = {}) {
   throw lastError || new Error("No se pudo conectar con la API");
 }
 
+// Cache de empresa cliente (evita re-fetch en cada page load del panel)
+const _clientCompanyCache = new Map(); // companyId -> { company, expiresAt }
+const CLIENT_COMPANY_CACHE_TTL_MS = 60_000;
+
+function getCachedClientCompany(id) {
+  const hit = _clientCompanyCache.get(id);
+  if (hit && hit.expiresAt > Date.now()) return hit.company;
+  _clientCompanyCache.delete(id);
+  return null;
+}
+
+function setCachedClientCompany(company) {
+  if (!company?.id) return;
+  _clientCompanyCache.set(String(company.id), { company, expiresAt: Date.now() + CLIENT_COMPANY_CACHE_TTL_MS });
+}
+
+// Cache de empresa proveedora de catalogo (babystepsbots — siempre la misma)
+let _providerCompanyCache = null;
+let _providerCompanyCacheAt = 0;
+const PROVIDER_COMPANY_CACHE_TTL_MS = 5 * 60_000;
+
 async function getBotCatalogProviderCompany(currentCompany) {
   const currentId = String(currentCompany?.id || "").trim().toLowerCase();
   if (currentCompany && currentId === BOT_CATALOG_PROVIDER_ID) {
     return currentCompany;
   }
+  if (_providerCompanyCache && (Date.now() - _providerCompanyCacheAt) < PROVIDER_COMPANY_CACHE_TTL_MS) {
+    return _providerCompanyCache;
+  }
   if (dashboardDb.enabled) {
     try {
       const company = await dashboardDb.getCompanyById(BOT_CATALOG_PROVIDER_ID);
-      if (company) return company;
+      if (company) {
+        _providerCompanyCache = company;
+        _providerCompanyCacheAt = Date.now();
+        return company;
+      }
     } catch {}
   }
   try {
-    return await api(`/api/companies/${encodeURIComponent(BOT_CATALOG_PROVIDER_ID)}`);
+    const company = await api(`/api/companies/${encodeURIComponent(BOT_CATALOG_PROVIDER_ID)}`);
+    _providerCompanyCache = company;
+    _providerCompanyCacheAt = Date.now();
+    return company;
   } catch {
     return currentCompany || null;
   }
@@ -1285,8 +1326,11 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     if (!c) {
       c = await api(`/api/companies/${encodeURIComponent(id)}`);
     }
-    const adminUnreadNotifications = await getAdminUnreadNotificationsTotal();
-    const providerCompany = await getBotCatalogProviderCompany(c);
+    const [adminUnreadNotifications, providerCompany, integrations] = await Promise.all([
+      getAdminUnreadNotificationsTotal(),
+      getBotCatalogProviderCompany(c),
+      fetchCompanyIntegrations(id).catch(() => []),
+    ]);
     const providerForPricing = providerCompany || c;
     const state = extractClientState(c, {
       priceCatalog: extractCatalogEntriesForCompany(providerForPricing),
@@ -1312,7 +1356,6 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     const dashboardAccess = extractDashboardAccessFromRules(state.rules);
     const botOptions = extractCatalogBotOptions(providerForPricing);
     const currentBotClass = String(plan.botClass || "").trim();
-    const integrations = await fetchCompanyIntegrations(id).catch(() => []);
     const hasCurrentBotInCatalog = currentBotClass
       ? botOptions.some((item) => item.name.toLowerCase() === currentBotClass.toLowerCase())
       : false;
@@ -3981,18 +4024,10 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
   const rules = parseJsonSafe(company.rulesJson || "{}", {});
   const payment = extractPaymentSettings(rules);
-  let monthlyOrders = [];
-  let weeklyOrders = [];
-  try {
-    monthlyOrders = await fetchCompanyOrders(company.id, monthStart, "", 500);
-  } catch {
-    monthlyOrders = [];
-  }
-  try {
-    weeklyOrders = await fetchCompanyOrders(company.id, weekStart, "", 500);
-  } catch {
-    weeklyOrders = [];
-  }
+  const [monthlyOrders, weeklyOrders] = await Promise.all([
+    fetchCompanyOrders(company.id, monthStart, "", 500).catch(() => []),
+    fetchCompanyOrders(company.id, weekStart, "", 500).catch(() => []),
+  ]);
 
   const monthlyCustomers = new Set(
     monthlyOrders
