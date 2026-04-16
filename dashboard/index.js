@@ -6326,6 +6326,10 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
                 <input type="hidden" name="action" value="upgrade" />
                 <button class="cp-btn primary" type="submit">Subir plan</button>
               </form>
+              <form method="POST" action="/panel/suscripcion/action" onsubmit="return confirm('Se enviara una solicitud de cancelacion al admin. Continuar?')">
+                <input type="hidden" name="action" value="cancel" />
+                <button class="cp-btn danger" type="submit">Cancelar suscripcion</button>
+              </form>
             </div>
           </div>
         </details>
