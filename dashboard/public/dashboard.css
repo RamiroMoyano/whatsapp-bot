@@ -4530,6 +4530,100 @@ body.admin-home-page {
   }
 }
 
+/* --- Admin buzón: cabecera ----------------------------------------- */
+.admin-buzon-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.admin-buzon-mode {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.admin-buzon-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- Admin mensajes: grupos por empresa ---------------------------- */
+.admin-msg-group {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.admin-msg-group[open] {
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.admin-msg-group > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  user-select: none;
+}
+
+.admin-msg-group > summary::-webkit-details-marker { display: none; }
+
+.admin-msg-group[open] > summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.admin-msg-group-name {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.admin-msg-group-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+.admin-msg-group-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.admin-msg-group-link {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--neon);
+  text-decoration: none;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.admin-msg-group-link:hover {
+  opacity: 1;
+  text-decoration: none;
+}
+
+.admin-msg-group-body {
+  padding: 14px;
+}
+
 /* --- Message items: hover neon ------------------------------------- */
 .admin-msg-item {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;

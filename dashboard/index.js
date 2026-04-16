@@ -2294,13 +2294,11 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
     const returnQuery = new URLSearchParams(req.query).toString();
     const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
 
-    const rows = filtered.map((msg) => {
+    const renderMsg = (msg) => {
       const readByAdmin = msg.sender === "client" ? !!msg.readByAdmin : !!msg.readByClient;
       return `
         <article class="admin-msg-item ${msg.sender === "admin" ? "from-admin" : "from-client"}">
           <div class="admin-msg-meta">
-            <b>${escapeHtml(msg.companyName || msg.companyId)}</b>
-            <span>${escapeHtml(msg.companyId)}</span>
             <span>${escapeHtml(formatDateLabel(msg.createdAt))}</span>
             <span class="admin-msg-pill ${msg.sender === "admin" ? "admin" : "client"}">${msg.sender === "admin" ? "Admin" : "Cliente"}</span>
             <span class="admin-msg-pill ${msg.status === "resolved" ? "resolved" : "open"}">${msg.status === "resolved" ? "Resuelto" : "Abierto"}</span>
@@ -2316,7 +2314,6 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
               <input type="hidden" name="actionType" value="toggleRead" />
               <button class="btn secondary small" type="submit">${readByAdmin ? "Marcar sin leer" : "Marcar leido"}</button>
             </form>
-
             <form method="POST" action="/admin/messages/state" class="admin-msg-action-form">
               <input type="hidden" name="companyId" value="${escapeHtml(msg.companyId)}" />
               <input type="hidden" name="messageId" value="${escapeHtml(msg.id)}" />
@@ -2324,7 +2321,6 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
               <input type="hidden" name="actionType" value="toggleStatus" />
               <button class="btn secondary small" type="submit">${msg.status === "resolved" ? "Reabrir" : "Resolver"}</button>
             </form>
-
             <form method="POST" action="/admin/messages/reply" class="admin-msg-reply-form">
               <input type="hidden" name="companyId" value="${escapeHtml(msg.companyId)}" />
               <input type="hidden" name="replyToId" value="${escapeHtml(msg.id)}" />
@@ -2336,7 +2332,44 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
           </div>
         </article>
       `;
-    }).join("");
+    };
+
+    // Vista agrupada por empresa cuando no hay filtro de empresa
+    const useGrouped = !companyFilter;
+    let buzónHtml;
+
+    if (useGrouped) {
+      const groupMap = new Map();
+      for (const msg of filtered) {
+        if (!groupMap.has(msg.companyId)) {
+          groupMap.set(msg.companyId, { companyId: msg.companyId, companyName: msg.companyName, msgs: [], unread: 0 });
+        }
+        const g = groupMap.get(msg.companyId);
+        g.msgs.push(msg);
+        if (msg.sender === "client" && !msg.readByAdmin) g.unread++;
+      }
+      const sortedGroups = [...groupMap.values()].sort((a, b) => {
+        if (b.unread !== a.unread) return b.unread - a.unread;
+        return new Date(b.msgs[0]?.createdAt || 0) - new Date(a.msgs[0]?.createdAt || 0);
+      });
+      buzónHtml = sortedGroups.length
+        ? sortedGroups.map((g) => `
+          <details class="admin-msg-group" ${g.unread > 0 ? "open" : ""}>
+            <summary class="admin-msg-group-head">
+              <span class="admin-msg-group-name">${escapeHtml(g.companyName)}</span>
+              ${g.unread > 0 ? `<span class="admin-msg-group-badge">${g.unread} sin leer</span>` : ""}
+              <span class="admin-msg-group-count">${g.msgs.length} mensaje${g.msgs.length !== 1 ? "s" : ""}</span>
+              <a class="admin-msg-group-link" href="/admin/messages?companyId=${encodeURIComponent(g.companyId)}" onclick="event.stopPropagation()">Ver empresa →</a>
+            </summary>
+            <div class="admin-msg-group-body">
+              <div class="admin-msg-list">${g.msgs.map(renderMsg).join("")}</div>
+            </div>
+          </details>`).join("")
+        : `<div class="muted">Sin mensajes para este filtro.</div>`;
+    } else {
+      const rows = filtered.map(renderMsg).join("");
+      buzónHtml = `<div class="admin-msg-list">${rows || `<div class="muted">Sin mensajes para este filtro.</div>`}</div>`;
+    }
 
     const infoSaved = String(req.query.saved || "") === "1";
     const infoReplied = String(req.query.replied || "") === "1";
@@ -2411,8 +2444,11 @@ app.get("/admin/messages", requireDashboardAuth, async (req, res) => {
       </div>
 
       <div class="card">
-        <h3 style="margin-top:0">Buzon</h3>
-        <div class="admin-msg-list">${rows || `<div class="muted">Sin mensajes para este filtro.</div>`}</div>
+        <div class="admin-buzon-head">
+          <h3 style="margin:0">Buzon ${useGrouped ? "<span class='admin-buzon-mode'>agrupado por empresa</span>" : ""}</h3>
+          ${!useGrouped ? `<a class="btn secondary small" href="/admin/messages">Ver todas las empresas</a>` : ""}
+        </div>
+        <div class="admin-buzon-body">${buzónHtml}</div>
       </div>
     `;
 
