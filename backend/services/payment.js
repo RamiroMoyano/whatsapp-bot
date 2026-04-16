@@ -226,7 +226,9 @@ export function extractCheckoutFieldsFromText(textRaw) {
     if (!normalized) continue;
     if (normalizePaymentMethodInput(line)) continue;
     if (/\d{6,}/.test(normalized)) continue;
-    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "mañana"].includes(normalized)) continue;
+    if (["si", "no", "ok", "listo", "hecho", "ahora", "hoy", "manana", "mañana",
+         "checkout", "catalogo", "catálogo", "carrito", "menu", "menú", "pedido",
+         "pedidos", "volver", "inicio", "cancelar", "atras", "atrás"].includes(normalized)) continue;
     name = line;
     break;
   }
