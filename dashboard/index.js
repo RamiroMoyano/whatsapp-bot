@@ -102,8 +102,11 @@ async function requireClientAuth(req, res, next) {
 
   if (signClient(companyId) !== sig) return res.redirect("/panel/login");
 
-  // En writes (POST/PUT) invalidar cache para que el proximo GET vea datos frescos
-  if (req.method !== "GET") _clientCompanyCache.delete(companyId);
+  // En writes (POST/PUT) invalidar caches para que el proximo GET vea datos frescos
+  if (req.method !== "GET") {
+    _clientCompanyCache.delete(companyId);
+    _clientIntegrationFlagCache.delete(companyId);
+  }
 
   // Cargamos la empresa para usar en el panel cliente (con cache de 60s)
   const cached = getCachedClientCompany(companyId);
@@ -208,6 +211,21 @@ function getCachedClientCompany(id) {
 function setCachedClientCompany(company) {
   if (!company?.id) return;
   _clientCompanyCache.set(String(company.id), { company, expiresAt: Date.now() + CLIENT_COMPANY_CACHE_TTL_MS });
+}
+
+// Cache de flag de integraciones por empresa (evita 1 API call por page load)
+const _clientIntegrationFlagCache = new Map(); // companyId -> { hasIntegrations, expiresAt }
+const CLIENT_INTEGRATION_FLAG_TTL_MS = 5 * 60_000;
+
+function getCachedClientIntegrationFlag(id) {
+  const hit = _clientIntegrationFlagCache.get(id);
+  if (hit && hit.expiresAt > Date.now()) return hit.hasIntegrations;
+  _clientIntegrationFlagCache.delete(id);
+  return null;
+}
+
+function setCachedClientIntegrationFlag(id, hasIntegrations) {
+  _clientIntegrationFlagCache.set(String(id), { hasIntegrations, expiresAt: Date.now() + CLIENT_INTEGRATION_FLAG_TTL_MS });
 }
 
 // Cache de empresa proveedora de catalogo (babystepsbots — siempre la misma)
@@ -3839,10 +3857,19 @@ async function loadClientIntegrationFlag(req, res, next) {
   req.clientHasIntegrations = false;
   req.company.__hasClientIntegrations = false;
   if (!companyId) return next();
+
+  const cached = getCachedClientIntegrationFlag(companyId);
+  if (cached !== null) {
+    req.clientHasIntegrations = cached;
+    req.company.__hasClientIntegrations = cached;
+    return next();
+  }
+
   try {
     const payload = await api(`/api/companies/${encodeURIComponent(companyId)}/integrations`);
     const items = Array.isArray(payload?.items) ? payload.items : [];
     const hasEnabled = items.some((item) => item && item.enabled !== false);
+    setCachedClientIntegrationFlag(companyId, hasEnabled);
     req.clientHasIntegrations = hasEnabled;
     req.company.__hasClientIntegrations = hasEnabled;
   } catch {
@@ -4032,17 +4059,17 @@ app.post("/c/login", handleClientLogin);
 
 app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
-  const { state } = await loadClientStateWithProvider(company);
-  const profile = extractCompanyProfile(state.rules);
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
-  const rules = parseJsonSafe(company.rulesJson || "{}", {});
-  const payment = extractPaymentSettings(rules);
-  const [monthlyOrders, weeklyOrders] = await Promise.all([
+  const [{ state }, monthlyOrders, weeklyOrders] = await Promise.all([
+    loadClientStateWithProvider(company),
     fetchCompanyOrders(company.id, monthStart, "", 500).catch(() => []),
     fetchCompanyOrders(company.id, weekStart, "", 500).catch(() => []),
   ]);
+  const profile = extractCompanyProfile(state.rules);
+  const rules = parseJsonSafe(company.rulesJson || "{}", {});
+  const payment = extractPaymentSettings(rules);
 
   const monthlyCustomers = new Set(
     monthlyOrders
@@ -5622,8 +5649,10 @@ app.get("/panel/soporte", requireClientAuth, loadClientIntegrationFlag, requireC
   const toHtmlText = (value) => escapeHtml(value || "").replace(/\r?\n/g, "<br/>");
 
   try {
-    const currentCompany = await api(`/api/companies/${encodeURIComponent(company.id)}`);
-    const rulesRaw = parseJsonSafe(currentCompany.rulesJson || "{}", {});
+    // Usamos el company cacheado (ya disponible en req.company desde requireClientAuth).
+    // Si hay mensajes no leídos, los marcamos como leídos e invalidamos el caché
+    // para que el próximo load vea el estado actualizado.
+    const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
     let inbox = extractAdminInbox(rules);
 
@@ -5632,8 +5661,10 @@ app.get("/panel/soporte", requireClientAuth, loadClientIntegrationFlag, requireC
       inbox = inbox.map((item) => (item.sender === "admin" ? { ...item, readByClient: true } : item));
       setAdminInbox(rules, inbox);
       try {
-        await saveCompanyRules(currentCompany, rules);
-        currentCompany.rulesJson = JSON.stringify(rules);
+        await saveCompanyRules(company, rules);
+        // Actualizar el company cacheado con el inbox ya marcado como leído
+        const updatedCompany = { ...company, rulesJson: JSON.stringify(rules) };
+        setCachedClientCompany(updatedCompany);
       } catch {
         // no-op
       }
@@ -5714,10 +5745,10 @@ app.get("/panel/soporte", requireClientAuth, loadClientIntegrationFlag, requireC
     `;
 
     return res.type("text/html").send(renderClientPage({
-      company: currentCompany,
+      company,
       active: "soporte",
       title: "Soporte",
-      subtitle: `${currentCompany.name || currentCompany.id} - soporte con admin`,
+      subtitle: `${company.name || company.id} - soporte con admin`,
       bodyHtml,
       showIntegrationsNav: req.clientHasIntegrations,
     }));
