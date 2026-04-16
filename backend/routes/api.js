@@ -1,5 +1,16 @@
 import express from "express";
+import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 import { db } from "../db.js";
+
+const clientAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos. Intentá de nuevo en 15 minutos." },
+  skipSuccessfulRequests: true,
+});
 import { parseJsonSafe, normalizeWhatsappFromNumber } from "../services/utils.js";
 import { normalizePaymentStatusInput, isPaidStatusValue } from "../services/payment.js";
 import { normalizeCatalogEntries } from "../services/catalog.js";
@@ -287,7 +298,7 @@ export default function createApiRouter({
     res.json({ ok: true, aiSync: syncResult });
   });
 
-  router.post("/api/client-auth", requireApiAuth, async (req, res) => {
+  router.post("/api/client-auth", requireApiAuth, clientAuthLimiter, async (req, res) => {
     try {
       const companyInput = String(
         req.body.companyId || req.body.companyInput || ""
@@ -342,7 +353,16 @@ export default function createApiRouter({
           .status(400)
           .json({ error: "La empresa no tiene password de cliente configurada" });
       }
-      if (password !== expected) {
+
+      // Soporte de bcrypt con fallback a texto plano para migración transparente.
+      // Las passwords antiguas (texto plano) siguen funcionando; las nuevas
+      // ya llegan hasheadas desde el dashboard.
+      const isHashed = expected.startsWith("$2b$") || expected.startsWith("$2a$");
+      const passwordOk = isHashed
+        ? await bcrypt.compare(password, expected)
+        : password === expected;
+
+      if (!passwordOk) {
         return res.status(401).json({ error: "Credenciales incorrectas" });
       }
 

@@ -191,7 +191,20 @@ async function aiReply(session, from, text) {
   const aiMode = String(session.data.aiMode || "").toLowerCase();
   const profile = ["lite", "pro"].includes(aiMode)
     ? aiModeProfile(aiMode)
-    : { memoryMessages: 30, memoryChars: 20000 };
+    : { dailyLimit: 80, memoryMessages: 30, memoryChars: 20000 };
+
+  // Resetear contador si es un dia nuevo
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (session.data.aiCountDate !== todayStr) {
+    session.data.aiCount = 0;
+    session.data.aiCountDate = todayStr;
+  }
+
+  // Verificar limite diario
+  const currentCount = Number(session.data.aiCount || 0);
+  if (profile.dailyLimit && currentCount >= profile.dailyLimit) {
+    return "Llegaste al límite de consultas de hoy. Mañana se renueva tu cuota o podés hablar con nosotros para ampliarla.";
+  }
 
   const c = await getCompanySafe(session);
   const paymentPrompt = paymentMethodsPromptText(c);

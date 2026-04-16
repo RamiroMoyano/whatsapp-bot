@@ -4,6 +4,8 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as XLSX from "xlsx";
+import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 import { dashboardDb } from "./db.js";
 
 dotenv.config();
@@ -37,6 +39,25 @@ const ADMIN_INBOX_MAX_ITEMS = 300;
 const API_RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 const API_MAX_ATTEMPTS = 4;
 const API_REQUEST_TIMEOUT_MS = 12000;
+
+// Rate limiters para login
+const adminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Demasiados intentos. Intentá de nuevo en 15 minutos.",
+  skipSuccessfulRequests: true,
+});
+
+const clientLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Demasiados intentos. Intentá de nuevo en 15 minutos.",
+  skipSuccessfulRequests: true,
+});
 const ADMIN_COMPANIES_CACHE_TTL_MS = Number(process.env.ADMIN_COMPANIES_CACHE_TTL_MS || 180000);
 let adminCompaniesCache = {
   items: [],
@@ -844,7 +865,7 @@ app.get("/admin/login", (req, res) => {
   `);
 });
 
-app.post("/admin/login", (req, res) => {
+app.post("/admin/login", adminLoginLimiter, (req, res) => {
   const user = (req.body.user || "").trim();
   const pass = (req.body.pass || "").trim();
 
@@ -1305,7 +1326,7 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
 
     const providedPassword = String(req.body.clientPassword || "").trim();
     const assignedPassword = providedPassword || resolveClientPassword(rules, company) || generateClientPassword();
-    assignClientPassword(rules, assignedPassword);
+    await assignClientPassword(rules, assignedPassword);
 
     const prompt = String(req.body.prompt || "").trim() || company.prompt || "Sos el asistente de la empresa.";
 
@@ -2027,7 +2048,7 @@ app.post("/admin/company/:id/profile/save", requireDashboardAuth, async (req, re
 
     const manualPassword = String(req.body.clientPassword || "").trim();
     if (manualPassword) {
-      assignClientPassword(rules, manualPassword);
+      await assignClientPassword(rules, manualPassword);
     }
 
     const nextName = String(req.body.name || company.name || id).trim() || id;
@@ -2156,7 +2177,7 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
     }
     const rulesRaw = parseJsonSafe(company.rulesJson || "{}", {});
     const rules = rulesRaw && typeof rulesRaw === "object" ? rulesRaw : {};
-    assignClientPassword(rules, nextPassword);
+    await assignClientPassword(rules, nextPassword);
 
     if (dashboardDb.enabled) {
       await dashboardDb.saveCompanyById(id, {
@@ -3562,12 +3583,16 @@ function resolveClientPassword(rules, company) {
   return "";
 }
 
-function assignClientPassword(rules, password) {
+async function assignClientPassword(rules, password) {
   const normalized = String(password || "").trim();
   if (!normalized || !rules || typeof rules !== "object") return;
-  rules.clientPassword = normalized;
-  rules.clientPass = normalized;
-  rules.password = normalized;
+  const hash = await bcrypt.hash(normalized, 10);
+  rules.clientPassword = hash;
+  // Limpiar claves legado para no guardar texto plano
+  delete rules.clientPass;
+  delete rules.password;
+  delete rules.pass;
+  delete rules.accessPassword;
 }
 
 function buildPromptFromBrandContext({ companyName, brandManual, companyPurpose, fallbackPrompt }) {
@@ -4054,8 +4079,8 @@ app.get("/panel/forgot", (req, res) => {
 });
 app.get("/c/forgot", (req, res) => res.redirect("/panel/forgot"));
 
-app.post("/panel/login", handleClientLogin);
-app.post("/c/login", handleClientLogin);
+app.post("/panel/login", clientLoginLimiter, handleClientLogin);
+app.post("/c/login", clientLoginLimiter, handleClientLogin);
 
 app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("inicio"), async (req, res) => {
   const company = req.company;
@@ -6396,7 +6421,7 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {
-    assignClientPassword(rules, newPassword);
+    await assignClientPassword(rules, newPassword);
   }
 
   try {

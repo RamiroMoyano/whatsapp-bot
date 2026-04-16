@@ -10,8 +10,10 @@
     "node": "20.x"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.3.2",
     "pg": "^8.20.0",
     "xlsx": "^0.18.5"
   }
