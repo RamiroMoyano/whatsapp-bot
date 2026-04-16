@@ -4100,3 +4100,226 @@ body.client-saas-ui .cp-order-msg-media img {
 }
 
 
+/* =====================================================================
+   NEON / FUTURISTIC OVERRIDES — Admin Panel
+===================================================================== */
+
+/* --- Variables adicionales ----------------------------------------- */
+:root {
+  --neon:           #38bdf8;
+  --neon-2:         #818cf8;
+  --neon-green:     #34d399;
+  --neon-glow:      0 0 8px rgba(56, 189, 248, 0.55), 0 0 28px rgba(56, 189, 248, 0.22);
+  --neon-glow-lg:   0 0 14px rgba(56, 189, 248, 0.75), 0 0 48px rgba(56, 189, 248, 0.3);
+}
+
+/* --- Fondo: grid sutil + gradientes actualizados ------------------- */
+body.admin-light-ui,
+body.admin-home-page {
+  background:
+    radial-gradient(900px 500px at 8% -8%,  rgba(56, 189, 248, 0.18), transparent 60%),
+    radial-gradient(800px 460px at 92% 8%,  rgba(129, 140, 248, 0.16), transparent 62%),
+    linear-gradient(rgba(56, 189, 248, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.025) 1px, transparent 1px),
+    var(--bg);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+}
+
+/* --- Scrollbar neon ------------------------------------------------ */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); }
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.32);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(56, 189, 248, 0.58); }
+
+/* --- Animaciones --------------------------------------------------- */
+@keyframes neon-shimmer {
+  0%   { background-position: 0%   center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes neon-pulse-badge {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(239, 68, 68, 0.7); }
+  50%       { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0);   }
+}
+
+@keyframes neon-dot-breathe {
+  0%, 100% { box-shadow: 0 0 0 5px  rgba(56, 189, 248, 0.18); }
+  50%       { box-shadow: 0 0 0 11px rgba(56, 189, 248, 0);    }
+}
+
+/* --- Header / topbar ---------------------------------------------- */
+.admin-light-ui .app-header,
+.admin-light-ui .admin-header,
+.admin-home-page .app-header,
+.admin-home-page .admin-header {
+  border-color: rgba(56, 189, 248, 0.28);
+  box-shadow: var(--shadow), 0 0 22px rgba(56, 189, 248, 0.1);
+}
+
+/* --- Brand title glow --------------------------------------------- */
+.admin-light-ui .brand .title,
+.admin-home-page .brand .title,
+.bs-title {
+  text-shadow: 0 0 14px rgba(56, 189, 248, 0.5);
+}
+
+/* --- .bs-dot pulse ------------------------------------------------- */
+.bs-dot {
+  background: linear-gradient(135deg, var(--neon), var(--neon-2));
+  animation: neon-dot-breathe 2.5s ease infinite;
+}
+
+/* --- Login / center-card: top bar shimmer -------------------------- */
+.bs-card::before,
+.center-card::before {
+  background: linear-gradient(90deg, var(--neon), var(--neon-2), var(--neon-green), var(--neon));
+  background-size: 200% auto;
+  animation: neon-shimmer 3.5s linear infinite;
+}
+
+/* --- Notification bell --------------------------------------------- */
+.admin-notify-bell {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.18);
+}
+.admin-notify-bell:hover {
+  box-shadow: var(--neon-glow);
+  border-color: rgba(56, 189, 248, 0.75);
+}
+
+/* --- Badge pulse --------------------------------------------------- */
+.notify-badge {
+  animation: neon-pulse-badge 2s ease infinite;
+}
+
+/* --- Nav divider neon ---------------------------------------------- */
+.admin-nav-divider {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(56, 189, 248, 0.7) 20%,
+    rgba(56, 189, 248, 0.7) 80%,
+    transparent 100%
+  );
+}
+
+/* --- Botones: primary neon ----------------------------------------- */
+.admin-light-ui .btn.primary,
+.admin-home-page  .btn.primary {
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.38), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.admin-light-ui .btn.primary:hover,
+.admin-home-page  .btn.primary:hover {
+  box-shadow: var(--neon-glow-lg), 0 4px 14px rgba(0, 0, 0, 0.3);
+  filter: brightness(1.1);
+}
+
+/* --- Botones: secondary hover -------------------------------------- */
+.admin-light-ui .btn.secondary:hover,
+.admin-home-page  .btn.secondary:hover {
+  border-color: rgba(56, 189, 248, 0.42);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.22);
+}
+
+/* --- Botones: danger neon ------------------------------------------ */
+.admin-light-ui .btn.danger,
+.admin-home-page  .btn.danger {
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
+}
+.admin-light-ui .btn.danger:hover,
+.admin-home-page  .btn.danger:hover {
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.6);
+  filter: brightness(1.1);
+}
+
+/* --- Side menu: active link neon ----------------------------------- */
+.admin-light-ui .admin-side-menu .btn.primary,
+.admin-home-page  .admin-side-menu .btn.primary {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.72), rgba(99, 102, 241, 0.58));
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: var(--neon-glow), inset 0 0 12px rgba(56, 189, 248, 0.12);
+}
+
+/* --- Cards: hover glow --------------------------------------------- */
+.admin-light-ui .card,
+.admin-home-page  .card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.admin-light-ui .card:hover,
+.admin-home-page  .card:hover {
+  border-color: rgba(56, 189, 248, 0.38);
+  box-shadow: var(--shadow), 0 0 16px rgba(56, 189, 248, 0.14);
+}
+
+/* --- Company items: hover neon ------------------------------------- */
+.company-item {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.company-item:hover {
+  border-color: rgba(56, 189, 248, 0.48);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.16);
+}
+
+/* --- KPI value: cyan glow ------------------------------------------ */
+.kpi .value {
+  color: #e0f2fe;
+  text-shadow: 0 0 16px rgba(56, 189, 248, 0.65);
+}
+
+/* --- KPI filter active border -------------------------------------- */
+.kpi-filter.active {
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.38), var(--shadow), 0 0 12px rgba(56, 189, 248, 0.2);
+}
+
+/* --- Tabla: header neon -------------------------------------------- */
+.table th {
+  color: #7dd3fc;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.06);
+}
+.table tr:hover td {
+  background: rgba(56, 189, 248, 0.05);
+}
+
+/* --- Input / textarea / select: focus glow ------------------------- */
+.admin-light-ui input:focus,
+.admin-light-ui textarea:focus,
+.admin-light-ui select:focus,
+.admin-home-page input:focus,
+.admin-home-page textarea:focus,
+.admin-home-page select:focus {
+  border-color: rgba(56, 189, 248, 0.8);
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2), 0 0 14px rgba(56, 189, 248, 0.12);
+}
+
+/* --- Toggle head: hover neon --------------------------------------- */
+.admin-toggle-head:hover {
+  border-color: rgba(56, 189, 248, 0.38);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.18);
+}
+
+/* --- Message pills: subtle glow ------------------------------------ */
+.admin-msg-pill.client   { box-shadow: 0 0 6px rgba(96,  165, 250, 0.3); }
+.admin-msg-pill.admin    { box-shadow: 0 0 6px rgba(74,  222, 128, 0.3); }
+.admin-msg-pill.open     { box-shadow: 0 0 6px rgba(250, 204,  21, 0.3); }
+.admin-msg-pill.resolved { box-shadow: 0 0 6px rgba(52,  211, 153, 0.3); }
+.admin-msg-pill.unread   { box-shadow: 0 0 6px rgba(248, 113, 113, 0.35); }
+
+/* --- Message items: hover neon ------------------------------------- */
+.admin-msg-item {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.admin-msg-item.from-client:hover {
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 12px rgba(96, 165, 250, 0.18);
+}
+.admin-msg-item.from-admin:hover {
+  border-color: rgba(110, 231, 183, 0.58);
+  box-shadow: 0 0 12px rgba(110, 231, 183, 0.18);
+}
