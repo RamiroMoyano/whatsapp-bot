@@ -1641,6 +1641,8 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
       String(req.query.integrationDeleted || "") === "1" ? `<div class="card"><b>Integracion eliminada.</b></div>` : "",
       String(req.query.integrationTestOk || "") === "1" ? `<div class="card"><b>Conexion correcta.</b> Cards: ${escapeHtml(String(req.query.cards || "0"))} | Alertas: ${escapeHtml(String(req.query.alerts || "0"))} | Tabla: ${String(req.query.hasTable || "") === "1" ? "si" : "no"}</div>` : "",
       String(req.query.integrationError || "") ? `<div class="card"><b>Error en integracion:</b> ${escapeHtml(String(req.query.integrationError || ""))}</div>` : "",
+      String(req.query.subscriptionSaved || "") === "1" ? `<div class="card"><b>Suscripcion actualizada correctamente.</b></div>` : "",
+      String(req.query.subscriptionError || "") ? `<div class="card"><b>Error al actualizar suscripcion:</b> ${escapeHtml(String(req.query.subscriptionError || ""))}</div>` : "",
     ].join("");
 
     res.type("text/html").send(`<!doctype html>
@@ -1864,6 +1866,39 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
             <button class="btn primary" type="submit">Guardar JSON</button>
           </div>
         </form>
+      </div>
+
+      <div class="card admin-toggle-card">
+        <h3 style="margin-top:0">Suscripcion</h3>
+        ${(() => {
+          const subStatus = String(state.subscription.status || "Activa");
+          const subEnd = String(state.rules?.subscriptionCurrentEnd || state.subscription.endAt || "");
+          const subEndValue = subEnd ? new Date(subEnd).toISOString().slice(0, 10) : "";
+          const statuses = ["Activa", "Inactiva", "Cancelada", "Suspendida"];
+          const opts = statuses.map((s) => `<option value="${s}" ${subStatus === s ? "selected" : ""}>${s}</option>`).join("");
+          return `
+          <div class="muted" style="margin-bottom:12px">
+            Estado actual: <b>${escapeHtml(subStatus)}</b>
+            ${subEnd ? ` | Fin ciclo: <b>${new Date(subEnd).toLocaleDateString("es-AR")}</b>` : ""}
+            ${state.subscription.renewalAt ? ` | Renovacion: <b>${formatDateLabel(state.subscription.renewalAt)}</b>` : ""}
+          </div>
+          <form method="POST" action="/admin/company/${escapeHtml(c.id)}/subscription/save" class="form">
+            <div class="grid2">
+              <div>
+                <label>Estado de suscripcion</label>
+                <select name="subscriptionStatus">${opts}</select>
+              </div>
+              <div>
+                <label>Fin del ciclo actual</label>
+                <input type="date" name="subscriptionCurrentEnd" value="${escapeHtml(subEndValue)}" />
+              </div>
+            </div>
+            <div class="actions">
+              <button class="btn primary" type="submit">Guardar</button>
+              <button class="btn secondary" type="submit" name="renew1m" value="1">↺ Renovar 1 mes</button>
+            </div>
+          </form>`;
+        })()}
       </div>
 
       <div class="card admin-toggle-card">
@@ -2110,6 +2145,69 @@ app.post("/admin/company/:id/dashboard/save", requireDashboardAuth, async (req, 
   } catch (e) {
     params.set("dashboardError", String(e?.message || e));
     return res.redirect(`/admin?${params.toString()}`);
+  }
+});
+
+app.post("/admin/company/:id/subscription/save", requireDashboardAuth, async (req, res) => {
+  const id = req.params.id;
+  const redirectBack = `/admin/company/${encodeURIComponent(id)}?subscriptionSaved=1`;
+  const redirectErr = (msg) => res.redirect(`/admin/company/${encodeURIComponent(id)}?subscriptionError=${encodeURIComponent(msg)}`);
+
+  try {
+    let company = dashboardDb.enabled ? await dashboardDb.getCompanyById(id) : null;
+    if (!company) company = await api(`/api/companies/${encodeURIComponent(id)}`);
+
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    const validStatuses = ["Activa", "Inactiva", "Cancelada", "Suspendida"];
+    const newStatus = validStatuses.includes(req.body.subscriptionStatus)
+      ? req.body.subscriptionStatus
+      : "Activa";
+
+    const renew1m = String(req.body.renew1m || "").trim() === "1";
+
+    let newEnd = "";
+    if (renew1m) {
+      // Renovar 1 mes desde hoy
+      const base = new Date();
+      base.setMonth(base.getMonth() + 1);
+      newEnd = base.toISOString();
+    } else {
+      const dateInput = String(req.body.subscriptionCurrentEnd || "").trim();
+      if (dateInput) {
+        const parsed = new Date(dateInput);
+        if (!isNaN(parsed.getTime())) newEnd = parsed.toISOString();
+      }
+    }
+
+    rules.subscriptionStatus = renew1m ? "Activa" : newStatus;
+    if (newEnd) {
+      rules.subscriptionCurrentEnd = newEnd;
+      rules.subscriptionRenewal = newEnd;
+    }
+
+    if (dashboardDb.enabled) {
+      await dashboardDb.saveCompanyById(id, {
+        name: company.name || id,
+        prompt: company.prompt || "",
+        catalogJson: company.catalogJson || "[]",
+        rulesJson: JSON.stringify(rules),
+      });
+    } else {
+      await api(`/api/companies/${encodeURIComponent(id)}/save`, {
+        method: "POST",
+        body: {
+          name: company.name || id,
+          prompt: company.prompt || "",
+          catalogJson: company.catalogJson || "[]",
+          rulesJson: JSON.stringify(rules),
+        },
+      });
+    }
+    adminCompaniesCache.updatedAt = 0;
+    _clientCompanyCache.delete(String(id));
+    return res.redirect(redirectBack);
+  } catch (e) {
+    return redirectErr(String(e?.message || e));
   }
 });
 
