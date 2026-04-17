@@ -3886,6 +3886,49 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
           ${bodyHtml}
         </main>
       </div>
+      <script>
+      (function() {
+        var POLL_MS = 30000;
+        var STORAGE_KEY = 'bs_orders_viewed_at';
+        var bell = document.querySelector('.cp-notify-bell');
+        var isOnPedidos = window.location.pathname === '/panel/pedidos';
+
+        function setCount(n) {
+          if (!bell) return;
+          var badge = bell.querySelector('.notify-badge');
+          if (n > 0) {
+            if (!badge) { badge = document.createElement('span'); badge.className = 'notify-badge'; bell.appendChild(badge); }
+            badge.textContent = n > 99 ? '99+' : n;
+            bell.setAttribute('title', n + ' pedido' + (n === 1 ? '' : 's') + ' nuevo' + (n === 1 ? '' : 's'));
+          } else {
+            if (badge) badge.remove();
+            bell.setAttribute('title', 'Notificaciones');
+          }
+        }
+
+        function getViewedAt() {
+          var v = localStorage.getItem(STORAGE_KEY);
+          if (v) return v;
+          return new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        }
+
+        function poll() {
+          var since = getViewedAt();
+          fetch('/panel/api/new-orders?since=' + encodeURIComponent(since))
+            .then(function(r) { return r.ok ? r.json() : { count: 0 }; })
+            .then(function(d) { setCount(d.count || 0); })
+            .catch(function() {});
+        }
+
+        if (isOnPedidos) {
+          localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+          setCount(0);
+        } else {
+          poll();
+          setInterval(poll, POLL_MS);
+        }
+      })();
+      </script>
     </body>
   </html>`;
 }
@@ -5261,6 +5304,22 @@ async function buildClientConversationSummary(company, options = {}) {
   summaryRows.sort((a, b) => (Date.parse(b.interactionAt || b.createdAt) || 0) - (Date.parse(a.interactionAt || a.createdAt) || 0));
   return summaryRows;
 }
+
+// Lightweight polling endpoint: returns count of orders created after `since`
+app.get("/panel/api/new-orders", requireClientAuth, async (req, res) => {
+  const company = req.company;
+  const since = String(req.query.since || "").trim();
+  const sinceDate = since ? new Date(since) : null;
+  if (!sinceDate || isNaN(sinceDate.getTime())) {
+    return res.json({ count: 0 });
+  }
+  try {
+    const orders = await fetchCompanyOrders(company.id, sinceDate.toISOString(), "", 500);
+    return res.json({ count: orders.length });
+  } catch {
+    return res.json({ count: 0 });
+  }
+});
 
 app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
