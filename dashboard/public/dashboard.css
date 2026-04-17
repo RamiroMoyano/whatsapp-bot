@@ -4715,3 +4715,43 @@ body.admin-home-page {
   font-size: 12px;
   color: #94a3b8;
 }
+
+/* --- Admin subscription badges & KPIs ----------------------------- */
+.admin-sub-kpis {
+  margin-top: 0;
+}
+.kpi.kpi-warn {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.06);
+}
+.kpi.kpi-warn .value {
+  color: #fbbf24;
+}
+.admin-sub-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 20px;
+  line-height: 1.4;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.admin-sub-inactive {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.admin-sub-expired {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.admin-sub-soon {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+}
+.company-item-atrisk {
+  border-left: 3px solid rgba(251, 191, 36, 0.6) !important;
+}

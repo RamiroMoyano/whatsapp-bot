@@ -983,10 +983,20 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
       deleteError ? `<div class="card"><b>Error eliminando empresa:</b> ${escapeHtml(deleteError)}</div>` : "",
     ].join("");
 
+    const nowForSub = new Date();
+    const in7Days = new Date(nowForSub.getTime() + 7 * 24 * 60 * 60 * 1000);
+
     const rowsData = companies.map((c) => {
       const rules = parseJsonSafe(c.rulesJson || "{}", {});
       const plan = extractPlanInfo(c, rules);
       const profile = extractCompanyProfile(rules);
+      const subStatus = String(rules?.subscriptionStatus || "Activa").trim().toLowerCase();
+      const subEnd = rules?.subscriptionCurrentEnd;
+      const subEndDate = subEnd ? new Date(subEnd) : null;
+      const subExpired = subEndDate && !isNaN(subEndDate) && subEndDate < nowForSub;
+      const subExpiringSoon = subEndDate && !isNaN(subEndDate) && !subExpired && subEndDate < in7Days;
+      const subInactive = ["inactiva", "cancelada", "suspendida", "inactive", "cancelled", "canceled", "suspended"].includes(subStatus);
+      const subAtRisk = subInactive || subExpired || subExpiringSoon;
       const inbox = extractAdminInbox(rules);
       const unreadAdminMessages = countAdminUnreadMessages(inbox);
       const dashboardAccess = extractDashboardAccessFromRules(rules);
@@ -1007,18 +1017,25 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
         accessLabel,
       ].map((value) => String(value || "").toLowerCase()).join(" ");
       const dotClass = !dashboardAccess.enabled ? "company-dot-inactive" : dashboardAccess.mode === "limited" ? "company-dot-limited" : "company-dot-active";
+      const subBadgeHtml = subInactive
+        ? `<span class="admin-sub-badge admin-sub-inactive">Inactiva</span>`
+        : subExpired
+          ? `<span class="admin-sub-badge admin-sub-expired">Vencida</span>`
+          : subExpiringSoon
+            ? `<span class="admin-sub-badge admin-sub-soon">Vence pronto</span>`
+            : "";
       const html = `
-      <a class="company-item company-item-link" href="/admin/company/${encodeURIComponent(c.id)}">
+      <a class="company-item company-item-link ${subAtRisk ? "company-item-atrisk" : ""}" href="/admin/company/${encodeURIComponent(c.id)}">
         <span class="company-dot ${dotClass}" title="Dashboard: ${accessLabel}"></span>
         <div class="admin-company-meta">
-          <div class="admin-company-name"><b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name || "")}</div>
+          <div class="admin-company-name"><b>${escapeHtml(c.id)}</b> — ${escapeHtml(c.name || "")} ${subBadgeHtml}</div>
           <div class="muted">Dueno: ${escapeHtml(profile.ownerName || "-")} | ${escapeHtml(profile.ownerEmail || "-")}</div>
-          <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)} | Dashboard: ${accessLabel}</div>
+          <div class="muted">Bot: ${escapeHtml(plan.botClass)} | Plan: ${escapeHtml(plan.fullLabel)} | Dashboard: ${accessLabel}${subEnd ? ` | Sub hasta: ${new Date(subEnd).toLocaleDateString("es-AR")}` : ""}</div>
         </div>
         <span class="company-item-arrow">→</span>
       </a>
     `;
-      return { html, searchText, dashboardAccess, unreadAdminMessages, companyId: c.id, companyName: c.name || c.id };
+      return { html, searchText, dashboardAccess, unreadAdminMessages, companyId: c.id, companyName: c.name || c.id, subAtRisk, subInactive, subExpired, subExpiringSoon };
     });
 
     const byView = rowsData.filter((row) => {
@@ -1036,6 +1053,10 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const limitedCount = enabledCompanies.filter((row) => row.dashboardAccess.mode === "limited").length;
     const disabledCount = rowsData.length - enabledCompanies.length;
     const unreadAdminNotifications = rowsData.reduce((acc, row) => acc + Number(row.unreadAdminMessages || 0), 0);
+    const subActiveCount = rowsData.filter((r) => !r.subInactive && !r.subExpired).length;
+    const subExpiredCount = rowsData.filter((r) => r.subExpired && !r.subInactive).length;
+    const subInactiveCount = rowsData.filter((r) => r.subInactive).length;
+    const subSoonCount = rowsData.filter((r) => r.subExpiringSoon).length;
     const buildAdminHref = (nextView) => {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
@@ -1106,6 +1127,29 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
             </a>
           </div>
 
+          <div class="kpis admin-sub-kpis">
+            <div class="kpi">
+              <div class="label">✅ Suscripciones activas</div>
+              <div class="value">${subActiveCount}</div>
+              <div class="hint">al dia</div>
+            </div>
+            <div class="kpi ${subExpiredCount > 0 ? "kpi-warn" : ""}">
+              <div class="label">🔴 Vencidas</div>
+              <div class="value">${subExpiredCount}</div>
+              <div class="hint">sin renovar</div>
+            </div>
+            <div class="kpi ${subSoonCount > 0 ? "kpi-warn" : ""}">
+              <div class="label">🟡 Vence en 7 dias</div>
+              <div class="value">${subSoonCount}</div>
+              <div class="hint">atención requerida</div>
+            </div>
+            <div class="kpi ${subInactiveCount > 0 ? "kpi-warn" : ""}">
+              <div class="label">⛔ Inactivas</div>
+              <div class="value">${subInactiveCount}</div>
+              <div class="hint">canceladas o suspendidas</div>
+            </div>
+          </div>
+
           ${(() => {
             const withUnread = rowsData
               .filter(r => r.unreadAdminMessages > 0)
@@ -1122,6 +1166,27 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
               <div class="admin-pending-head">
                 <span>📬 Mensajes sin leer</span>
                 <a href="/admin/messages?read=unread">Ver todos →</a>
+              </div>
+              <div class="admin-pending-list">${items}</div>
+            </div>`;
+          })()}
+
+          ${(() => {
+            const atRisk = rowsData.filter(r => r.subAtRisk).slice(0, 10);
+            if (!atRisk.length) return "";
+            const items = atRisk.map(r => {
+              const tag = r.subInactive ? "Inactiva" : r.subExpired ? "Vencida" : "Vence pronto";
+              const cls = r.subInactive || r.subExpired ? "admin-sub-expired" : "admin-sub-soon";
+              return `
+              <a class="admin-pending-item" href="/admin/company/${encodeURIComponent(r.companyId)}">
+                <span class="admin-pending-name">${escapeHtml(r.companyName || r.companyId)}</span>
+                <span class="admin-sub-badge ${cls}">${tag}</span>
+              </a>`;
+            }).join("");
+            return `
+            <div class="card admin-pending-card">
+              <div class="admin-pending-head">
+                <span>⚠️ Suscripciones en riesgo</span>
               </div>
               <div class="admin-pending-list">${items}</div>
             </div>`;
