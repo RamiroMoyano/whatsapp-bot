@@ -5518,6 +5518,7 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
             <button class="cp-btn primary" type="submit">Aplicar filtros</button>
             <a class="cp-btn" href="/panel/pedidos">Limpiar</a>
             <a class="cp-btn" href="${exportXlsxHref}">Exportar XLSX</a>
+            <a class="cp-btn" href="${exportXlsxHref.replace('format=xlsx', 'format=csv')}">Exportar CSV</a>
           </div>
         </form>
       </article>
