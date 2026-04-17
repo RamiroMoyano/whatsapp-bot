@@ -10,6 +10,38 @@ import { dashboardDb } from "./db.js";
 
 dotenv.config();
 
+// ================= EMAIL =================
+const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
+const EMAIL_FROM = (process.env.EMAIL_FROM || "Bot <no-reply@resend.dev>").trim();
+
+async function sendEmail({ to, subject, html }) {
+  if (!RESEND_API_KEY) {
+    console.log("[email] RESEND_API_KEY no configurado — email omitido");
+    return { ok: false };
+  }
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: EMAIL_FROM,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        html,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) console.error("[email] Resend error:", r.status, data?.message);
+    return { ok: r.ok, id: data?.id };
+  } catch (e) {
+    console.error("[email] sendEmail failed:", e?.message || e);
+    return { ok: false };
+  }
+}
+
 const app = express();
 app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
@@ -1339,6 +1371,33 @@ app.post("/admin/company/new", requireDashboardAuth, async (req, res) => {
         rulesJson: JSON.stringify(rules),
       },
     });
+
+    // Email de bienvenida si la empresa tiene email registrado
+    const ownerEmail = String(rules.ownerEmail || "").trim();
+    if (ownerEmail) {
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      sendEmail({
+        to: ownerEmail,
+        subject: `Bienvenido a tu panel de gestión — ${name}`,
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px">
+            <h2 style="color:#1a1f36">¡Bienvenido, ${escapeHtml(rules.ownerName || name)}!</h2>
+            <p>Tu cuenta fue creada exitosamente. Ya podés acceder al panel de gestión de tu bot de WhatsApp.</p>
+            <div style="background:#f8f9fa;border-radius:8px;padding:16px;margin:20px 0">
+              <p style="margin:0 0 8px"><b>Empresa:</b> ${escapeHtml(name)}</p>
+              <p style="margin:0 0 8px"><b>ID de acceso:</b> <code>${escapeHtml(id)}</code></p>
+              <p style="margin:0"><b>Contraseña:</b> <code>${escapeHtml(assignedPassword)}</code></p>
+            </div>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${baseUrl}/panel/login" style="background:#2563eb;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">
+                Acceder al panel
+              </a>
+            </div>
+            <p style="color:#666;font-size:12px">Podés cambiar tu contraseña desde la sección Cuenta dentro del panel.</p>
+          </div>
+        `,
+      }).catch((e) => console.error("[email] welcome email failed:", e?.message));
+    }
 
     const flashPwd = providedPassword
       ? "manualPwd=1"
@@ -2812,7 +2871,7 @@ function parseJsonSafe(raw, fallback) {
   }
 }
 
-function renderClientLoginPage() {
+function renderClientLoginPage({ reset = false } = {}) {
   return `
 <!doctype html>
 <html>
@@ -2837,6 +2896,7 @@ function renderClientLoginPage() {
         </div>
 
         <h2 class="bs-h2">Entrar</h2>
+        ${reset ? `<p style="color:#22c55e;font-weight:600;margin-bottom:12px">Contraseña actualizada. Ya podés ingresar.</p>` : ""}
 
         <form method="POST" action="/panel/login" class="form">
           <label>Empresa (ID)</label>
@@ -4038,15 +4098,16 @@ function requireClientSectionAccess(sectionKey) {
 }
 
 app.get("/panel/login", (req, res) => {
-  res.type("text/html").send(renderClientLoginPage());
+  const reset = String(req.query.reset || "") === "1";
+  res.type("text/html").send(renderClientLoginPage({ reset }));
 });
 app.get("/c/login", (req, res) => {
-  res.type("text/html").send(renderClientLoginPage());
+  const reset = String(req.query.reset || "") === "1";
+  res.type("text/html").send(renderClientLoginPage({ reset }));
 });
 
-app.get("/panel/forgot", (req, res) => {
-  res.type("text/html").send(`
-<!doctype html>
+function renderForgotPage({ error = "", success = false } = {}) {
+  return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -4067,17 +4128,162 @@ app.get("/panel/forgot", (req, res) => {
           </div>
         </div>
         <h2 class="bs-h2">Recuperar contrasena</h2>
-        <p class="muted">Solicita restablecimiento al administrador desde el panel de admin o por soporte.</p>
-        <div class="login-actions">
-          <a class="btn secondary" href="/panel/login">Volver al login</a>
-        </div>
+        ${success
+          ? `<p style="color:#22c55e;font-weight:600">Si el email esta registrado, recibirás un link para restablecer tu contraseña en los próximos minutos.</p>`
+          : `<p class="muted">Ingresá el email con el que te registraste. Te enviamos un link para crear una nueva contraseña.</p>
+             ${error ? `<p style="color:#f87171;font-size:13px">${escapeHtml(error)}</p>` : ""}
+             <form method="POST" action="/panel/forgot" class="form" style="margin-top:16px">
+               <input name="email" type="email" placeholder="tu@email.com" required autocomplete="email" style="margin-bottom:12px" />
+               <div class="login-actions">
+                 <button class="btn primary" type="submit">Enviar link</button>
+                 <a class="btn secondary" href="/panel/login">Volver</a>
+               </div>
+             </form>`
+        }
+        ${success ? `<div class="login-actions" style="margin-top:16px"><a class="btn secondary" href="/panel/login">Volver al login</a></div>` : ""}
       </div>
     </div>
   </body>
-</html>
-  `);
-});
+</html>`;
+}
+
+app.get("/panel/forgot", (req, res) => res.type("text/html").send(renderForgotPage()));
 app.get("/c/forgot", (req, res) => res.redirect("/panel/forgot"));
+
+app.post("/panel/forgot", clientLoginLimiter, async (req, res) => {
+  const emailInput = String(req.body.email || "").trim().toLowerCase();
+  if (!emailInput) return res.type("text/html").send(renderForgotPage({ error: "Ingresá tu email." }));
+
+  try {
+    // Buscar empresa por ownerEmail (sin confirmar si existe para evitar enumeración)
+    const companies = await loadAdminCompanies({ preferCache: true });
+    const match = (companies.items || []).find((c) => {
+      const rules = parseJsonSafe(c.rulesJson || "{}", {});
+      return String(rules?.ownerEmail || "").trim().toLowerCase() === emailInput;
+    });
+
+    if (match) {
+      const rules = parseJsonSafe(match.rulesJson || "{}", {});
+      const token = crypto.randomBytes(32).toString("hex");
+      rules.pwdResetToken = token;
+      rules.pwdResetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+      await saveCompanyRules(match, rules);
+      _clientCompanyCache.delete(String(match.id));
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const resetLink = `${baseUrl}/panel/reset?token=${token}&cid=${encodeURIComponent(match.id)}`;
+
+      sendEmail({
+        to: emailInput,
+        subject: "Restablecé tu contraseña de acceso al panel",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
+            <h2 style="color:#1a1f36">Restablecé tu contraseña</h2>
+            <p>Hola, recibimos una solicitud para restablecer la contraseña de <b>${escapeHtml(match.name || match.id)}</b>.</p>
+            <p>Hacé click en el botón para crear una nueva contraseña. El link es válido por <b>1 hora</b>.</p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${resetLink}" style="background:#2563eb;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">
+                Restablecer contraseña
+              </a>
+            </div>
+            <p style="color:#666;font-size:12px">Si no solicitaste esto, ignorá este mensaje. Tu contraseña no cambia.</p>
+            <p style="color:#666;font-size:12px">O copiá este link: ${resetLink}</p>
+          </div>
+        `,
+      }).catch((e) => console.error("[email] forgot password email failed:", e?.message));
+    }
+  } catch (e) {
+    console.error("[forgot] error:", e?.message || e);
+  }
+
+  // Siempre responder igual para no revelar si el email existe
+  return res.type("text/html").send(renderForgotPage({ success: true }));
+});
+
+app.get("/panel/reset", async (req, res) => {
+  const token = String(req.query.token || "").trim();
+  const cid = String(req.query.cid || "").trim();
+  if (!token || !cid) return res.redirect("/panel/forgot");
+
+  const company = await api(`/api/companies/${encodeURIComponent(cid)}`).catch(() => null);
+  if (!company) return res.redirect("/panel/forgot");
+
+  const rules = parseJsonSafe(company.rulesJson || "{}", {});
+  const storedToken = String(rules?.pwdResetToken || "");
+  const expiresAt = String(rules?.pwdResetTokenExpiresAt || "");
+  const isValid = storedToken === token && expiresAt && new Date(expiresAt) > new Date();
+
+  if (!isValid) {
+    return res.type("text/html").send(`<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="/dashboard.css"><title>Link expirado</title></head>
+<body><div class="bs-login"><div class="bs-card">
+  <h2 class="bs-h2">Link expirado</h2>
+  <p class="muted">Este link ya fue usado o expiró. Solicitá uno nuevo.</p>
+  <div class="login-actions"><a class="btn primary" href="/panel/forgot">Pedir nuevo link</a></div>
+</div></div></body></html>`);
+  }
+
+  const errorMsg = String(req.query.error || "").trim();
+  return res.type("text/html").send(`<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/dashboard.css"><title>Nueva contraseña</title></head>
+<body>
+  <div class="bs-login">
+    <div class="bs-bg" style="background-image:url('/img/login-tech-bg.png')"></div>
+    <div class="bs-vignette"></div>
+    <div class="bs-card">
+      <div class="bs-brand"><div class="bs-dot"></div><div><div class="bs-title">BabySteps</div><div class="bs-subtitle">Acceso clientes</div></div></div>
+      <h2 class="bs-h2">Nueva contraseña</h2>
+      <p class="muted">Empresa: <b>${escapeHtml(company.name || cid)}</b></p>
+      ${errorMsg ? `<p style="color:#f87171;font-size:13px">${escapeHtml(errorMsg)}</p>` : ""}
+      <form method="POST" action="/panel/reset" class="form" style="margin-top:16px">
+        <input type="hidden" name="token" value="${escapeHtml(token)}" />
+        <input type="hidden" name="cid" value="${escapeHtml(cid)}" />
+        <label style="font-size:13px;margin-bottom:4px;display:block">Nueva contraseña</label>
+        <input name="password" type="password" required minlength="6" placeholder="Mínimo 6 caracteres" style="margin-bottom:8px" />
+        <label style="font-size:13px;margin-bottom:4px;display:block">Confirmar contraseña</label>
+        <input name="password2" type="password" required minlength="6" placeholder="Repetí la contraseña" style="margin-bottom:16px" />
+        <div class="login-actions">
+          <button class="btn primary" type="submit">Guardar contraseña</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body></html>`);
+});
+
+app.post("/panel/reset", async (req, res) => {
+  const token = String(req.body.token || "").trim();
+  const cid = String(req.body.cid || "").trim();
+  const password = String(req.body.password || "").trim();
+  const password2 = String(req.body.password2 || "").trim();
+  const redirectBack = `/panel/reset?token=${encodeURIComponent(token)}&cid=${encodeURIComponent(cid)}`;
+
+  if (!token || !cid) return res.redirect("/panel/forgot");
+  if (!password || password.length < 6) return res.redirect(`${redirectBack}&error=${encodeURIComponent("La contraseña debe tener al menos 6 caracteres.")}`);
+  if (password !== password2) return res.redirect(`${redirectBack}&error=${encodeURIComponent("Las contraseñas no coinciden.")}`);
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(cid)}`);
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    const storedToken = String(rules?.pwdResetToken || "");
+    const expiresAt = String(rules?.pwdResetTokenExpiresAt || "");
+    const isValid = storedToken === token && expiresAt && new Date(expiresAt) > new Date();
+
+    if (!isValid) return res.redirect("/panel/forgot");
+
+    await assignClientPassword(rules, password);
+    delete rules.pwdResetToken;
+    delete rules.pwdResetTokenExpiresAt;
+    await saveCompanyRules(company, rules);
+    _clientCompanyCache.delete(String(cid));
+
+    return res.redirect("/panel/login?reset=1");
+  } catch (e) {
+    return res.redirect(`${redirectBack}&error=${encodeURIComponent("Error al guardar. Intentá de nuevo.")}`);
+  }
+});
 
 app.post("/panel/login", clientLoginLimiter, handleClientLogin);
 app.post("/c/login", clientLoginLimiter, handleClientLogin);

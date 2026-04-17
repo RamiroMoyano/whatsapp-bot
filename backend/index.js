@@ -31,6 +31,12 @@ import { notifyTelegramOrderCreated as _notifyTelegramOrderCreated } from "./ser
 const sendTelegram = (text) => _sendTelegram(text).catch((e) => console.error("[telegram] sendTelegram failed:", e?.message || e));
 const notifyTelegramOrderCreated = (company, from, created) => _notifyTelegramOrderCreated(company, from, created).catch((e) => console.error("[telegram] notifyTelegramOrderCreated failed:", e?.message || e));
 
+// ================= EMAIL =================
+import { notifyEmailOrderCreated as _notifyEmailOrderCreated } from "./services/email.js";
+
+// Fire-and-forget: los fallos de email nunca bloquean el flujo del cliente
+const notifyEmailOrderCreated = (company, from, created) => _notifyEmailOrderCreated(company, from, created).catch((e) => console.error("[email] notifyEmailOrderCreated failed:", e?.message || e));
+
 // ================= DB INIT =================
 const DB_STARTUP_TIMEOUT_MS = Number(process.env.DB_STARTUP_TIMEOUT_MS || 15000);
 let dbInitReady = false;
@@ -1100,6 +1106,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
       notifyTelegramOrderCreated(company, from, created);
+      notifyEmailOrderCreated(company, from, created);
       markRecentOrder(session, created.orderId, created.paymentMethod);
       clearCheckoutProgress(session, { keepRecentOrder: true });
       delete session.data.cartUpdatedAt;
@@ -1228,6 +1235,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
         return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
       }
       notifyTelegramOrderCreated(company, from, created);
+      notifyEmailOrderCreated(company, from, created);
       markRecentOrder(session, created.orderId, created.paymentMethod);
       clearCheckoutProgress(session, { keepRecentOrder: true });
       delete session.data.cartUpdatedAt;
@@ -1274,6 +1282,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     }
 
     notifyTelegramOrderCreated(company, from, created);
+    notifyEmailOrderCreated(company, from, created);
     markRecentOrder(session, created.orderId, created.paymentMethod);
     clearCheckoutProgress(session, { keepRecentOrder: true });
     delete session.data.cartUpdatedAt;
@@ -1335,6 +1344,7 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
       return respondAndLog("No pude registrar el pedido porque el carrito esta vacio. Escribi: catalogo");
     }
     notifyTelegramOrderCreated(company, from, created);
+    notifyEmailOrderCreated(company, from, created);
     session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
     return respondAndLog(
