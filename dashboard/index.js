@@ -4293,13 +4293,16 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
-  const [{ state }, monthlyOrders, weeklyOrders] = await Promise.all([
+  const [{ state }, monthlyOrders, weeklyOrders, msgStats] = await Promise.all([
     loadClientStateWithProvider(company),
     fetchCompanyOrders(company.id, monthStart, "", 500).catch(() => []),
     fetchCompanyOrders(company.id, weekStart, "", 500).catch(() => []),
+    api(`/api/companies/${encodeURIComponent(company.id)}/whatsapp-messages/stats`).catch(() => ({ total: 0, last30Days: 0 })),
   ]);
   const profile = extractCompanyProfile(state.rules);
   const rules = parseJsonSafe(company.rulesJson || "{}", {});
+  const planInfo = extractPlanInfo(company, rules);
+  const aiDailyLimit = planInfo.tier === "PRO" ? 120 : planInfo.tier === "LITE" ? 40 : 0;
   const payment = extractPaymentSettings(rules);
 
   const monthlyCustomers = new Set(
@@ -4396,6 +4399,35 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
         </div>
       </article>
       ` : ""}
+
+      <article class="cp-card cp-span-3 cp-overview-block">
+        <div class="cp-card-head">
+          <h3>📊 Uso del servicio</h3>
+          <span>${escapeHtml(planInfo.fullLabel)}</span>
+        </div>
+        <section class="cp-stats cp-performance-stats-grid" style="margin-top:16px">
+          <article class="cp-stat cp-performance-stat cp-tone-blue">
+            <div class="cp-stat-label">💬 Consultas al bot</div>
+            <div class="cp-stat-value">${Number(msgStats.last30Days || 0).toLocaleString("es-AR")}</div>
+            <div class="cp-stat-hint">ultimos 30 dias</div>
+          </article>
+          <article class="cp-stat cp-performance-stat cp-tone-purple">
+            <div class="cp-stat-label">📋 Total historico</div>
+            <div class="cp-stat-value">${Number(msgStats.total || 0).toLocaleString("es-AR")}</div>
+            <div class="cp-stat-hint">desde el inicio</div>
+          </article>
+          <article class="cp-stat cp-performance-stat ${planInfo.aiEnabled ? "cp-tone-cyan" : "cp-tone-amber"}">
+            <div class="cp-stat-label">🤖 IA asistente</div>
+            <div class="cp-stat-value">${planInfo.aiEnabled ? "Activa" : "No incluida"}</div>
+            <div class="cp-stat-hint">${planInfo.aiEnabled ? (aiDailyLimit ? `hasta ${aiDailyLimit} consultas/dia` : "sin limite diario") : "disponible en planes LITE y PRO"}</div>
+          </article>
+          <article class="cp-stat cp-performance-stat cp-tone-green">
+            <div class="cp-stat-label">📦 Plan activo</div>
+            <div class="cp-stat-value">${escapeHtml(planInfo.planLabel)}</div>
+            <div class="cp-stat-hint">${escapeHtml(planInfo.channelLabel)}</div>
+          </article>
+        </section>
+      </article>
     </section>
   `;
 
