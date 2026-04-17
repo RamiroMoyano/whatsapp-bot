@@ -4664,3 +4664,54 @@ body.admin-home-page {
 .cp-sub-banner-link:hover {
   color: #fde68a;
 }
+
+/* --- Onboarding checklist card ------------------------------------ */
+.cp-onboarding-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cp-onboarding-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+}
+.cp-onboarding-step.done {
+  opacity: 0.55;
+}
+.cp-onboarding-step.done .cp-onboarding-label {
+  text-decoration: line-through;
+}
+.cp-onboarding-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+  color: #22c55e;
+}
+.cp-onboarding-step.pending .cp-onboarding-icon {
+  color: #6b7280;
+}
+.cp-onboarding-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cp-onboarding-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.cp-onboarding-hint {
+  font-size: 12px;
+  color: #94a3b8;
+}

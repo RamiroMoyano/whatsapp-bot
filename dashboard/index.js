@@ -4386,8 +4386,42 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
       <span>${escapeHtml(alert.text)}</span>
     </li>
   `).join("");
+
+  const hasCatalog = Array.isArray(state.catalog) && state.catalog.length > 0;
+  const hasPayment = !!(payment.cash || payment.debit || payment.transfer || payment.mercadopago || payment.otro);
+  const hasEmail = !!profile.ownerEmail;
+  const onboardingSteps = [
+    { done: hasCatalog, label: "Cargá tu catálogo de productos", href: "/panel/catalogo", hint: `${hasCatalog ? (state.catalog.length + " productos cargados") : "El bot necesita productos para tomar pedidos"}` },
+    { done: hasPayment, label: "Configurá los métodos de pago", href: "/panel/cuenta", hint: hasPayment ? "Configurado" : "Indicá cómo aceptas pagos (efectivo, transferencia, etc.)" },
+    { done: hasEmail, label: "Registrá tu email de notificaciones", href: "/panel/cuenta", hint: hasEmail ? profile.ownerEmail : "Recibí alertas de nuevos pedidos por email" },
+  ];
+  const onboardingPending = onboardingSteps.filter((s) => !s.done);
+  const onboardingCard = onboardingPending.length > 0 ? `
+    <article class="cp-card cp-span-3 cp-onboarding-card">
+      <div class="cp-card-head">
+        <h3>🎯 Primeros pasos</h3>
+        <span>${onboardingPending.length} pendiente${onboardingPending.length === 1 ? "" : "s"}</span>
+      </div>
+      <p class="cp-note" style="margin-bottom:16px">Completá estos pasos para activar tu bot al 100%.</p>
+      <ul class="cp-onboarding-list">
+        ${onboardingSteps.map((step) => `
+          <li class="cp-onboarding-step ${step.done ? "done" : "pending"}">
+            <span class="cp-onboarding-icon">${step.done ? "✓" : "○"}</span>
+            <div class="cp-onboarding-body">
+              <span class="cp-onboarding-label">${escapeHtml(step.label)}</span>
+              <span class="cp-onboarding-hint">${escapeHtml(step.hint)}</span>
+            </div>
+            ${!step.done ? `<a class="cp-btn primary" href="${step.href}">Completar</a>` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    </article>
+  ` : "";
+
   const bodyHtml = `
     <section class="cp-grid cp-overview-grid">
+      ${onboardingCard}
+
       <article class="cp-card cp-span-3 cp-overview-heading-card">
         <div class="cp-card-head">
           <h3>🚀 Rendimiento del bot este mes</h3>
