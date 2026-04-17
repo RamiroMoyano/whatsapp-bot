@@ -106,6 +106,21 @@ async function getCompanySafe(session) {
   return (await getCompany(id)) || fallback;
 }
 
+function isSubscriptionActive(company) {
+  const id = String(company?.id || "").toLowerCase();
+  if (!id || id === "babystepsbots") return true;
+  const rules = parseJsonSafe(company?.rulesJson || "{}", {});
+  const status = String(rules?.subscriptionStatus || "Activa").trim().toLowerCase();
+  const inactive = ["inactiva", "cancelada", "suspendida", "inactive", "cancelled", "canceled", "suspended"].includes(status);
+  if (inactive) return false;
+  const endAt = rules?.subscriptionCurrentEnd;
+  if (endAt) {
+    const endDate = new Date(endAt);
+    if (!isNaN(endDate.getTime()) && endDate < new Date()) return false;
+  }
+  return true;
+}
+
 // ================= TEXT HELPERS =================
 const menuText = (c) => `${String.fromCodePoint(0x1F44B)} Hola! Soy el asistente de ${c.name}
 - catalogo
@@ -610,6 +625,15 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
   if (sessionDirty) {
     await saveSession(session);
+  }
+
+  // Subscription enforcement: bot silently ignores messages if subscription is inactive/expired
+  if (!cmd.startsWith("admin")) {
+    const companyForSub = await getCompanySafe(session);
+    if (!isSubscriptionActive(companyForSub)) {
+      res.set("Content-Type", "text/xml");
+      return res.send("<Response></Response>");
+    }
   }
 
   const pendingOrderForSession = await resolvePendingSessionOrder(session);

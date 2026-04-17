@@ -4636,3 +4636,31 @@ body.admin-home-page {
   border-color: rgba(110, 231, 183, 0.58);
   box-shadow: 0 0 12px rgba(110, 231, 183, 0.18);
 }
+
+/* --- Subscription warning banner ----------------------------------- */
+.cp-subscription-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 8px;
+  padding: 12px 18px;
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: #fcd34d;
+  flex-wrap: wrap;
+}
+.cp-subscription-banner strong {
+  font-weight: 700;
+}
+.cp-sub-banner-link {
+  color: #fbbf24;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.cp-sub-banner-link:hover {
+  color: #fde68a;
+}

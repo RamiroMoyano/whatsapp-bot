@@ -3805,6 +3805,17 @@ function buildPriceChart(values) {
 
 function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboardAccess, showIntegrationsNav = false }) {
   const access = dashboardAccess || getDashboardAccessForCompany(company);
+  const companyRules = parseJsonSafe(company?.rulesJson || "{}", {});
+  const subStatus = String(companyRules?.subscriptionStatus || "Activa").trim().toLowerCase();
+  const subEnd = companyRules?.subscriptionCurrentEnd;
+  const subExpired = subEnd ? (new Date(subEnd) < new Date()) : false;
+  const subInactive = ["inactiva", "cancelada", "suspendida", "inactive", "cancelled", "canceled", "suspended"].includes(subStatus);
+  const subBanner = (subInactive || subExpired) ? `
+    <div class="cp-subscription-banner" role="alert">
+      <span>⚠️ Tu suscripcion esta <strong>${subInactive ? "inactiva" : "vencida"}</strong>. El bot no está respondiendo actualmente.</span>
+      ${active !== "cuenta" ? `<a href="/panel/cuenta" class="cp-sub-banner-link">Ir a Cuenta →</a>` : ""}
+    </div>
+  ` : "";
   const supportUnread = getClientUnreadNotificationCount(company);
   const nav = [
     { key: "inicio", label: "Resumen", href: "/panel" },
@@ -3871,6 +3882,7 @@ function renderClientPage({ company, active, title, subtitle, bodyHtml, dashboar
               <div class="cp-header-visual" aria-hidden="true"></div>
             </div>
           </header>
+          ${subBanner}
           ${bodyHtml}
         </main>
       </div>
