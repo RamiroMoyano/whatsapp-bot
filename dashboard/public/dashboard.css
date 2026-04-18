@@ -5022,3 +5022,45 @@ body.admin-home-page {
   background: rgba(20, 83, 45, 0.55);
   color: #bbf7d0;
 }
+
+/* --- 30-day orders bar chart --------------------------------------- */
+.cp-bar-chart-wrap {
+  margin-top: 14px;
+  overflow: hidden;
+}
+
+.cp-bar-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* --- Share widget: dual row --------------------------------------- */
+.cp-share-widget-duo {
+  padding: 0;
+}
+
+.cp-share-widget-duo .cp-share-inner {
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.cp-share-widget-duo .cp-share-inner:last-child {
+  border-bottom: none;
+}
+
+body.client-saas-ui .cp-share-widget-duo .cp-share-inner {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+body.client-saas-ui .cp-share-inner-menu .cp-share-number {
+  font-size: 14px;
+  color: #22d3ee;
+  font-family: monospace;
+}
+
+@media (max-width: 768px) {
+  body.client-saas-ui .cp-bar-chart-wrap {
+    overflow-x: auto;
+  }
+}

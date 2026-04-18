@@ -4560,10 +4560,12 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
-  const [{ state }, monthlyOrders, weeklyOrders, msgStats] = await Promise.all([
+  const last30Start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29).toISOString();
+  const [{ state }, monthlyOrders, weeklyOrders, last30Orders, msgStats] = await Promise.all([
     loadClientStateWithProvider(company),
     fetchCompanyOrders(company.id, monthStart, "", 500).catch(() => []),
     fetchCompanyOrders(company.id, weekStart, "", 500).catch(() => []),
+    fetchCompanyOrders(company.id, last30Start, "", 500).catch(() => []),
     api(`/api/companies/${encodeURIComponent(company.id)}/whatsapp-messages/stats`).catch(() => ({ total: 0, last30Days: 0 })),
   ]);
   const profile = extractCompanyProfile(state.rules);
@@ -4582,6 +4584,7 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
   const savedHours = savedMinutes > 0 ? (savedMinutes / 60) : 0;
   const monthlyLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
   const activitySeries = buildBotActivitySeries(weeklyOrders, 7);
+  const ordersChartSvg = buildOrdersBarChartSvg(last30Orders, 30);
   const alerts = buildOverviewAlerts({ state, payment, monthlyOrders });
   const activityRows = activitySeries.buckets.map((bucket) => `
     <div class="cp-activity-row">
@@ -4674,6 +4677,16 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
         </div>
       </article>
 
+      <article class="cp-card cp-span-3 cp-overview-block">
+        <div class="cp-card-head">
+          <h3>📦 Pedidos por dia</h3>
+          <span>ultimos 30 dias</span>
+        </div>
+        <div class="cp-bar-chart-wrap">
+          ${ordersChartSvg}
+        </div>
+      </article>
+
       <article class="cp-card cp-span-3 cp-overview-block cp-alerts-panel cp-tone-amber-soft">
         <div class="cp-card-head">
           <h3>⚠️ Alertas importantes</h3>
@@ -4684,9 +4697,9 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
         </ul>
       </article>
 
-      ${profile.botPhone ? `
-      <article class="cp-card cp-span-3 cp-share-widget">
-        <div class="cp-share-inner">
+      <article class="cp-card cp-span-3 cp-share-widget cp-share-widget-duo">
+        ${profile.botPhone ? `
+        <div class="cp-share-inner cp-share-inner-wa">
           <div class="cp-share-icon">💬</div>
           <div class="cp-share-body">
             <div class="cp-share-title">Compartí tu bot de WhatsApp</div>
@@ -4698,8 +4711,20 @@ app.get("/panel", requireClientAuth, loadClientIntegrationFlag, requireClientSec
             <button class="cp-btn" type="button" onclick="navigator.clipboard.writeText('https://wa.me/${encodeURIComponent(profile.botPhone.replace(/\D/g, ""))}').then(()=>{this.textContent='Copiado';setTimeout(()=>this.textContent='Copiar link',2000)})">Copiar link</button>
           </div>
         </div>
+        ` : ""}
+        <div class="cp-share-inner cp-share-inner-menu">
+          <div class="cp-share-icon">🍽️</div>
+          <div class="cp-share-body">
+            <div class="cp-share-title">Menú público de tu negocio</div>
+            <div class="cp-share-number">/menu/${escapeHtml(company.id)}</div>
+            <div class="cp-share-hint">Página con tu catálogo para compartir en redes o web</div>
+          </div>
+          <div class="cp-share-actions">
+            <a class="cp-btn primary" href="/menu/${encodeURIComponent(company.id)}" target="_blank" rel="noopener">Ver menú</a>
+            <button class="cp-btn" type="button" onclick="navigator.clipboard.writeText(window.location.origin+'/menu/${encodeURIComponent(company.id)}').then(()=>{this.textContent='Copiado';setTimeout(()=>this.textContent='Copiar link',2000)})">Copiar link</button>
+          </div>
+        </div>
       </article>
-      ` : ""}
 
       <article class="cp-card cp-span-3 cp-overview-block">
         <div class="cp-card-head">
@@ -5420,6 +5445,48 @@ function buildBotActivitySeries(orders, days = 7) {
       width: max > 0 ? Math.max(8, Math.round((bucket.count / max) * 100)) : 8,
     })),
   };
+}
+
+function buildOrdersBarChartSvg(orders, days = 30) {
+  const series = buildBotActivitySeries(orders, days);
+  const buckets = series.buckets;
+  const maxCount = Math.max(series.max, 1);
+  const W = 600;
+  const H = 130;
+  const padL = 6;
+  const padR = 6;
+  const padTop = 18;
+  const padBot = 28;
+  const plotW = W - padL - padR;
+  const plotH = H - padTop - padBot;
+  const barW = Math.max(2, Math.floor(plotW / buckets.length) - 2);
+  const gap = Math.floor(plotW / buckets.length);
+  const todayKey = new Date().toISOString().slice(0, 10);
+
+  const bars = buckets.map((bucket, i) => {
+    const barH = Math.max(bucket.count > 0 ? 3 : 0, Math.round((bucket.count / maxCount) * plotH));
+    const x = padL + i * gap + Math.floor((gap - barW) / 2);
+    const y = padTop + plotH - barH;
+    const isToday = bucket.key === todayKey;
+    const fill = isToday ? "#22d3ee" : "#3b82f6";
+    const opacity = bucket.count > 0 ? "1" : "0.15";
+    const label = bucket.count > 0 ? `<text x="${x + barW / 2}" y="${y - 3}" text-anchor="middle" font-size="8" fill="#94a3b8">${bucket.count}</text>` : "";
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(barH, 2)}" rx="2" fill="${fill}" opacity="${opacity}"/>${label}`;
+  }).join("");
+
+  const labels = buckets.map((bucket, i) => {
+    const showLabel = i % 5 === 0 || i === buckets.length - 1;
+    if (!showLabel) return "";
+    const x = padL + i * gap + gap / 2;
+    return `<text x="${x}" y="${H - 6}" text-anchor="middle" font-size="9" fill="#64748b">${bucket.shortLabel}</text>`;
+  }).join("");
+
+  const axisY = padTop + plotH;
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" class="cp-bar-chart-svg" aria-hidden="true">
+    <line x1="${padL}" y1="${axisY}" x2="${W - padR}" y2="${axisY}" stroke="#1e293b" stroke-width="1"/>
+    ${bars}
+    ${labels}
+  </svg>`;
 }
 
 const FAQ_TOPIC_DEFINITIONS = [
@@ -7093,6 +7160,118 @@ app.get("/__routes", (req, res) => {
 
   info.count = info.routes.length;
   res.json(info);
+});
+
+// ─── Public menu page ────────────────────────────────────────────────────────
+app.get("/menu/:id", async (req, res) => {
+  const companyId = String(req.params.id || "").trim().toLowerCase();
+  if (!companyId) return res.status(404).send("No encontrado");
+
+  try {
+    const company = await api(`/api/companies/${encodeURIComponent(companyId)}`).catch(() => null);
+    if (!company || !company.id) return res.status(404).send("Negocio no encontrado");
+
+    const { state } = await loadClientStateWithProvider(company);
+    const rules = parseJsonSafe(company.rulesJson || "{}", {});
+    const catalog = Array.isArray(state.catalog) ? state.catalog : [];
+    const companyName = escapeHtml(company.name || company.id);
+    const description = escapeHtml(String(rules.companyDescription || "").trim());
+    const botPhone = escapeHtml(String(rules.botPhone || "").trim());
+    const waLink = botPhone ? `https://wa.me/${botPhone.replace(/\D/g, "")}` : "";
+
+    // Group by category
+    const grouped = new Map();
+    for (const item of catalog) {
+      const cat = String(item.categoria || item.category || item.seccion || "General").trim() || "General";
+      if (!grouped.has(cat)) grouped.set(cat, []);
+      grouped.get(cat).push(item);
+    }
+
+    const formatPrice = (price) => {
+      const n = Number(price || 0);
+      if (!n) return "";
+      try { return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n); }
+      catch { return "$" + Math.round(n); }
+    };
+
+    const categoryHtml = [...grouped.entries()].map(([cat, items]) => `
+      <section class="menu-section">
+        <h2 class="menu-cat">${escapeHtml(cat)}</h2>
+        <div class="menu-items">
+          ${items.filter((item) => String(item.stock || "").toLowerCase() !== "sin stock").map((item) => `
+            <article class="menu-item">
+              <div class="menu-item-body">
+                <div class="menu-item-name">${escapeHtml(item.producto || item.name || "Producto")}</div>
+                ${item.descripcion ? `<div class="menu-item-desc">${escapeHtml(String(item.descripcion).slice(0, 120))}</div>` : ""}
+                ${item.talle || item.color ? `<div class="menu-item-tags">${[item.talle && `Talle: ${item.talle}`, item.color && `Color: ${item.color}`].filter(Boolean).map((t) => `<span>${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+              </div>
+              <div class="menu-item-price">${formatPrice(item.precio)}</div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    `).join("");
+
+    const emptyHtml = catalog.length === 0 ? `<div class="menu-empty">Este negocio aún no tiene productos publicados.</div>` : "";
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${companyName} — Menú</title>
+  <meta name="description" content="${description || `Menú y catálogo de ${companyName}`}"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .menu-header { background: linear-gradient(135deg, #1a2744 0%, #0f172a 100%); padding: 32px 20px 24px; text-align: center; border-bottom: 1px solid #1e293b; }
+    .menu-logo { font-size: 40px; margin-bottom: 12px; }
+    .menu-header h1 { font-size: 28px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.5px; }
+    .menu-header p { color: #94a3b8; font-size: 15px; margin-top: 8px; max-width: 480px; margin-left: auto; margin-right: auto; }
+    .menu-wa-btn { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; background: #25d366; color: #fff; font-weight: 700; font-size: 15px; padding: 12px 24px; border-radius: 999px; text-decoration: none; }
+    .menu-wa-btn:hover { background: #1ebe5a; }
+    .menu-wa-icon { font-size: 18px; }
+    .menu-body { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+    .menu-section { margin-bottom: 32px; }
+    .menu-cat { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #22d3ee; border-bottom: 1px solid #1e293b; padding-bottom: 8px; margin-bottom: 16px; }
+    .menu-items { display: flex; flex-direction: column; gap: 2px; }
+    .menu-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px; background: #1e293b; border-radius: 10px; margin-bottom: 4px; transition: background 0.15s; }
+    .menu-item:hover { background: #243147; }
+    .menu-item-body { flex: 1; min-width: 0; }
+    .menu-item-name { font-size: 15px; font-weight: 600; color: #f1f5f9; }
+    .menu-item-desc { font-size: 13px; color: #94a3b8; margin-top: 4px; line-height: 1.4; }
+    .menu-item-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .menu-item-tags span { font-size: 11px; background: #0f172a; color: #64748b; border-radius: 4px; padding: 2px 6px; }
+    .menu-item-price { font-size: 16px; font-weight: 800; color: #22d3ee; white-space: nowrap; padding-top: 2px; }
+    .menu-empty { text-align: center; color: #475569; padding: 48px 0; font-size: 16px; }
+    .menu-footer { text-align: center; color: #334155; font-size: 12px; padding: 24px; border-top: 1px solid #1e293b; }
+    @media (max-width: 480px) {
+      .menu-header h1 { font-size: 22px; }
+      .menu-item { padding: 12px; }
+      .menu-item-name { font-size: 14px; }
+      .menu-item-price { font-size: 15px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="menu-header">
+    <div class="menu-logo">🛒</div>
+    <h1>${companyName}</h1>
+    ${description ? `<p>${description}</p>` : ""}
+    ${waLink ? `<a class="menu-wa-btn" href="${escapeHtml(waLink)}" target="_blank" rel="noopener"><span class="menu-wa-icon">💬</span> Hacer un pedido por WhatsApp</a>` : ""}
+  </header>
+  <main class="menu-body">
+    ${categoryHtml}
+    ${emptyHtml}
+  </main>
+  <footer class="menu-footer">Powered by BabySteps Bots</footer>
+</body>
+</html>`;
+
+    res.type("text/html").send(html);
+  } catch (e) {
+    res.status(500).send("Error al cargar el menú");
+  }
 });
 
 const PORT = Number(process.env.PORT || 3001);
