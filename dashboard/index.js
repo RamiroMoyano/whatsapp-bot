@@ -6890,6 +6890,31 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
                 </div>
               </details>
 
+              <details class="cp-company-details cp-form-section">
+                <summary><span>Configuracion del bot</span><span class="cp-details-hint">Respuestas y horario</span></summary>
+                <div class="cp-company-details-body">
+                  <label>Mensaje de bienvenida</label>
+                  <textarea name="welcomeMessage" rows="3" placeholder="Ej: ¡Hola! Soy el asistente de Tienda X. ¿En qué te puedo ayudar?">${escapeHtml(String(state.rules?.welcomeMessage || ""))}</textarea>
+                  <p class="cp-note" style="margin:4px 0 12px">Si lo dejás vacío, el bot usa el saludo predeterminado.</p>
+
+                  <label>Horario de atención</label>
+                  <input name="businessHoursText" value="${escapeHtml(String(state.rules?.businessHoursText || ""))}" placeholder="Ej: Lunes a Viernes 9:00-18:00, Sábados 9:00-13:00" />
+                  <p class="cp-note" style="margin:4px 0 12px">El bot menciona este horario cuando el cliente lo pregunta.</p>
+
+                  <label>Descripcion del negocio</label>
+                  <textarea name="companyDescription" rows="3" placeholder="Ej: Somos una tienda de ropa deportiva con envíos a todo el país.">${escapeHtml(String(state.rules?.companyDescription || ""))}</textarea>
+                  <p class="cp-note" style="margin:4px 0 12px">El asistente IA usa este texto para responder preguntas sobre tu negocio.</p>
+
+                  <label>Tono del bot</label>
+                  <select name="botTone">
+                    <option value="neutral"   ${(state.rules?.tone || "neutral") === "neutral"   ? "selected" : ""}>Neutral</option>
+                    <option value="amigable"  ${state.rules?.tone === "amigable"  ? "selected" : ""}>Amigable y cercano</option>
+                    <option value="formal"    ${state.rules?.tone === "formal"    ? "selected" : ""}>Formal y profesional</option>
+                    <option value="divertido" ${state.rules?.tone === "divertido" ? "selected" : ""}>Divertido y casual</option>
+                  </select>
+                </div>
+              </details>
+
               <div class="cp-actions">
                 <button class="cp-btn primary" type="submit">Guardar datos</button>
               </div>
@@ -6984,6 +7009,11 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
   rules.paymentTransfer = paymentTransfer;
   rules.paymentTransferEnabled = paymentMethods.transfer;
   rules.paymentInstructions = String(req.body.paymentInstructions || "").trim();
+
+  rules.welcomeMessage = String(req.body.welcomeMessage || "").trim();
+  rules.businessHoursText = String(req.body.businessHoursText || "").trim();
+  rules.companyDescription = String(req.body.companyDescription || "").trim();
+  rules.tone = String(req.body.botTone || "neutral").trim();
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {

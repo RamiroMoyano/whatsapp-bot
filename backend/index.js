@@ -122,11 +122,12 @@ function isSubscriptionActive(company) {
 }
 
 // ================= TEXT HELPERS =================
-const menuText = (c) => `${String.fromCodePoint(0x1F44B)} Hola! Soy el asistente de ${c.name}
-- catalogo
-- carrito
-- checkout
-- humano`;
+const menuText = (c) => {
+  const rules = parseJsonSafe(c?.rulesJson || "{}", {});
+  const custom = String(rules?.welcomeMessage || "").trim();
+  if (custom) return custom;
+  return `${String.fromCodePoint(0x1F44B)} Hola! Soy el asistente de ${c.name}\n- catalogo\n- carrito\n- checkout\n- humano`;
+};
 
 
 const catalogText = (c) =>
@@ -230,14 +231,19 @@ async function aiReply(session, from, text) {
   const c = await getCompanySafe(session);
   const paymentPrompt = paymentMethodsPromptText(c);
   const currency = getCompanyCatalogCurrency(c);
+  const companyRules = parseJsonSafe(c?.rulesJson || "{}", {});
+  const companyDescription = String(companyRules?.companyDescription || "").trim();
+  const businessHoursText = String(companyRules?.businessHoursText || "").trim();
   const prompt = `
 ${c.prompt || ""}
+${companyDescription ? `\nDESCRIPCION DE LA EMPRESA:\n${companyDescription}` : ""}
+${businessHoursText ? `\nHORARIO DE ATENCION:\n${businessHoursText}` : ""}
 
 CATALOGO:
 ${(c.catalog || []).map((p) => `${p.id}) ${p.name}: ${formatChatMoney(p.price, currency)}`).join("\n")}
 
 Reglas:
-- Tono: ${(c.rules || {}).tone || "neutral"}
+- Tono: ${companyRules?.tone || (c.rules || {}).tone || "neutral"}
 - No inventar datos
 - Responde de forma natural y util
 - Si el cliente pregunta por productos, explica diferencias y beneficios de cada opcion
