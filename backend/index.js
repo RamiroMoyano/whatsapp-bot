@@ -121,6 +121,53 @@ function isSubscriptionActive(company) {
   return true;
 }
 
+// ─── Maintenance mode ─────────────────────────────────────────────────────────
+let _maintenanceCacheValue = null;
+let _maintenanceCacheAt = 0;
+const MAINTENANCE_CACHE_TTL = 30 * 1000; // 30 seconds
+
+async function isBotInMaintenance() {
+  const now = Date.now();
+  if (_maintenanceCacheValue !== null && now - _maintenanceCacheAt < MAINTENANCE_CACHE_TTL) {
+    return _maintenanceCacheValue;
+  }
+  try {
+    const val = await getSetting("maintenance_mode");
+    _maintenanceCacheValue = val === "1";
+    _maintenanceCacheAt = now;
+    return _maintenanceCacheValue;
+  } catch {
+    return false;
+  }
+}
+
+function invalidateMaintenanceCache() {
+  _maintenanceCacheValue = null;
+  _maintenanceCacheAt = 0;
+}
+
+// ─── Rate limiting (per-customer, per-company, in-memory) ────────────────────
+const _rlMap = new Map(); // key "companyId:from" → { count, windowStart }
+const RL_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+function checkRateLimit(companyId, from, limitPerHour) {
+  const limit = Math.max(1, Number(limitPerHour) || 0);
+  if (!limit) return { ok: true, count: 0 }; // 0 = disabled
+  const key = `${companyId}:${from}`;
+  const now = Date.now();
+  const entry = _rlMap.get(key);
+  if (!entry || now - entry.windowStart >= RL_WINDOW_MS) {
+    _rlMap.set(key, { count: 1, windowStart: now });
+    return { ok: true, count: 1, remaining: limit - 1 };
+  }
+  entry.count += 1;
+  if (entry.count > limit) {
+    const resetIn = Math.ceil((entry.windowStart + RL_WINDOW_MS - now) / 60000);
+    return { ok: false, count: entry.count, resetInMinutes: resetIn };
+  }
+  return { ok: true, count: entry.count, remaining: limit - entry.count };
+}
+
 // ─── Business hours ──────────────────────────────────────────────────────────
 function isWithinBusinessHours(company) {
   const rules = parseJsonSafe(company?.rulesJson || "{}", {});
@@ -692,6 +739,18 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     await saveSession(session);
   }
 
+  // Maintenance mode: respond with maintenance message to all non-admin messages
+  if (!cmd.startsWith("admin")) {
+    const inMaintenance = await isBotInMaintenance();
+    if (inMaintenance) {
+      const maintMsg = await getSetting("maintenance_message") || "El bot está en mantenimiento. Volvemos en breve. 🔧";
+      res.set("Content-Type", "text/xml");
+      const twiml = new twilio.twiml.MessagingResponse();
+      twiml.message(maintMsg);
+      return res.type("text/xml").send(twiml.toString());
+    }
+  }
+
   // Subscription enforcement: bot silently ignores messages if subscription is inactive/expired
   if (!cmd.startsWith("admin")) {
     const companyForSub = await getCompanySafe(session);
@@ -785,6 +844,28 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     } else if (session.data.lastOutsideHoursNotifiedAt) {
       delete session.data.lastOutsideHoursNotifiedAt;
       sessionDirty = true;
+    }
+  }
+
+  // ─── Rate limiting ────────────────────────────────────────────────────────
+  if (!cmd.startsWith("admin")) {
+    const rlCompany = await getCompanySafe(session);
+    const rlRules = parseJsonSafe(rlCompany?.rulesJson || "{}", {});
+    const rlLimit = Number(rlRules?.rateLimitPerHour || 0);
+    if (rlLimit > 0) {
+      const companyId = String(session?.data?.companyId || "babystepsbots");
+      const rl = checkRateLimit(companyId, from, rlLimit);
+      if (!rl.ok) {
+        // First message over the limit → notify once
+        if (rl.count === rlLimit + 1) {
+          return respondAndLog(
+            `Enviaste demasiados mensajes en poco tiempo. Podés volver a escribir en ${rl.resetInMinutes} minuto${rl.resetInMinutes === 1 ? "" : "s"}. 🙏`
+          );
+        }
+        // Subsequent — silent ignore
+        res.set("Content-Type", "text/xml");
+        return res.send("<Response></Response>");
+      }
     }
   }
 
@@ -1541,6 +1622,38 @@ function respond(res, text) {
   twiml.message(text);
   res.type("text/xml").send(twiml.toString());
 }
+
+// ================= MAINTENANCE TOGGLE =================
+app.post("/api/admin/maintenance", async (req, res) => {
+  const token = req.headers["x-api-key"] || req.headers["authorization"]?.replace("Bearer ", "");
+  const API_KEY = (process.env.API_KEY || "").trim();
+  if (!API_KEY || token !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const enabled = req.body.enabled === true || req.body.enabled === "1" || req.body.enabled === "true";
+    const message = String(req.body.message || "").trim();
+    await setSetting("maintenance_mode", enabled ? "1" : "0");
+    if (message) await setSetting("maintenance_message", message);
+    invalidateMaintenanceCache();
+    const current = await getSetting("maintenance_message");
+    return res.json({ ok: true, maintenanceMode: enabled, message: current || "" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+app.get("/api/admin/maintenance", async (req, res) => {
+  const token = req.headers["x-api-key"] || req.headers["authorization"]?.replace("Bearer ", "");
+  const API_KEY = (process.env.API_KEY || "").trim();
+  if (!API_KEY || token !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const enabled = (await getSetting("maintenance_mode")) === "1";
+    const message = await getSetting("maintenance_message");
+    return res.json({ ok: true, maintenanceMode: enabled, message: message || "" });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
 
 // ================= HEALTH =================
 app.get("/", (_, res) => res.send("OK"));

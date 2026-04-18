@@ -142,9 +142,69 @@ function signClient(companyId) {
   return signToken(`client:${companyId}`);
 }
 
+let _dashMaintenanceCache = null;
+let _dashMaintenanceCacheAt = 0;
+const DASH_MAINTENANCE_TTL = 30 * 1000;
+
+async function getDashMaintenanceMode() {
+  const now = Date.now();
+  if (_dashMaintenanceCache !== null && now - _dashMaintenanceCacheAt < DASH_MAINTENANCE_TTL) {
+    return _dashMaintenanceCache;
+  }
+  try {
+    const data = await api("/api/admin/maintenance");
+    _dashMaintenanceCache = data?.maintenanceMode === true;
+    _dashMaintenanceCacheAt = now;
+    return _dashMaintenanceCache;
+  } catch {
+    return false;
+  }
+}
+
+function renderMaintenancePage() {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Mantenimiento</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .box { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 48px 40px; max-width: 480px; width: 100%; text-align: center; }
+    .icon { font-size: 56px; margin-bottom: 20px; }
+    h1 { font-size: 22px; font-weight: 800; color: #f1f5f9; margin-bottom: 12px; }
+    p { color: #94a3b8; font-size: 15px; line-height: 1.6; margin-bottom: 8px; }
+    .badge { display: inline-block; margin-top: 20px; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.3); color: #fbbf24; border-radius: 999px; padding: 6px 16px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+    .retry { margin-top: 24px; }
+    .retry a { color: #38bdf8; text-decoration: none; font-size: 14px; }
+    .retry a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="icon">🔧</div>
+    <h1>Estamos realizando mantenimiento</h1>
+    <p>El panel estará disponible nuevamente en breve.</p>
+    <p>Disculpá las molestias.</p>
+    <div class="badge">En mantenimiento</div>
+    <div class="retry"><a href="">Reintentar →</a></div>
+  </div>
+</body>
+</html>`;
+}
+
 async function requireClientAuth(req, res, next) {
   if (!DASH_COOKIE_SECRET) {
     return res.status(500).send("Falta env: DASH_COOKIE_SECRET");
+  }
+
+  // Maintenance mode: show maintenance page instead of panel (except login)
+  if (!req.path.startsWith("/panel/login") && !req.path.startsWith("/panel/logout")) {
+    const inMaintenance = await getDashMaintenanceMode().catch(() => false);
+    if (inMaintenance) {
+      return res.status(503).type("text/html").send(renderMaintenancePage());
+    }
   }
 
   const cookie = parseCookies(req)["client"];
@@ -974,6 +1034,8 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const cacheSyncLabel = companiesState.updatedAt
       ? new Date(companiesState.updatedAt).toLocaleString("es-AR")
       : "";
+    const maintenanceSaved = String(req.query.maintenanceSaved || "") === "1";
+    const maintenanceError = String(req.query.maintenanceError || "").trim();
     const flashHtml = [
       companiesState.error && companiesState.cached
         ? `<div class="card"><b>Usando datos en cache:</b> el backend respondio lento, pero mantenemos el panel operativo.<br><span class="muted">Ultima sincronizacion: ${escapeHtml(cacheSyncLabel || "hace instantes")}.</span></div>`
@@ -985,6 +1047,8 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
       deleted ? `<div class="card"><b>Empresa eliminada:</b> ${escapeHtml(flashCompany || "empresa")}</div>` : "",
       dashboardError ? `<div class="card"><b>Error guardando dashboard:</b> ${escapeHtml(dashboardError)}</div>` : "",
       deleteError ? `<div class="card"><b>Error eliminando empresa:</b> ${escapeHtml(deleteError)}</div>` : "",
+      maintenanceSaved ? `<div class="card"><b>Modo mantenimiento actualizado.</b></div>` : "",
+      maintenanceError ? `<div class="card"><b>Error:</b> ${escapeHtml(maintenanceError)}</div>` : "",
     ].join("");
 
     const nowForSub = new Date();
@@ -1071,10 +1135,11 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const kpiClass = (key) => `kpi kpi-filter ${view === key ? "active" : ""}`;
     const clearSearchHref = view !== "all" ? `/admin?view=${encodeURIComponent(view)}` : "/admin";
 
-    const [botHealth, dbHealth, activityData] = await Promise.all([
+    const [botHealth, dbHealth, activityData, maintenanceState] = await Promise.all([
       api("/health").catch(() => ({ ok: false })),
       api("/health/db").catch(() => ({ ok: false, db: "down" })),
       api("/api/health/activity").catch(() => null),
+      api("/api/admin/maintenance").catch(() => ({ maintenanceMode: false, message: "" })),
     ]);
 
     res.type("text/html").send(`
@@ -1147,6 +1212,21 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
                 <span><b>${mins24h}</b> msgs/24h</span>
               </div>`;
             })()}
+          </div>
+
+          <div class="admin-maintenance-widget ${maintenanceState?.maintenanceMode ? "admin-maintenance-on" : ""}">
+            <div class="admin-health-title">🔧 Mantenimiento</div>
+            <div class="admin-health-row" style="margin-bottom:8px">
+              <span class="admin-health-dot ${maintenanceState?.maintenanceMode ? "err" : "ok"}"></span>
+              <span>Bot: <b>${maintenanceState?.maintenanceMode ? "En mantenimiento" : "Operativo"}</b></span>
+            </div>
+            <form method="POST" action="/admin/maintenance/toggle" style="display:flex;flex-direction:column;gap:6px">
+              <input type="hidden" name="enabled" value="${maintenanceState?.maintenanceMode ? "0" : "1"}" />
+              <input type="text" name="message" value="${escapeHtml(maintenanceState?.message || "")}" placeholder="Mensaje para clientes..." style="font-size:11px;padding:4px 6px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:#e2e8f0;width:100%" />
+              <button type="submit" class="btn ${maintenanceState?.maintenanceMode ? "secondary" : "danger"}" style="font-size:11px;padding:5px 8px">
+                ${maintenanceState?.maintenanceMode ? "✅ Desactivar" : "⚠️ Activar"}
+              </button>
+            </form>
           </div>
         </aside>
 
@@ -2580,6 +2660,30 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
       active: "companies",
       body: `<div class="card"><b>Error restableciendo password:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/${encodeURIComponent(id)}">Volver</a></div>`,
     }));
+  }
+});
+
+// ================= MAINTENANCE MODE =================
+app.get("/admin/maintenance", requireDashboardAuth, async (req, res) => {
+  try {
+    const data = await api("/api/admin/maintenance");
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+app.post("/admin/maintenance/toggle", requireDashboardAuth, async (req, res) => {
+  try {
+    const enabled = String(req.body.enabled || "").trim() === "1";
+    const message = String(req.body.message || "").trim();
+    await api("/api/admin/maintenance", {
+      method: "POST",
+      body: { enabled, message: message || undefined },
+    });
+    return res.redirect("/admin?maintenanceSaved=1");
+  } catch (e) {
+    return res.redirect(`/admin?maintenanceError=${encodeURIComponent(e?.message || e)}`);
   }
 });
 
@@ -7223,6 +7327,15 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
               </details>
 
               <details class="cp-company-details cp-form-section">
+                <summary><span>Limite de mensajes</span><span class="cp-details-hint">Proteccion contra spam</span></summary>
+                <div class="cp-company-details-body">
+                  <label>Mensajes maximos por hora (por cliente)</label>
+                  <input type="number" name="rateLimitPerHour" min="0" max="200" value="${escapeHtml(String(state.rules?.rateLimitPerHour || "0"))}" />
+                  <p class="cp-note" style="margin:4px 0 0">0 = sin límite. Recomendado: 20-30 para clientes normales. Al superar el límite, el bot avisa una vez y luego ignora silenciosamente hasta que pase 1 hora.</p>
+                </div>
+              </details>
+
+              <details class="cp-company-details cp-form-section">
                 <summary><span>Notificaciones</span><span class="cp-details-hint">Avisos automaticos a clientes</span></summary>
                 <div class="cp-company-details-body">
                   <div class="cp-toggle-row">
@@ -7363,6 +7476,10 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
 
   // Delivery address
   rules.requireDeliveryAddress = req.body.requireDeliveryAddress === "true";
+
+  // Rate limiting
+  const rlRaw = Number(req.body.rateLimitPerHour);
+  rules.rateLimitPerHour = Number.isFinite(rlRaw) && rlRaw >= 0 ? Math.floor(rlRaw) : 0;
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {

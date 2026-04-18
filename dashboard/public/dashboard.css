@@ -5291,3 +5291,34 @@ body.client-saas-ui .cp-day-check:has(input:checked) {
 #admin-activity-log {
   margin-top: 18px;
 }
+
+/* --- Admin: maintenance widget ------------------------------------ */
+.admin-maintenance-widget {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.12);
+  border: 1px solid rgba(148,163,184,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-maintenance-on {
+  background: rgba(239,68,68,0.1);
+  border-color: rgba(239,68,68,0.35);
+}
+
+.admin-maintenance-on .admin-health-title {
+  color: #fca5a5;
+}
+
+.btn.danger {
+  background: #ef4444;
+  color: #fff;
+  border: none;
+}
+
+.btn.danger:hover {
+  background: #dc2626;
+}
