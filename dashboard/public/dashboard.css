@@ -5185,3 +5185,109 @@ body.client-saas-ui .cp-day-check:has(input:checked) {
   background: rgba(59,130,246,0.1);
   color: #bfdbfe;
 }
+
+/* --- Admin: metrics strip ----------------------------------------- */
+.admin-metrics-strip {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.admin-metric {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.admin-metric-label {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.admin-metric-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: #1a1f36;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.admin-metric-hint {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+@media (max-width: 900px) {
+  .admin-metrics-strip {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-metrics-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* --- Admin: activity log ------------------------------------------ */
+.admin-activity-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-activity-table th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid #e2e8f0;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.admin-activity-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+  max-width: 320px;
+}
+
+.admin-activity-table td:first-child {
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.admin-activity-content {
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-activity-new td {
+  background: #f0fdf4;
+  animation: activity-flash 1.5s ease both;
+}
+
+@keyframes activity-flash {
+  from { background: #bbf7d0; }
+  to   { background: #f0fdf4; }
+}
+
+#admin-activity-log {
+  margin-top: 18px;
+}

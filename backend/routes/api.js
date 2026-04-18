@@ -1110,5 +1110,40 @@ export default function createApiRouter({
     }
   });
 
+  // Recent inbound messages feed for admin activity log
+  router.get("/api/messages/recent", requireApiAuth, async (req, res) => {
+    try {
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit || 20)));
+      const since = String(req.query.since || "").trim();
+      const rows = since
+        ? await db.prepare(
+            `SELECT id, fromNumber, companyId, direction, content, createdAt
+             FROM ai_messages
+             WHERE direction='in' AND createdAt > ?
+             ORDER BY createdAt DESC LIMIT ?`
+          ).all(since, limit)
+        : await db.prepare(
+            `SELECT id, fromNumber, companyId, direction, content, createdAt
+             FROM ai_messages
+             WHERE direction='in'
+             ORDER BY createdAt DESC LIMIT ?`
+          ).all(limit);
+
+      return res.json({
+        ok: true,
+        count: rows.length,
+        messages: rows.map((r) => ({
+          id: r.id,
+          from: String(r.fromNumber || "").replace(/^whatsapp:\+?/i, "").replace(/^(\d{2,4})(\d{4})(\d+)$/, "$1 $2 $3"),
+          companyId: r.companyId || "?",
+          content: String(r.content || "").slice(0, 120),
+          at: r.createdAt,
+        })),
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
   return router;
 }

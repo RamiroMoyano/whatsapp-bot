@@ -1249,14 +1249,70 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
                 <input name="q" value="${escapeHtml(String(req.query.q || ""))}" placeholder="ID, nombre, dueno, mail, bot..." />
                 <button class="btn primary" type="submit">Buscar</button>
                 <a class="btn secondary" href="${clearSearchHref}">Limpiar</a>
+                <a class="btn secondary" href="/admin/companies.csv" download>⬇️ CSV</a>
               </div>
             </form>
             <h3 style="margin:0 0 12px;">Listado ${view !== "all" ? `(${escapeHtml(view)})` : ""}</h3>
             <div class="company-list">${rows || `<div class="muted">Aun no hay empresas.</div>`}</div>
           </div>
+
+          <div class="card" id="admin-activity-log">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <h3 style="margin:0">🕐 Actividad reciente</h3>
+              <span class="muted" id="admin-activity-ts" style="font-size:12px">Cargando...</span>
+            </div>
+            <div id="admin-activity-body">
+              <div class="muted">Cargando mensajes...</div>
+            </div>
+          </div>
         </section>
       </div>
 
+    </div>
+    <script>
+      (function() {
+        var body = document.getElementById("admin-activity-body");
+        var ts = document.getElementById("admin-activity-ts");
+        var POLL_MS = 30000;
+        var knownIds = new Set();
+
+        function fmt(at) {
+          if (!at) return "-";
+          var d = new Date(at);
+          return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) +
+            " " + d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+        }
+
+        function renderRows(msgs) {
+          if (!msgs || !msgs.length) return '<div class="muted">Sin mensajes recientes.</div>';
+          return '<div class="admin-activity-table-wrap"><table class="admin-activity-table"><thead><tr><th>Hora</th><th>Empresa</th><th>Numero</th><th>Mensaje</th></tr></thead><tbody>' +
+            msgs.map(function(m) {
+              var isNew = !knownIds.has(String(m.id));
+              knownIds.add(String(m.id));
+              return '<tr class="' + (isNew ? "admin-activity-new" : "") + '"><td>' + fmt(m.at) + '</td><td>' + esc(m.companyId) + '</td><td>' + esc(m.from) + '</td><td class="admin-activity-content">' + esc(m.content) + '</td></tr>';
+            }).join("") +
+            '</tbody></table></div>';
+        }
+
+        function esc(v) {
+          return String(v || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        }
+
+        function load() {
+          fetch("/admin/api/activity", { credentials: "same-origin" })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+              if (!data || !data.ok) return;
+              body.innerHTML = renderRows(data.messages);
+              ts.textContent = "Actualizado " + new Date().toLocaleTimeString("es-AR");
+            })
+            .catch(function() { ts.textContent = "Error al cargar"; });
+        }
+
+        load();
+        setInterval(load, POLL_MS);
+      })();
+    </script>
     </div>
   </body>
 </html>
@@ -1538,10 +1594,14 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
     if (!c) {
       c = await api(`/api/companies/${encodeURIComponent(id)}`);
     }
-    const [adminUnreadNotifications, providerCompany, integrations] = await Promise.all([
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const [adminUnreadNotifications, providerCompany, integrations, monthlyOrders, msgStats] = await Promise.all([
       getAdminUnreadNotificationsTotal(),
       getBotCatalogProviderCompany(c),
       fetchCompanyIntegrations(id).catch(() => []),
+      fetchCompanyOrders(id, monthStart, "", 500).catch(() => []),
+      api(`/api/companies/${encodeURIComponent(id)}/whatsapp-messages/stats`).catch(() => ({ total: 0, last30Days: 0 })),
     ]);
     const providerForPricing = providerCompany || c;
     const state = extractClientState(c, {
@@ -1721,6 +1781,49 @@ app.get("/admin/company/:id", requireDashboardAuth, async (req, res) => {
       </div>
 
       ${alerts}
+
+      ${(() => {
+        const pendingOrders = monthlyOrders.filter((o) => {
+          const ws = String(o.workflowState || o.category || o.orderStatus || "").toLowerCase();
+          return !ws.includes("completed") && !ws.includes("rejected") && !ws.includes("archived");
+        });
+        const monthRevenue = monthlyOrders.reduce((acc, o) => acc + toNumber(o.total), 0);
+        const uniqueCustomers = new Set(monthlyOrders.map((o) => String(o.fromNumber || o.contact || "").toLowerCase()).filter(Boolean));
+        const monthLabel = now.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+        return `
+      <div class="admin-metrics-strip">
+        <div class="admin-metric">
+          <div class="admin-metric-label">📦 Pedidos del mes</div>
+          <div class="admin-metric-value">${monthlyOrders.length}</div>
+          <div class="admin-metric-hint">${escapeHtml(monthLabel)}</div>
+        </div>
+        <div class="admin-metric">
+          <div class="admin-metric-label">⏳ Pendientes</div>
+          <div class="admin-metric-value">${pendingOrders.length}</div>
+          <div class="admin-metric-hint">sin completar</div>
+        </div>
+        <div class="admin-metric">
+          <div class="admin-metric-label">💰 Ingresos est.</div>
+          <div class="admin-metric-value">${formatMoney(monthRevenue, "USD")}</div>
+          <div class="admin-metric-hint">sumatoria de totales</div>
+        </div>
+        <div class="admin-metric">
+          <div class="admin-metric-label">👥 Clientes únicos</div>
+          <div class="admin-metric-value">${uniqueCustomers.size}</div>
+          <div class="admin-metric-hint">este mes</div>
+        </div>
+        <div class="admin-metric">
+          <div class="admin-metric-label">💬 Mensajes 30d</div>
+          <div class="admin-metric-value">${Number(msgStats.last30Days || 0)}</div>
+          <div class="admin-metric-hint">entrantes al bot</div>
+        </div>
+        <div class="admin-metric">
+          <div class="admin-metric-label">📋 Mensajes total</div>
+          <div class="admin-metric-value">${Number(msgStats.total || 0).toLocaleString("es-AR")}</div>
+          <div class="admin-metric-hint">histórico</div>
+        </div>
+      </div>`;
+      })()}
 
       <div class="card admin-toggle-card" data-default-open="1">
         <h3 style="margin-top:0">Resumen importante</h3>
@@ -2477,6 +2580,46 @@ app.post("/admin/company/:id/reset-password", requireDashboardAuth, async (req, 
       active: "companies",
       body: `<div class="card"><b>Error restableciendo password:</b><pre>${escapeHtml(e?.message || e)}</pre></div><div class="card"><a class="btn secondary" href="/admin/company/${encodeURIComponent(id)}">Volver</a></div>`,
     }));
+  }
+});
+
+// ================= ADMIN ACTIVITY FEED =================
+app.get("/admin/api/activity", requireDashboardAuth, async (req, res) => {
+  try {
+    const data = await api("/api/messages/recent?limit=25");
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+// ================= EXPORTAR EMPRESAS CSV =================
+app.get("/admin/companies.csv", requireDashboardAuth, async (req, res) => {
+  try {
+    const { items: companies } = await loadAdminCompanies({ allowStale: true, preferCache: true });
+    const escape = (v) => {
+      const s = String(v || "").replace(/"/g, '""');
+      return /[",\n\r]/.test(s) ? `"${s}"` : s;
+    };
+    const headers = ["ID", "Nombre", "Dueno", "Email", "Telefono", "Bot", "Plan", "Dashboard", "Suscripcion", "Fin suscripcion", "Creado"];
+    const rows = (Array.isArray(companies) ? companies : []).map((c) => {
+      const rules = parseJsonSafe(c.rulesJson || "{}", {});
+      const plan = extractPlanInfo(c, rules);
+      const profile = extractCompanyProfile(rules);
+      const dashAccess = extractDashboardAccessFromRules(rules);
+      const dashLabel = !dashAccess.enabled ? "Inactivo" : dashAccess.mode === "limited" ? "Limitado" : "Completo";
+      const subStatus = String(rules?.subscriptionStatus || "Activa");
+      const subEnd = rules?.subscriptionCurrentEnd ? new Date(rules.subscriptionCurrentEnd).toLocaleDateString("es-AR") : "";
+      const createdAt = c.createdAt ? new Date(c.createdAt).toLocaleDateString("es-AR") : "";
+      return [c.id, c.name, profile.ownerName, profile.ownerEmail, profile.ownerPhone, plan.botClass, plan.fullLabel, dashLabel, subStatus, subEnd, createdAt].map(escape).join(",");
+    });
+    const csv = [headers.join(","), ...rows].join("\r\n");
+    const filename = `empresas_${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send("\uFEFF" + csv); // BOM for Excel
+  } catch (e) {
+    res.status(500).send("Error exportando CSV");
   }
 });
 
