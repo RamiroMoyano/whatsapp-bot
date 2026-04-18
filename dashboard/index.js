@@ -631,7 +631,7 @@ function parseClientOrdersFilters(query) {
   const selectedRange = ["today", "week", "month", "3months", "custom"].includes(selectedRangeRaw)
     ? selectedRangeRaw
     : "month";
-  const selectedStatus = ["all", "completed", "pending", "rejected", "archived"].includes(selectedStatusRaw)
+  const selectedStatus = ["all", "pending", "preparing", "ready", "completed", "rejected", "archived"].includes(selectedStatusRaw)
     ? selectedStatusRaw
     : "all";
 
@@ -725,6 +725,8 @@ function normalizeClientOrderState(value) {
   if (!raw) return "";
   if (raw.includes("reject") || raw.includes("rechaz") || raw.includes("cancel") || raw.includes("anul")) return "rejected";
   if (raw.includes("complet") || raw.includes("entreg") || raw.includes("finaliz") || raw.includes("cerrad")) return "completed";
+  if (raw.includes("listo") || raw.includes("ready") || raw.includes("preparado") || raw === "listo") return "ready";
+  if (raw.includes("prepar") || raw.includes("preparing") || raw.includes("proceso") || raw.includes("cocina")) return "preparing";
   if (raw.includes("pend")) return "pending";
   return "";
 }
@@ -783,7 +785,9 @@ function extractClientOrderWorkflow(order) {
 
 function clientOrderCategoryLabel(category) {
   if (category === "completed") return "Completado";
-  if (category === "rejected") return "Rechazado";
+  if (category === "rejected") return "Rechazado/Cancelado";
+  if (category === "preparing") return "En preparacion";
+  if (category === "ready") return "Listo para entregar";
   return "Pendiente";
 }
 
@@ -5596,6 +5600,8 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
 
   const completedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "completed").length;
   const pendingCount = ordersWithWorkflow.filter((order) => order.workflow.state === "pending").length;
+  const preparingCount = ordersWithWorkflow.filter((order) => order.workflow.state === "preparing").length;
+  const readyCount = ordersWithWorkflow.filter((order) => order.workflow.state === "ready").length;
   const rejectedCount = ordersWithWorkflow.filter((order) => order.workflow.state === "rejected").length;
   const archivedCount = ordersWithWorkflow.filter((order) => order.workflow.archived).length;
 
@@ -5662,9 +5668,11 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" />
           <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" onchange="this.form.submit()">
-            <option value="pending" ${order.workflow.state === "pending" ? "selected" : ""}>Pendiente</option>
-            <option value="completed" ${order.workflow.state === "completed" ? "selected" : ""}>Completado</option>
-            <option value="rejected" ${order.workflow.state === "rejected" ? "selected" : ""}>Rechazado</option>
+            <option value="pending"    ${order.workflow.state === "pending"    ? "selected" : ""}>Pendiente</option>
+            <option value="preparing"  ${order.workflow.state === "preparing"  ? "selected" : ""}>En preparacion</option>
+            <option value="ready"      ${order.workflow.state === "ready"      ? "selected" : ""}>Listo para entregar</option>
+            <option value="completed"  ${order.workflow.state === "completed"  ? "selected" : ""}>Completado</option>
+            <option value="rejected"   ${order.workflow.state === "rejected"   ? "selected" : ""}>Rechazado</option>
           </select>
         </form>
       </td>
@@ -5733,11 +5741,13 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
             <div>
               <label>Estado</label>
               <select name="status">
-                <option value="all" ${selectedStatus === "all" ? "selected" : ""}>Todas</option>
+                <option value="all"       ${selectedStatus === "all"       ? "selected" : ""}>Todas</option>
+                <option value="pending"   ${selectedStatus === "pending"   ? "selected" : ""}>${pendingCount > 0 ? `Pendientes (${pendingCount})` : "Pendientes"}</option>
+                <option value="preparing" ${selectedStatus === "preparing" ? "selected" : ""}>${preparingCount > 0 ? `En preparacion (${preparingCount})` : "En preparacion"}</option>
+                <option value="ready"     ${selectedStatus === "ready"     ? "selected" : ""}>${readyCount > 0 ? `Listos (${readyCount})` : "Listos"}</option>
                 <option value="completed" ${selectedStatus === "completed" ? "selected" : ""}>Completados</option>
-                <option value="pending" ${selectedStatus === "pending" ? "selected" : ""}>Pendientes</option>
-                <option value="rejected" ${selectedStatus === "rejected" ? "selected" : ""}>Rechazados</option>
-                <option value="archived" ${selectedStatus === "archived" ? "selected" : ""}>Archivados</option>
+                <option value="rejected"  ${selectedStatus === "rejected"  ? "selected" : ""}>Rechazados</option>
+                <option value="archived"  ${selectedStatus === "archived"  ? "selected" : ""}>Archivados</option>
               </select>
             </div>
           </div>
@@ -6177,7 +6187,7 @@ app.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAcces
   const orderId = String(req.body.orderId || "").trim();
   const rawState = String(req.body.state || req.body.category || "").trim().toLowerCase();
   const normalizedState = normalizeClientOrderState(rawState);
-  const state = ["pending", "completed", "rejected"].includes(normalizedState) ? normalizedState : "";
+  const state = ["pending", "preparing", "ready", "completed", "rejected"].includes(normalizedState) ? normalizedState : "";
   const archived = String(req.body.archived || "").trim() === "1";
   const category = state ? (archived ? `archived:${state}` : state) : "";
 

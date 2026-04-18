@@ -5009,3 +5009,16 @@ body.admin-home-page {
   padding-top: 6px;
   margin-top: 2px;
 }
+
+/* --- Order status: preparing & ready ------------------------------ */
+.cp-status-preparing {
+  border-color: rgba(139, 180, 248, 0.65);
+  background: rgba(29, 62, 133, 0.55);
+  color: #bfdbfe;
+}
+
+.cp-status-ready {
+  border-color: rgba(134, 239, 172, 0.65);
+  background: rgba(20, 83, 45, 0.55);
+  color: #bbf7d0;
+}
