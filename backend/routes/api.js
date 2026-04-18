@@ -27,6 +27,7 @@ import {
   loadCompanyIntegrations,
 } from "../integrations/load-company-integrations.js";
 import { getIntegrationRunner } from "../integrations/registry.js";
+import { sendWhatsappProactiveMessage, buildOrderStateNotificationBody } from "../services/whatsapp.js";
 
 const API_TOKEN = (process.env.API_TOKEN || "").trim();
 const ADMIN_COMPANY_LIST_CACHE_TTL_MS = Number(process.env.ADMIN_COMPANY_LIST_CACHE_TTL_MS || 180000);
@@ -911,7 +912,7 @@ export default function createApiRouter({
       const current = await db
         .prepare(
           `
-        SELECT id, workflowState, archived, category, orderStatus, paymentStatus, archivedAt, archiveReason
+        SELECT id, fromNumber, companyId, workflowState, archived, category, orderStatus, paymentStatus, archivedAt, archiveReason
         FROM orders
         WHERE id=?
       `
@@ -971,6 +972,33 @@ export default function createApiRouter({
         );
 
       if (!result.changes) return res.status(404).json({ error: "Pedido no encontrado" });
+
+      // WhatsApp notification to customer on state change (fire-and-forget)
+      const prevState = deriveOrderWorkflowFromRow(current).state;
+      const stateChanged = state !== prevState;
+      const notifyStates = ["preparing", "ready", "completed"];
+      if (stateChanged && notifyStates.includes(state) && current.fromNumber && current.companyId) {
+        try {
+          const companyRow = await db.prepare(`SELECT rulesJson, name FROM companies WHERE id=?`).get(current.companyId);
+          if (companyRow) {
+            const companyRules = parseJsonSafe(companyRow.rulesJson || "{}", {});
+            const notifyEnabled = companyRules?.notifyCustomerOnStateChange === true
+              || String(companyRules?.notifyCustomerOnStateChange || "").toLowerCase() === "true";
+            if (notifyEnabled) {
+              const botPhone = String(companyRules?.botPhone || "").trim();
+              const companyName = String(companyRow.name || current.companyId).trim();
+              const msgBody = buildOrderStateNotificationBody(state, orderId, companyName);
+              if (botPhone && msgBody) {
+                sendWhatsappProactiveMessage({ from: botPhone, to: current.fromNumber, body: msgBody })
+                  .catch((err) => console.error("[wa-notify] fire-and-forget error:", err?.message || err));
+              }
+            }
+          }
+        } catch (notifyErr) {
+          console.error("[wa-notify] setup error:", notifyErr?.message || notifyErr);
+        }
+      }
+
       return res.json({
         ok: true,
         id: orderId,

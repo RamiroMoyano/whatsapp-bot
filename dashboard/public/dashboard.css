@@ -5064,3 +5064,83 @@ body.client-saas-ui .cp-share-inner-menu .cp-share-number {
     overflow-x: auto;
   }
 }
+
+/* --- Toggle switch ------------------------------------------------- */
+.cp-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.cp-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.cp-toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.cp-toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.cp-toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #cbd5e1;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.cp-toggle-track::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+}
+
+.cp-toggle-switch input:checked + .cp-toggle-track {
+  background: #22c55e;
+}
+
+.cp-toggle-switch input:checked + .cp-toggle-track::before {
+  transform: translateX(20px);
+}
+
+body.client-saas-ui .cp-toggle-track {
+  background: #1e293b;
+  border: 1px solid #334155;
+}
+
+body.client-saas-ui .cp-toggle-switch input:checked + .cp-toggle-track {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+
+@media (max-width: 480px) {
+  .cp-toggle-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+}

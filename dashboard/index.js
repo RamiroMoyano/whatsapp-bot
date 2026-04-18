@@ -6982,6 +6982,23 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
                 </div>
               </details>
 
+              <details class="cp-company-details cp-form-section">
+                <summary><span>Notificaciones</span><span class="cp-details-hint">Avisos automaticos a clientes</span></summary>
+                <div class="cp-company-details-body">
+                  <div class="cp-toggle-row">
+                    <label class="cp-toggle-label" for="notifyCustomerToggle">
+                      <span>Notificar al cliente por WhatsApp al cambiar el estado del pedido</span>
+                      <span class="cp-note">El bot les avisa automáticamente cuando el pedido pasa a "En preparacion", "Listo para entregar" o "Completado".</span>
+                    </label>
+                    <label class="cp-toggle-switch">
+                      <input type="checkbox" id="notifyCustomerToggle" name="notifyCustomerOnStateChange" value="true" ${state.rules?.notifyCustomerOnStateChange === true || String(state.rules?.notifyCustomerOnStateChange || "") === "true" ? "checked" : ""} />
+                      <span class="cp-toggle-track"></span>
+                    </label>
+                  </div>
+                  <p class="cp-note" style="margin-top:12px">⚠️ Requiere que el número del bot (<b>Teléfono del bot</b>) esté configurado en Contacto principal y que la cuenta de Twilio tenga habilitado el envío de mensajes salientes.</p>
+                </div>
+              </details>
+
               <div class="cp-actions">
                 <button class="cp-btn primary" type="submit">Guardar datos</button>
               </div>
@@ -7081,6 +7098,7 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
   rules.businessHoursText = String(req.body.businessHoursText || "").trim();
   rules.companyDescription = String(req.body.companyDescription || "").trim();
   rules.tone = String(req.body.botTone || "neutral").trim();
+  rules.notifyCustomerOnStateChange = req.body.notifyCustomerOnStateChange === "true";
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {
