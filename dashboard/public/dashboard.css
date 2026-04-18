@@ -4755,3 +4755,213 @@ body.admin-home-page {
 .company-item-atrisk {
   border-left: 3px solid rgba(251, 191, 36, 0.6) !important;
 }
+
+/* =====================================================================
+   CLIENT PANEL — MOBILE RESPONSIVE
+   Breakpoints: 768px (tablet), 480px (phone)
+===================================================================== */
+
+/* ---- 768px: sidebar compacta horizontal --------------------------- */
+@media (max-width: 768px) {
+  body.client-saas-ui .cp-shell {
+    width: calc(100% - 16px);
+    margin: 8px auto;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  body.client-saas-ui .cp-sidebar {
+    border-radius: 14px;
+    padding: 12px 14px;
+    gap: 10px;
+  }
+
+  body.client-saas-ui .cp-brand {
+    padding-bottom: 10px;
+  }
+
+  /* Nav horizontal scrollable */
+  body.client-saas-ui .cp-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  body.client-saas-ui .cp-nav::-webkit-scrollbar { display: none; }
+
+  body.client-saas-ui .cp-nav-link {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  body.client-saas-ui .cp-logout {
+    margin-top: 0;
+    padding: 8px 14px;
+    font-size: 13px;
+    text-align: left;
+  }
+
+  /* Main content */
+  body.client-saas-ui .cp-main {
+    min-width: 0;
+  }
+
+  /* Grid: 1 column on mobile */
+  body.client-saas-ui .cp-grid,
+  body.client-saas-ui .cp-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.client-saas-ui .cp-span-2,
+  body.client-saas-ui .cp-span-3 {
+    grid-column: 1 / -1;
+  }
+
+  /* Stats: 2 columns */
+  body.client-saas-ui .cp-performance-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Share widget: stack vertically */
+  body.client-saas-ui .cp-share-inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  body.client-saas-ui .cp-share-actions {
+    width: 100%;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  body.client-saas-ui .cp-share-actions .cp-btn {
+    flex: 1;
+    text-align: center;
+  }
+
+  /* Activity chart */
+  body.client-saas-ui .cp-activity-chart {
+    gap: 6px;
+  }
+
+  /* Subscription banner */
+  body.client-saas-ui .cp-subscription-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  /* Onboarding steps */
+  body.client-saas-ui .cp-onboarding-step {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Order filter form */
+  body.client-saas-ui .cp-orders-filter .cp-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---- 480px: phone ------------------------------------------------- */
+@media (max-width: 480px) {
+  body.client-saas-ui .cp-shell {
+    width: 100%;
+    margin: 0;
+    gap: 8px;
+  }
+
+  body.client-saas-ui .cp-sidebar {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  body.client-saas-ui .cp-card {
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  body.client-saas-ui .cp-header {
+    padding: 14px 16px;
+    border-radius: 10px;
+  }
+
+  body.client-saas-ui .cp-header-copy h1 {
+    font-size: 22px;
+  }
+
+  body.client-saas-ui .cp-header-copy p {
+    font-size: 12px;
+  }
+
+  /* Stats: 1 column on very small phones */
+  body.client-saas-ui .cp-performance-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.client-saas-ui .cp-stat-value {
+    font-size: 28px;
+  }
+
+  /* Card head: stack on very narrow screens */
+  body.client-saas-ui .cp-card-head {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Tables: make key columns visible, hide less important ones */
+  body.client-saas-ui .cp-orders-table th:nth-child(5),
+  body.client-saas-ui .cp-orders-table td:nth-child(5),
+  body.client-saas-ui .cp-orders-table th:nth-child(8),
+  body.client-saas-ui .cp-orders-table td:nth-child(8) {
+    display: none;
+  }
+
+  /* Conversations table */
+  body.client-saas-ui .cp-conv-table th:nth-child(4),
+  body.client-saas-ui .cp-conv-table td:nth-child(4) {
+    display: none;
+  }
+
+  /* Catalog table */
+  body.client-saas-ui .cp-catalog-table th:nth-child(5),
+  body.client-saas-ui .cp-catalog-table td:nth-child(5) {
+    display: none;
+  }
+
+  /* kv pairs: stack */
+  body.client-saas-ui .cp-kv {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* Form actions: full width buttons */
+  body.client-saas-ui .cp-actions {
+    flex-direction: column;
+  }
+
+  body.client-saas-ui .cp-actions .cp-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  /* Brand: compact */
+  body.client-saas-ui .cp-brand-title {
+    font-size: 15px;
+  }
+
+  body.client-saas-ui .cp-brand-sub {
+    display: none;
+  }
+
+  /* Order detail grid: 1 col */
+  body.client-saas-ui .cp-order-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}

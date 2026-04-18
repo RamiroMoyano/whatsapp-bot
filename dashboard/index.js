@@ -4237,7 +4237,7 @@ function renderClientIntegrationModulesSection(integrationModules) {
             <span class="cp-integration-chip subtle">${escapeHtml(module.name || module.provider || "Integracion")}</span>
           </div>
           <div class="cp-table-wrap">
-            <table class="cp-table">
+            <table class="cp-table cp-conv-table">
               <thead><tr>${columns}</tr></thead>
               <tbody>${rowsHtml}</tbody>
             </table>
@@ -4869,10 +4869,12 @@ app.get("/panel/catalogo", requireClientAuth, loadClientIntegrationFlag, require
           <span class="cp-details-hint">${state.catalog.length} filas</span>
         </summary>
         <div class="cp-card-toggle-body">
-          <table class="cp-table">
-            <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
-            <tbody>${groupedRows || rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
-          </table>
+          <div class="cp-table-wrap">
+            <table class="cp-table cp-catalog-table">
+              <thead><tr><th>ID</th><th>Producto</th><th>Precio</th><th>Stock</th><th>Categoria</th></tr></thead>
+              <tbody>${groupedRows || rows || `<tr><td colspan="5">No hay productos cargados.</td></tr>`}</tbody>
+            </table>
+          </div>
         </div>
       </details>
 
@@ -5724,10 +5726,12 @@ app.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requireC
         <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
         <div class="cp-note">Click en la fila para expandir detalle rapido o entra por ID para ver la ficha completa del pedido.</div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
-        <table class="cp-table cp-orders-table">
-          <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th><th>Archivado</th></tr></thead>
-          <tbody class="cp-orders-body">${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
-        </table>
+        <div class="cp-table-wrap">
+          <table class="cp-table cp-orders-table">
+            <thead><tr><th>ID</th><th>Fecha</th><th>Cliente</th><th>Total</th><th>Pago</th><th>Medio de pago</th><th>Estado</th><th>Archivado</th></tr></thead>
+            <tbody class="cp-orders-body">${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
+          </table>
+        </div>
       </article>
 
     </section>
