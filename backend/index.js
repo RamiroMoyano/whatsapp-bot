@@ -121,6 +121,65 @@ function isSubscriptionActive(company) {
   return true;
 }
 
+// ─── Business hours ──────────────────────────────────────────────────────────
+function isWithinBusinessHours(company) {
+  const rules = parseJsonSafe(company?.rulesJson || "{}", {});
+  if (!rules.businessHoursEnabled) return true;
+
+  const tz = String(rules.businessHoursTz || "America/Argentina/Buenos_Aires").trim();
+  const startStr = String(rules.businessHoursStart || "00:00").trim();
+  const endStr = String(rules.businessHoursEnd || "23:59").trim();
+  const enabledDays = Array.isArray(rules.businessHoursDays)
+    ? rules.businessHoursDays.map(Number)
+    : [0, 1, 2, 3, 4, 5, 6];
+
+  try {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(now);
+    const weekdayStr = (parts.find((p) => p.type === "weekday")?.value || "").toLowerCase().slice(0, 3);
+    const weekdayMap = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+    const dayOfWeek = weekdayMap[weekdayStr] ?? now.getDay();
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+    const current = hour * 60 + minute;
+
+    const [sh, sm] = startStr.split(":").map(Number);
+    const [eh, em] = endStr.split(":").map(Number);
+    const start = (sh || 0) * 60 + (sm || 0);
+    const end = (eh || 0) * 60 + (em || 0);
+
+    if (!enabledDays.includes(dayOfWeek)) return false;
+    if (current < start || current >= end) return false;
+    return true;
+  } catch {
+    return true; // on error, don't block
+  }
+}
+
+// ─── FAQ matching ─────────────────────────────────────────────────────────────
+function findFaqMatch(text, faqItems) {
+  if (!Array.isArray(faqItems) || !faqItems.length) return null;
+  const msgLower = String(text || "").toLowerCase();
+  for (const item of faqItems) {
+    const q = String(item.question || "").toLowerCase();
+    const words = q.split(/\s+/).filter((w) => w.length >= 3);
+    if (!words.length) continue;
+    const matches = words.filter((w) => msgLower.includes(w));
+    if (matches.length >= Math.ceil(words.length * 0.5)) {
+      const answer = String(item.answer || "").trim();
+      if (answer) return answer;
+    }
+  }
+  return null;
+}
+
 // ================= TEXT HELPERS =================
 const menuText = (c) => {
   const rules = parseJsonSafe(c?.rulesJson || "{}", {});
@@ -706,6 +765,29 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     });
   }
 
+  // ─── Business hours enforcement ──────────────────────────────────────────
+  if (!cmd.startsWith("admin")) {
+    const hoursCompany = await getCompanySafe(session);
+    if (!isWithinBusinessHours(hoursCompany)) {
+      const hoursRules = parseJsonSafe(hoursCompany?.rulesJson || "{}", {});
+      const outsideMsg = String(hoursRules?.businessHoursOutsideText || hoursRules?.businessHoursText || "").trim()
+        || "Gracias por tu mensaje. Estamos fuera del horario de atención. Te respondemos a la brevedad. 🙏";
+      const now = Date.now();
+      const lastNotified = Number(session.data.lastOutsideHoursNotifiedAt || 0);
+      if (!lastNotified || now - lastNotified > 55 * 60 * 1000) {
+        session.data.lastOutsideHoursNotifiedAt = now;
+        await saveSession(session);
+        return respondAndLog(outsideMsg);
+      }
+      // Already notified recently — silent ignore
+      res.set("Content-Type", "text/xml");
+      return res.send("<Response></Response>");
+    } else if (session.data.lastOutsideHoursNotifiedAt) {
+      delete session.data.lastOutsideHoursNotifiedAt;
+      sessionDirty = true;
+    }
+  }
+
   if (hasMedia && !cmd.startsWith("admin")) {
     const orderId = session.cart.length ? "" : receiptOrderId;
     const mediaCount = Math.max(1, Math.min(10, numMedia));
@@ -1277,6 +1359,22 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
       );
     }
 
+    const notesCompany = await getCompanySafe(session);
+    const notesRules = parseJsonSafe(notesCompany?.rulesJson || "{}", {});
+    if (notesRules.requireDeliveryAddress && !String(session.data.address || "").trim()) {
+      session.state = "ASK_ADDRESS";
+      await saveSession(session);
+      return respondAndLog("¿Cuál es la dirección de entrega? (o escribí *sin dirección* para omitir)");
+    }
+    session.state = "ASK_PAYMENT_METHOD";
+    await saveSession(session);
+    return respondAndLog(paymentMethodSelectionPrompt(notesCompany));
+  }
+
+  if (session.state === "ASK_ADDRESS" && !isReserved(text)) {
+    const rawAddr = String(body || "").trim();
+    const skipAddr = ["sin dirección", "sin direccion", "sin dir", "-", "no", "omitir", ""].includes(rawAddr.toLowerCase());
+    session.data.address = skipAddr ? "" : rawAddr;
     session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
     return respondAndLog(paymentMethodSelectionPrompt(await getCompanySafe(session)));
@@ -1301,6 +1399,9 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
       return respondAndLog("Antes de registrar el pedido necesito un contacto.");
     }
 
+    if (String(session.data.address || "").trim()) {
+      session.data.notes = ["Dirección: " + session.data.address, session.data.notes].filter(Boolean).join("\n");
+    }
     const created = await createOrUpdateCheckoutOrder(session, from, company, {
       paymentMethod: selectedMethod,
       fallbackPaymentMethod: session.data.paymentMethodHint || "",
@@ -1412,6 +1513,12 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
   }
 
   if (!isReserved(text) && body && !looksLikeCheckoutOperationalMessage(body)) {
+    const faqCompany = await getCompanySafe(session);
+    const faqRules = parseJsonSafe(faqCompany?.rulesJson || "{}", {});
+    const faqItems = Array.isArray(faqRules.faqItems) ? faqRules.faqItems : [];
+    const faqAnswer = findFaqMatch(text, faqItems);
+    if (faqAnswer) return respondAndLog(faqAnswer);
+
     const ai = await aiReply(session, from, body);
     if (ai) return respondAndLog(ai);
   }

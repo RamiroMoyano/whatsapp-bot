@@ -5144,3 +5144,44 @@ body.client-saas-ui .cp-toggle-switch input:checked + .cp-toggle-track {
     gap: 12px;
   }
 }
+
+/* --- Days of week grid --------------------------------------------- */
+.cp-days-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.cp-day-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  user-select: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.cp-day-check input {
+  width: 14px;
+  height: 14px;
+  accent-color: #2563eb;
+}
+
+body.client-saas-ui .cp-day-check {
+  border-color: #1e293b;
+  background: #0f172a;
+  color: #94a3b8;
+}
+
+body.client-saas-ui .cp-day-check:has(input:checked) {
+  border-color: #3b82f6;
+  background: rgba(59,130,246,0.1);
+  color: #bfdbfe;
+}

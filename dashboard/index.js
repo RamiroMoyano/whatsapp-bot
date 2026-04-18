@@ -6983,6 +6983,103 @@ app.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requireCl
               </details>
 
               <details class="cp-company-details cp-form-section">
+                <summary><span>Horario de atención</span><span class="cp-details-hint">Respuesta automática fuera de horario</span></summary>
+                <div class="cp-company-details-body">
+                  <div class="cp-toggle-row">
+                    <label class="cp-toggle-label" for="businessHoursEnabledToggle">
+                      <span>Activar horario de atención</span>
+                      <span class="cp-note">El bot responde con un mensaje automático fuera del horario configurado.</span>
+                    </label>
+                    <label class="cp-toggle-switch">
+                      <input type="checkbox" id="businessHoursEnabledToggle" name="businessHoursEnabled" value="true" ${state.rules?.businessHoursEnabled ? "checked" : ""} />
+                      <span class="cp-toggle-track"></span>
+                    </label>
+                  </div>
+
+                  <div style="margin-top:16px">
+                    <label>Días de atención</label>
+                    <div class="cp-days-grid">
+                      ${[
+                        { val: 1, label: "Lunes" },
+                        { val: 2, label: "Martes" },
+                        { val: 3, label: "Miercoles" },
+                        { val: 4, label: "Jueves" },
+                        { val: 5, label: "Viernes" },
+                        { val: 6, label: "Sabado" },
+                        { val: 0, label: "Domingo" },
+                      ].map((d) => {
+                        const days = Array.isArray(state.rules?.businessHoursDays) ? state.rules.businessHoursDays.map(Number) : [1,2,3,4,5];
+                        const checked = days.includes(d.val) ? "checked" : "";
+                        return `<label class="cp-day-check"><input type="checkbox" name="businessHoursDays" value="${d.val}" ${checked}/> ${d.label}</label>`;
+                      }).join("")}
+                    </div>
+                  </div>
+
+                  <div class="cp-grid-2" style="margin-top:12px">
+                    <div>
+                      <label>Desde</label>
+                      <input type="time" name="businessHoursStart" value="${escapeHtml(String(state.rules?.businessHoursStart || "09:00"))}" />
+                    </div>
+                    <div>
+                      <label>Hasta</label>
+                      <input type="time" name="businessHoursEnd" value="${escapeHtml(String(state.rules?.businessHoursEnd || "21:00"))}" />
+                    </div>
+                  </div>
+
+                  <div style="margin-top:12px">
+                    <label>Zona horaria</label>
+                    <select name="businessHoursTz">
+                      ${[
+                        ["America/Argentina/Buenos_Aires", "Argentina (UTC-3)"],
+                        ["America/Santiago", "Chile (UTC-3/-4)"],
+                        ["America/Bogota", "Colombia (UTC-5)"],
+                        ["America/Lima", "Peru (UTC-5)"],
+                        ["America/Mexico_City", "Mexico (UTC-6)"],
+                        ["America/New_York", "New York (UTC-5/-4)"],
+                        ["UTC", "UTC"],
+                      ].map(([tz, label]) => `<option value="${tz}" ${(state.rules?.businessHoursTz || "America/Argentina/Buenos_Aires") === tz ? "selected" : ""}>${label}</option>`).join("")}
+                    </select>
+                  </div>
+
+                  <div style="margin-top:12px">
+                    <label>Mensaje fuera de horario</label>
+                    <textarea name="businessHoursOutsideText" rows="2" placeholder="Ej: Estamos fuera de horario. Te respondemos de lunes a viernes de 9 a 21hs.">${escapeHtml(String(state.rules?.businessHoursOutsideText || ""))}</textarea>
+                    <p class="cp-note" style="margin:4px 0 0">Si se deja vacío, el bot usa un mensaje predeterminado.</p>
+                  </div>
+                </div>
+              </details>
+
+              <details class="cp-company-details cp-form-section">
+                <summary><span>Preguntas frecuentes (FAQ)</span><span class="cp-details-hint">Respuestas sin IA</span></summary>
+                <div class="cp-company-details-body">
+                  <p class="cp-note" style="margin-bottom:12px">El bot responde estas preguntas directamente, sin usar IA. Formato: <b>pregunta | respuesta</b> (una por línea).</p>
+                  <textarea name="faqItemsRaw" rows="8" placeholder="¿Cuáles son los horarios? | Atendemos de lunes a viernes de 9 a 18hs.\n¿Hacen envíos? | Sí, a todo el país por Correo Argentino.">${
+                    escapeHtml(
+                      Array.isArray(state.rules?.faqItems)
+                        ? state.rules.faqItems.map((f) => `${f.question || ""} | ${f.answer || ""}`).join("\n")
+                        : ""
+                    )
+                  }</textarea>
+                </div>
+              </details>
+
+              <details class="cp-company-details cp-form-section">
+                <summary><span>Entrega</span><span class="cp-details-hint">Datos adicionales del checkout</span></summary>
+                <div class="cp-company-details-body">
+                  <div class="cp-toggle-row">
+                    <label class="cp-toggle-label" for="requireDeliveryAddressToggle">
+                      <span>Solicitar dirección de entrega en el checkout</span>
+                      <span class="cp-note">El bot pedirá la dirección antes de elegir el medio de pago.</span>
+                    </label>
+                    <label class="cp-toggle-switch">
+                      <input type="checkbox" id="requireDeliveryAddressToggle" name="requireDeliveryAddress" value="true" ${state.rules?.requireDeliveryAddress ? "checked" : ""} />
+                      <span class="cp-toggle-track"></span>
+                    </label>
+                  </div>
+                </div>
+              </details>
+
+              <details class="cp-company-details cp-form-section">
                 <summary><span>Notificaciones</span><span class="cp-details-hint">Avisos automaticos a clientes</span></summary>
                 <div class="cp-company-details-body">
                   <div class="cp-toggle-row">
@@ -7099,6 +7196,30 @@ app.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess("cu
   rules.companyDescription = String(req.body.companyDescription || "").trim();
   rules.tone = String(req.body.botTone || "neutral").trim();
   rules.notifyCustomerOnStateChange = req.body.notifyCustomerOnStateChange === "true";
+
+  // Business hours
+  rules.businessHoursEnabled = req.body.businessHoursEnabled === "true";
+  const rawDays = req.body.businessHoursDays;
+  rules.businessHoursDays = (Array.isArray(rawDays) ? rawDays : rawDays ? [rawDays] : []).map(Number).filter((n) => n >= 0 && n <= 6);
+  rules.businessHoursStart = String(req.body.businessHoursStart || "09:00").trim();
+  rules.businessHoursEnd = String(req.body.businessHoursEnd || "21:00").trim();
+  rules.businessHoursTz = String(req.body.businessHoursTz || "America/Argentina/Buenos_Aires").trim();
+  rules.businessHoursOutsideText = String(req.body.businessHoursOutsideText || "").trim();
+
+  // FAQ items
+  const faqRaw = String(req.body.faqItemsRaw || "").trim();
+  rules.faqItems = faqRaw
+    ? faqRaw.split("\n").map((line) => {
+        const sep = line.indexOf("|");
+        if (sep < 0) return null;
+        const question = line.slice(0, sep).trim();
+        const answer = line.slice(sep + 1).trim();
+        return question && answer ? { question, answer } : null;
+      }).filter(Boolean)
+    : [];
+
+  // Delivery address
+  rules.requireDeliveryAddress = req.body.requireDeliveryAddress === "true";
 
   const newPassword = String(req.body.clientPassword || "").trim();
   if (newPassword) {

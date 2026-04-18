@@ -215,6 +215,7 @@ export function clearCheckoutProgress(session, options = {}) {
   session.data.name = "";
   session.data.contact = "";
   session.data.notes = "";
+  session.data.address = "";
   delete session.data.paymentMethodHint;
   delete session.data.checkoutOrderId;
   if (!keepRecentOrder) {
