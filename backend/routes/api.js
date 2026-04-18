@@ -1057,5 +1057,30 @@ export default function createApiRouter({
     }
   });
 
+  // Bot activity summary for admin health widget
+  router.get("/api/health/activity", requireApiAuth, async (req, res) => {
+    try {
+      const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const [lastIn, lastOut, count1h, count24h] = await Promise.all([
+        db.prepare(`SELECT fromNumber, companyId, createdAt FROM ai_messages WHERE direction='in' ORDER BY createdAt DESC LIMIT 1`).get(),
+        db.prepare(`SELECT createdAt FROM ai_messages WHERE direction='out' ORDER BY createdAt DESC LIMIT 1`).get(),
+        db.prepare(`SELECT COUNT(*)::int AS n FROM ai_messages WHERE direction='in' AND createdAt >= ?`).get(since1h),
+        db.prepare(`SELECT COUNT(*)::int AS n FROM ai_messages WHERE direction='in' AND createdAt >= ?`).get(since24h),
+      ]);
+
+      return res.json({
+        ok: true,
+        lastInbound: lastIn ? { at: lastIn.createdAt, from: lastIn.fromNumber, companyId: lastIn.companyId } : null,
+        lastOutbound: lastOut ? { at: lastOut.createdAt } : null,
+        messagesLast1h: Number(count1h?.n || 0),
+        messagesLast24h: Number(count24h?.n || 0),
+      });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
   return router;
 }

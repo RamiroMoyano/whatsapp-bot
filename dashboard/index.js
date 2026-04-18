@@ -1067,6 +1067,12 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
     const kpiClass = (key) => `kpi kpi-filter ${view === key ? "active" : ""}`;
     const clearSearchHref = view !== "all" ? `/admin?view=${encodeURIComponent(view)}` : "/admin";
 
+    const [botHealth, dbHealth, activityData] = await Promise.all([
+      api("/health").catch(() => ({ ok: false })),
+      api("/health/db").catch(() => ({ ok: false, db: "down" })),
+      api("/api/health/activity").catch(() => null),
+    ]);
+
     res.type("text/html").send(`
 <!doctype html>
 <html>
@@ -1099,6 +1105,45 @@ app.get("/admin", requireDashboardAuth, async (req, res) => {
           <a class="btn secondary" href="/admin/messages">📨 Mensajes ${unreadAdminNotifications > 0 ? `<span class="admin-side-badge">${unreadAdminNotifications > 99 ? "99+" : unreadAdminNotifications}</span>` : ""}</a>
           <a class="btn secondary" href="/admin/orders">📦 Pedidos</a>
           <a class="btn secondary" href="/admin/assign">🔗 Asignar clientes</a>
+
+          <div class="admin-health-widget">
+            <div class="admin-health-title">🩺 Estado del sistema</div>
+            ${(() => {
+              const botOk = botHealth?.ok === true;
+              const dbOk = dbHealth?.ok === true && dbHealth?.db === "up";
+              const activity = activityData;
+              const lastIn = activity?.lastInbound;
+              const mins1h = Number(activity?.messagesLast1h || 0);
+              const mins24h = Number(activity?.messagesLast24h || 0);
+              const lastInAgo = lastIn?.at
+                ? (() => {
+                    const ms = Date.now() - new Date(lastIn.at).getTime();
+                    if (ms < 60000) return "hace menos de 1 min";
+                    if (ms < 3600000) return `hace ${Math.floor(ms / 60000)} min`;
+                    if (ms < 86400000) return `hace ${Math.floor(ms / 3600000)}h`;
+                    return `hace ${Math.floor(ms / 86400000)}d`;
+                  })()
+                : null;
+              return `
+              <div class="admin-health-row">
+                <span class="admin-health-dot ${botOk ? "ok" : "err"}"></span>
+                <span>Bot API: <b>${botOk ? "Online" : "Sin respuesta"}</b></span>
+              </div>
+              <div class="admin-health-row">
+                <span class="admin-health-dot ${dbOk ? "ok" : "err"}"></span>
+                <span>Base de datos: <b>${dbOk ? "Activa" : dbHealth?.db || "Error"}</b></span>
+              </div>
+              ${lastInAgo ? `
+              <div class="admin-health-row">
+                <span class="admin-health-dot ok"></span>
+                <span>Ultimo msg: <b>${escapeHtml(lastInAgo)}</b></span>
+              </div>` : ""}
+              <div class="admin-health-stats">
+                <span><b>${mins1h}</b> msgs/1h</span>
+                <span><b>${mins24h}</b> msgs/24h</span>
+              </div>`;
+            })()}
+          </div>
         </aside>
 
         <section class="admin-home-main">
