@@ -546,13 +546,80 @@ function renderSupportToolIcon({ href, count = 0, className = "", title = "Sopor
   return `<a class="${classes}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">&#128736;${badge}</a>`;
 }
 
+function sanitizeRules(raw) {
+  const r = (raw && typeof raw === "object" && !Array.isArray(raw)) ? { ...raw } : {};
+
+  // --- Booleans ---
+  const BOOL_FIELDS = [
+    "aiEnabled", "businessHoursEnabled", "deliveryAddressEnabled",
+    "notifyCustomerOnStateChange", "dashboardEnabled", "autoRenew", "allowHuman",
+  ];
+  for (const k of BOOL_FIELDS) {
+    if (k in r) {
+      const v = r[k];
+      if (typeof v === "boolean") continue;
+      if (v === "true" || v === "1" || v === "on") { r[k] = true; continue; }
+      if (v === "false" || v === "0" || v === "off" || v === null || v === undefined) { r[k] = false; continue; }
+      delete r[k]; // unparseable — drop so default kicks in at read time
+    }
+  }
+
+  // --- Numbers ---
+  const NUM_FIELDS = [
+    "rateLimitPerHour", "subscriptionAmount", "subscriptionNextAmount",
+    "subscriptionProrationDueNow", "monthlyPrice",
+  ];
+  for (const k of NUM_FIELDS) {
+    if (k in r) {
+      const n = Number(r[k]);
+      if (Number.isFinite(n)) { r[k] = n; } else { delete r[k]; }
+    }
+  }
+
+  // --- Strings ---
+  const STR_FIELDS = [
+    "botClass", "planTier", "channelMode", "dashboardMode", "catalogCurrency",
+    "subscriptionCurrency", "businessHoursStart", "businessHoursEnd", "businessHoursTz",
+    "welcomeMessage", "tone", "companyDescription", "botPhone",
+    "subscriptionId", "subscriptionStatus", "subscriptionPeriodEnd",
+  ];
+  for (const k of STR_FIELDS) {
+    if (k in r) {
+      const v = r[k];
+      if (v === null || v === undefined) { delete r[k]; continue; }
+      if (typeof v !== "string") r[k] = String(v);
+    }
+  }
+
+  // --- Arrays ---
+  const ARR_FIELDS = ["channels", "businessHoursDays", "faqItems", "adminInbox"];
+  for (const k of ARR_FIELDS) {
+    if (k in r) {
+      if (!Array.isArray(r[k])) r[k] = [];
+    }
+  }
+
+  // --- Objects ---
+  const OBJ_FIELDS = ["paymentMethods", "paymentTransfer"];
+  for (const k of OBJ_FIELDS) {
+    if (k in r) {
+      const v = r[k];
+      if (v === null || typeof v !== "object" || Array.isArray(v)) r[k] = {};
+    }
+  }
+
+  // Unknown fields are left untouched for forward compatibility.
+  return r;
+}
+
 async function saveCompanyRules(company, rules) {
+  const safeRules = sanitizeRules(rules);
   if (dashboardDb.enabled) {
     await dashboardDb.saveCompanyById(company.id, {
       name: company.name || company.id,
       prompt: company.prompt || "",
       catalogJson: company.catalogJson || "[]",
-      rulesJson: JSON.stringify(rules || {}),
+      rulesJson: JSON.stringify(safeRules),
     });
     adminCompaniesCache.updatedAt = 0;
     return;
@@ -563,7 +630,7 @@ async function saveCompanyRules(company, rules) {
       name: company.name || company.id,
       prompt: company.prompt || "",
       catalogJson: company.catalogJson || "[]",
-      rulesJson: JSON.stringify(rules || {}),
+      rulesJson: JSON.stringify(safeRules),
     },
   });
   adminCompaniesCache.updatedAt = 0;
@@ -2513,7 +2580,7 @@ export {
   // company/admin helpers
   getAdminCompaniesCacheAgeMs, hasFreshAdminCompaniesCache, loadAdminCompanies,
   getCompanyWhatsappMessageStats, renderNotificationBell, renderSupportToolIcon,
-  saveCompanyRules, prettyJson, parseObjectJsonInput, normalizeIntegrationToneClass,
+  sanitizeRules, saveCompanyRules, prettyJson, parseObjectJsonInput, normalizeIntegrationToneClass,
   fetchCompanyIntegrations,
   // layout / CSV
   layout, toCsv, toCsvRows,
