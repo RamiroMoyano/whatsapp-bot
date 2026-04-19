@@ -38,6 +38,25 @@ import {
 
 const router = Router();
 
+// ── Cache para el menú público (/menu/:id) ──────────────────────────────────
+const _menuCache = new Map(); // companyId → { html, expiresAt }
+const MENU_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutos
+
+function getMenuCache(id) {
+  const hit = _menuCache.get(id);
+  if (hit && hit.expiresAt > Date.now()) return hit.html;
+  _menuCache.delete(id);
+  return null;
+}
+
+function setMenuCache(id, html) {
+  _menuCache.set(String(id), { html, expiresAt: Date.now() + MENU_CACHE_TTL_MS });
+}
+
+function invalidateMenuCache(id) {
+  _menuCache.delete(String(id));
+}
+
 router.get("/panel/login", (req, res) => {
   const reset = String(req.query.reset || "") === "1";
   res.type("text/html").send(renderClientLoginPage({ reset }));
@@ -899,6 +918,7 @@ router.post("/panel/catalogo/save", requireClientAuth, requireClientSectionAcces
       },
     });
 
+    invalidateMenuCache(id);
     res.redirect("/panel/catalogo?saved=1");
   } catch (e) {
     res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
@@ -926,6 +946,7 @@ router.post("/panel/catalogo/currency", requireClientAuth, requireClientSectionA
       },
     });
 
+    invalidateMenuCache(id);
     return res.redirect("/panel/catalogo?saved=1");
   } catch (e) {
     return res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
@@ -977,6 +998,7 @@ router.post("/panel/catalogo/import", requireClientAuth, requireClientSectionAcc
       },
     });
 
+    invalidateMenuCache(id);
     return res.redirect("/panel/catalogo?saved=1");
   } catch (e) {
     return res.redirect(`/panel/catalogo?error=${encodeURIComponent(e?.message || e)}`);
@@ -2628,6 +2650,14 @@ router.get("/menu/:id", async (req, res) => {
   const companyId = String(req.params.id || "").trim().toLowerCase();
   if (!companyId) return res.status(404).send("No encontrado");
 
+  // Servir desde caché si está fresco
+  const cached = getMenuCache(companyId);
+  if (cached) {
+    res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=60");
+    res.setHeader("X-Cache", "HIT");
+    return res.type("text/html").send(cached);
+  }
+
   try {
     const company = await api(`/api/companies/${encodeURIComponent(companyId)}`).catch(() => null);
     if (!company || !company.id) return res.status(404).send("Negocio no encontrado");
@@ -2729,6 +2759,9 @@ router.get("/menu/:id", async (req, res) => {
 </body>
 </html>`;
 
+    setMenuCache(companyId, html);
+    res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=60");
+    res.setHeader("X-Cache", "MISS");
     res.type("text/html").send(html);
   } catch (e) {
     res.status(500).send("Error al cargar el menú");
