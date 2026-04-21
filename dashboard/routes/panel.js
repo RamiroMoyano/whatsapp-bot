@@ -1106,6 +1106,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
           <select name="paymentStatus" class="cp-category-select cp-status-${escapeHtml(paymentState)}" onchange="this.form.submit()">
             <option value="pending" ${paymentState === "pending" ? "selected" : ""}>No pagado</option>
             <option value="paid" ${paymentState === "paid" ? "selected" : ""}>Pagado</option>
@@ -1121,6 +1122,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
           <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" />
           <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" onchange="this.form.submit()">
             <option value="pending"    ${order.workflow.state === "pending"    ? "selected" : ""}>Pendiente</option>
@@ -1138,6 +1140,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="status" value="${escapeHtml(selectedStatus)}" />
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
+          <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
           <input type="hidden" name="state" value="${escapeHtml(order.workflow.state)}" />
           <button
             type="submit"
@@ -1600,10 +1603,12 @@ router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAcc
   const status = String(req.body.status || "").trim();
   const from = String(req.body.from || "").trim();
   const to = String(req.body.to || "").trim();
+  const q = String(req.body.q || "").trim();
   if (range) redirectParams.set("range", range);
   if (status) redirectParams.set("status", status);
   if (from) redirectParams.set("from", from);
   if (to) redirectParams.set("to", to);
+  if (q) redirectParams.set("q", q);
 
   const redirectBase = () => {
     const query = redirectParams.toString();
@@ -1651,10 +1656,12 @@ router.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAc
   const status = String(req.body.status || "").trim();
   const from = String(req.body.from || "").trim();
   const to = String(req.body.to || "").trim();
+  const q = String(req.body.q || "").trim();
   if (range) redirectParams.set("range", range);
   if (status) redirectParams.set("status", status);
   if (from) redirectParams.set("from", from);
   if (to) redirectParams.set("to", to);
+  if (q) redirectParams.set("q", q);
 
   const redirectBase = () => {
     const query = redirectParams.toString();
