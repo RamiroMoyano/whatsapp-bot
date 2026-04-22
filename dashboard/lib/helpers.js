@@ -553,6 +553,7 @@ function sanitizeRules(raw) {
   const BOOL_FIELDS = [
     "aiEnabled", "businessHoursEnabled", "deliveryAddressEnabled",
     "notifyCustomerOnStateChange", "dashboardEnabled", "autoRenew", "allowHuman",
+    "orderConfirmationEnabled",
   ];
   for (const k of BOOL_FIELDS) {
     if (k in r) {
@@ -580,6 +581,7 @@ function sanitizeRules(raw) {
   const STR_FIELDS = [
     "botClass", "planTier", "channelMode", "dashboardMode", "catalogCurrency",
     "subscriptionCurrency", "businessHoursStart", "businessHoursEnd", "businessHoursTz",
+    "businessHoursText", "businessHoursOutsideText",
     "welcomeMessage", "tone", "companyDescription", "botPhone",
     "subscriptionId", "subscriptionStatus", "subscriptionPeriodEnd",
   ];

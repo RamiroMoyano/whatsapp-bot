@@ -220,6 +220,44 @@ function trimAiHistoryForProfile(history, profile) {
   return selected.reverse();
 }
 
+// ─── Order confirmation summary ──────────────────────────────────────────────
+
+function buildOrderConfirmText(session, company) {
+  const catalog = company?.catalog || [];
+  const currency = getCompanyCatalogCurrency(company);
+  const cart = session.cart || [];
+  const itemMap = {};
+  cart.forEach((item) => {
+    const id = typeof item === "object" ? item.id : item;
+    const lockedPrice = typeof item === "object" ? item.price : null;
+    const key = Number(id);
+    if (!itemMap[key]) itemMap[key] = { qty: 0, lockedPrice };
+    itemMap[key].qty++;
+  });
+  let total = 0;
+  const itemLines = Object.entries(itemMap).map(([id, { qty, lockedPrice }]) => {
+    const p = catalog.find((x) => Number(x.id) === Number(id));
+    const unit = lockedPrice != null ? lockedPrice : Number(p?.price || 0);
+    const sub = unit * qty;
+    total += sub;
+    return `- ${p?.name || "Producto"} x${qty} — ${formatChatMoney(sub, currency)}`;
+  });
+  const lines = [
+    `${String.fromCodePoint(0x1F4CB)} Resumen de tu pedido:`,
+    "",
+    ...itemLines,
+    `Total: ${formatChatMoney(total, currency)}`,
+    "",
+  ];
+  if (session.data.name)    lines.push(`Nombre: ${session.data.name}`);
+  if (session.data.contact) lines.push(`Contacto: ${session.data.contact}`);
+  if (session.data.address) lines.push(`Dirección: ${session.data.address}`);
+  if (session.data.notes)   lines.push(`Notas: ${session.data.notes}`);
+  lines.push("");
+  lines.push("¿Confirmás el pedido? Respondé *si* para continuar o *no* para cancelar.");
+  return lines.join("\n");
+}
+
 async function aiReply(session, from, text) {
   if (!openai || AI_GLOBAL === "off") return null;
 
@@ -1326,6 +1364,12 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
 
     if (extracted.paymentMethod && session.data.name && session.data.contact) {
       const company = await getCompanySafe(session);
+      const fastRules = parseJsonSafe(company?.rulesJson || "{}", {});
+      if (fastRules.orderConfirmationEnabled) {
+        session.state = "ASK_CONFIRM";
+        await saveSession(session);
+        return respondAndLog(buildOrderConfirmText(session, company));
+      }
       const created = await createOrUpdateCheckoutOrder(session, from, company, {
         paymentMethod: extracted.paymentMethod,
       });
@@ -1354,6 +1398,11 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
       await saveSession(session);
       return respondAndLog("¿Cuál es la dirección de entrega? (o escribí *sin dirección* para omitir)");
     }
+    if (notesRules.orderConfirmationEnabled) {
+      session.state = "ASK_CONFIRM";
+      await saveSession(session);
+      return respondAndLog(buildOrderConfirmText(session, notesCompany));
+    }
     session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
     return respondAndLog(paymentMethodSelectionPrompt(notesCompany));
@@ -1363,9 +1412,39 @@ app.post("/whatsapp", validateTwilioSignature, async (req, res) => {
     const rawAddr = String(body || "").trim();
     const skipAddr = ["sin dirección", "sin direccion", "sin dir", "-", "no", "omitir", ""].includes(rawAddr.toLowerCase());
     session.data.address = skipAddr ? "" : rawAddr;
+    const addrCompany = await getCompanySafe(session);
+    const addrRules = parseJsonSafe(addrCompany?.rulesJson || "{}", {});
+    if (addrRules.orderConfirmationEnabled) {
+      session.state = "ASK_CONFIRM";
+      await saveSession(session);
+      return respondAndLog(buildOrderConfirmText(session, addrCompany));
+    }
     session.state = "ASK_PAYMENT_METHOD";
     await saveSession(session);
-    return respondAndLog(paymentMethodSelectionPrompt(await getCompanySafe(session)));
+    return respondAndLog(paymentMethodSelectionPrompt(addrCompany));
+  }
+
+  if (session.state === "ASK_CONFIRM") {
+    const confirmCompany = await getCompanySafe(session);
+    const confirmText = normalizeTextForMatch(body);
+    const isYes = ["si", "sí", "yes", "dale", "ok", "claro", "confirmo", "confirmar", "listo"].some((w) => confirmText === w || confirmText.startsWith(w));
+    const isNo  = ["no", "cancelar", "cancel", "nope", "negativo"].some((w) => confirmText === w || confirmText.startsWith(w));
+    if (isYes) {
+      session.state = "ASK_PAYMENT_METHOD";
+      await saveSession(session);
+      return respondAndLog(paymentMethodSelectionPrompt(confirmCompany));
+    }
+    if (isNo) {
+      session.state = "MENU";
+      session.data.name = "";
+      session.data.contact = "";
+      session.data.notes = "";
+      session.data.address = "";
+      delete session.data.paymentMethodHint;
+      await saveSession(session);
+      return respondAndLog("Pedido cancelado. Tu carrito sigue guardado. Escribí *checkout* cuando quieras retomar.");
+    }
+    return respondAndLog(buildOrderConfirmText(session, confirmCompany));
   }
 
   if (session.state === "ASK_PAYMENT_METHOD" && !isReserved(text)) {

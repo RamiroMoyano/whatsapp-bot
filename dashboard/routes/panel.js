@@ -2476,6 +2476,17 @@ router.get("/panel/cuenta", requireClientAuth, loadClientIntegrationFlag, requir
                     <option value="formal"    ${state.rules?.tone === "formal"    ? "selected" : ""}>Formal y profesional</option>
                     <option value="divertido" ${state.rules?.tone === "divertido" ? "selected" : ""}>Divertido y casual</option>
                   </select>
+
+                  <div class="cp-toggle-row" style="margin-top:16px">
+                    <label class="cp-toggle-label" for="orderConfirmationEnabledToggle">
+                      <span>Confirmación de pedido</span>
+                      <span class="cp-note">El bot muestra un resumen del carrito y pide confirmación antes de pasar al pago.</span>
+                    </label>
+                    <label class="cp-toggle-switch">
+                      <input type="checkbox" id="orderConfirmationEnabledToggle" name="orderConfirmationEnabled" value="true" ${state.rules?.orderConfirmationEnabled ? "checked" : ""} />
+                      <span class="cp-toggle-track"></span>
+                    </label>
+                  </div>
                 </div>
               </details>
 
@@ -2723,6 +2734,9 @@ router.post("/panel/cuenta/save", requireClientAuth, requireClientSectionAccess(
         return question && answer ? { question, answer } : null;
       }).filter(Boolean)
     : [];
+
+  // Order confirmation
+  rules.orderConfirmationEnabled = req.body.orderConfirmationEnabled === "true";
 
   // Delivery address
   rules.requireDeliveryAddress = req.body.requireDeliveryAddress === "true";
