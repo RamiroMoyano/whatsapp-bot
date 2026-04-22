@@ -31,6 +31,7 @@ app.use(adminRouter);
 app.use(panelRouter);
 
 // ===== Health / debug =====
+app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_, res) => res.send("OK"));
 app.get("/__whoami", (req, res) => {
   res.json({
