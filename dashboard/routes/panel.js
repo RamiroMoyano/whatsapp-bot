@@ -1032,6 +1032,8 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
   const updatedPayment = String(req.query.updatedPayment || "") === "1";
   const errorMsg = String(req.query.error || "").trim();
   const searchQuery = String(req.query.q || "").trim();
+  const PAGE_SIZE = 50;
+  const currentPage = Math.max(1, parseInt(req.query.page || "1", 10) || 1);
   const {
     selectedRange,
     selectedStatus,
@@ -1081,6 +1083,11 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
   const estimatedRevenue = ordersWithWorkflow.reduce((acc, order) => acc + toNumber(order.total), 0);
   const avgTicket = createdCount > 0 ? estimatedRevenue / createdCount : 0;
 
+  const totalPages = Math.max(1, Math.ceil(visibleOrders.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pageOrders = visibleOrders.slice(pageStart, pageStart + PAGE_SIZE);
+
   const exportParams = new URLSearchParams();
   exportParams.set("range", selectedRange);
   exportParams.set("status", selectedStatus);
@@ -1089,7 +1096,18 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
   if (searchQuery) exportParams.set("q", searchQuery);
   const exportXlsxHref = `/panel/pedidos/export?format=xlsx&${exportParams.toString()}`;
 
-  const rows = visibleOrders.map((order) => {
+  const pageParams = (p) => {
+    const ps = new URLSearchParams();
+    ps.set("range", selectedRange);
+    ps.set("status", selectedStatus);
+    if (fromInput) ps.set("from", fromInput);
+    if (toInput) ps.set("to", toInput);
+    if (searchQuery) ps.set("q", searchQuery);
+    ps.set("page", String(p));
+    return `/panel/pedidos?${ps.toString()}`;
+  };
+
+  const rows = pageOrders.map((order) => {
     const safeOrderId = escapeHtml(order.id || "");
     const encodedOrderId = encodeURIComponent(String(order.id || ""));
     const paymentState = normalizeClientPaymentStatus(order.paymentStatus);
@@ -1107,6 +1125,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
+          <input type="hidden" name="page" value="${safePage}" />
           <select name="paymentStatus" class="cp-category-select cp-status-${escapeHtml(paymentState)}" onchange="this.form.submit()">
             <option value="pending" ${paymentState === "pending" ? "selected" : ""}>No pagado</option>
             <option value="paid" ${paymentState === "paid" ? "selected" : ""}>Pagado</option>
@@ -1123,6 +1142,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
+          <input type="hidden" name="page" value="${safePage}" />
           <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" />
           <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" onchange="this.form.submit()">
             <option value="pending"    ${order.workflow.state === "pending"    ? "selected" : ""}>Pendiente</option>
@@ -1141,6 +1161,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="from" value="${escapeHtml(fromInput)}" />
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
+          <input type="hidden" name="page" value="${safePage}" />
           <input type="hidden" name="state" value="${escapeHtml(order.workflow.state)}" />
           <button
             type="submit"
@@ -1236,7 +1257,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
       </article>
 
       <article class="cp-card cp-span-3">
-        <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultados</span></div>
+        <div class="cp-card-head"><h3>Listado de pedidos</h3><span>${visibleOrders.length} resultado${visibleOrders.length !== 1 ? "s" : ""}${totalPages > 1 ? ` — pág. ${safePage} de ${totalPages}` : ""}</span></div>
         <div class="cp-note">Click en la fila para expandir detalle rapido o entra por ID para ver la ficha completa del pedido.</div>
         ${fetchError ? `<div class="cp-empty">No se pudo cargar pedidos: ${escapeHtml(fetchError)}</div>` : ""}
         <div class="cp-table-wrap">
@@ -1245,6 +1266,12 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
             <tbody class="cp-orders-body">${rows || `<tr><td colspan="8">Sin pedidos para este filtro.</td></tr>`}</tbody>
           </table>
         </div>
+        ${totalPages > 1 ? `
+        <div class="cp-pagination">
+          ${safePage > 1 ? `<a class="cp-btn" href="${pageParams(1)}">« Primera</a> <a class="cp-btn" href="${pageParams(safePage - 1)}">‹ Anterior</a>` : `<span class="cp-btn cp-btn-disabled">« Primera</span> <span class="cp-btn cp-btn-disabled">‹ Anterior</span>`}
+          <span class="cp-pagination-info">Página ${safePage} de ${totalPages} (${visibleOrders.length} pedidos)</span>
+          ${safePage < totalPages ? `<a class="cp-btn" href="${pageParams(safePage + 1)}">Siguiente ›</a> <a class="cp-btn" href="${pageParams(totalPages)}">Última »</a>` : `<span class="cp-btn cp-btn-disabled">Siguiente ›</span> <span class="cp-btn cp-btn-disabled">Última »</span>`}
+        </div>` : ""}
       </article>
 
     </section>
@@ -1604,11 +1631,13 @@ router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAcc
   const from = String(req.body.from || "").trim();
   const to = String(req.body.to || "").trim();
   const q = String(req.body.q || "").trim();
+  const page = String(req.body.page || "").trim();
   if (range) redirectParams.set("range", range);
   if (status) redirectParams.set("status", status);
   if (from) redirectParams.set("from", from);
   if (to) redirectParams.set("to", to);
   if (q) redirectParams.set("q", q);
+  if (page && page !== "1") redirectParams.set("page", page);
 
   const redirectBase = () => {
     const query = redirectParams.toString();
@@ -1657,11 +1686,13 @@ router.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAc
   const from = String(req.body.from || "").trim();
   const to = String(req.body.to || "").trim();
   const q = String(req.body.q || "").trim();
+  const page = String(req.body.page || "").trim();
   if (range) redirectParams.set("range", range);
   if (status) redirectParams.set("status", status);
   if (from) redirectParams.set("from", from);
   if (to) redirectParams.set("to", to);
   if (q) redirectParams.set("q", q);
+  if (page && page !== "1") redirectParams.set("page", page);
 
   const redirectBase = () => {
     const query = redirectParams.toString();
