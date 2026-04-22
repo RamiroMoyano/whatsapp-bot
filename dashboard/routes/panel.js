@@ -1126,7 +1126,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="to" value="${escapeHtml(toInput)}" />
           <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
           <input type="hidden" name="page" value="${safePage}" />
-          <select name="paymentStatus" class="cp-category-select cp-status-${escapeHtml(paymentState)}" onchange="this.form.submit()">
+          <select name="paymentStatus" class="cp-category-select cp-status-${escapeHtml(paymentState)}" data-ajax-select>
             <option value="pending" ${paymentState === "pending" ? "selected" : ""}>No pagado</option>
             <option value="paid" ${paymentState === "paid" ? "selected" : ""}>Pagado</option>
             <option value="failed" ${paymentState === "failed" ? "selected" : ""}>Fallido</option>
@@ -1144,7 +1144,7 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           <input type="hidden" name="q" value="${escapeHtml(searchQuery)}" />
           <input type="hidden" name="page" value="${safePage}" />
           <input type="hidden" name="archived" value="${order.workflow.archived ? "1" : "0"}" />
-          <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" onchange="this.form.submit()">
+          <select name="state" class="cp-category-select cp-status-${escapeHtml(order.workflow.state)}" data-ajax-select>
             <option value="pending"    ${order.workflow.state === "pending"    ? "selected" : ""}>Pendiente</option>
             <option value="preparing"  ${order.workflow.state === "preparing"  ? "selected" : ""}>En preparacion</option>
             <option value="ready"      ${order.workflow.state === "ready"      ? "selected" : ""}>Listo para entregar</option>
@@ -1481,6 +1481,69 @@ router.get("/panel/pedidos", requireClientAuth, loadClientIntegrationFlag, requi
           orderRows.forEach((row) => bindOrderRow(row));
         }
 
+        // ── Inline AJAX selects (estado y pago sin recarga) ──────────────────
+        const STATUS_CLASSES = ["cp-status-pending","cp-status-preparing","cp-status-ready","cp-status-completed","cp-status-rejected","cp-status-paid","cp-status-failed"];
+
+        const setSelectBusy = (select, busy) => {
+          select.disabled = busy;
+          select.style.opacity = busy ? "0.5" : "";
+        };
+
+        const flashSelect = (select, ok) => {
+          const cls = ok ? "cp-ajax-ok" : "cp-ajax-err";
+          select.classList.add(cls);
+          setTimeout(() => select.classList.remove(cls), 1200);
+        };
+
+        document.querySelectorAll("[data-ajax-select]").forEach((select) => {
+          const form = select.closest("form");
+          if (!form) return;
+
+          select.addEventListener("change", async (e) => {
+            e.preventDefault();
+            const prevValue = select.dataset.prevValue || select.value;
+            select.dataset.prevValue = select.value;
+
+            setSelectBusy(select, true);
+            try {
+              const body = new URLSearchParams(new FormData(form));
+              const resp = await fetch(form.action, {
+                method: "POST",
+                headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+                credentials: "same-origin",
+                body: body.toString(),
+              });
+              const data = await resp.json();
+              if (!resp.ok || data.error) throw new Error(data.error || ("Error " + resp.status));
+
+              // Update color class
+              STATUS_CLASSES.forEach((c) => select.classList.remove(c));
+              select.classList.add("cp-status-" + select.value);
+              select.dataset.prevValue = select.value;
+
+              // Invalidate detail cache so next expand fetches fresh data
+              if (typeof detailCache !== "undefined") {
+                const row = select.closest(".cp-order-row");
+                const oid = row && row.getAttribute("data-order-id");
+                if (oid) detailCache.delete(oid);
+              }
+
+              flashSelect(select, true);
+            } catch (err) {
+              select.value = prevValue;
+              STATUS_CLASSES.forEach((c) => select.classList.remove(c));
+              select.classList.add("cp-status-" + prevValue);
+              flashSelect(select, false);
+              console.error("[ajax-select]", err?.message || err);
+            } finally {
+              setSelectBusy(select, false);
+            }
+          });
+
+          // Track initial value
+          select.dataset.prevValue = select.value;
+        });
+
       })();
     </script>
   `;
@@ -1622,6 +1685,7 @@ router.get("/panel/pedidos/ver/:id", requireClientAuth, loadClientIntegrationFla
 
 router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
+  const wantsJson = String(req.headers.accept || "").includes("application/json");
   const orderId = String(req.body.orderId || "").trim();
   const paymentStatus = String(req.body.paymentStatus || "").trim().toLowerCase();
 
@@ -1645,6 +1709,7 @@ router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAcc
   };
 
   if (!orderId || !["pending", "paid", "failed"].includes(paymentStatus)) {
+    if (wantsJson) return res.status(400).json({ error: "Datos invalidos para actualizar pago" });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar pago")}`);
   }
@@ -1663,9 +1728,11 @@ router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAcc
       body: { paymentStatus },
     });
 
+    if (wantsJson) return res.json({ ok: true, paymentStatus });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}updatedPayment=1`);
   } catch (e) {
+    if (wantsJson) return res.status(500).json({ error: e?.message || String(e) });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
   }
@@ -1673,6 +1740,7 @@ router.post("/panel/pedidos/payment", requireClientAuth, requireClientSectionAcc
 
 router.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAccess("pedidos"), async (req, res) => {
   const company = req.company;
+  const wantsJson = String(req.headers.accept || "").includes("application/json");
   const orderId = String(req.body.orderId || "").trim();
   const rawState = String(req.body.state || req.body.category || "").trim().toLowerCase();
   const normalizedState = normalizeClientOrderState(rawState);
@@ -1700,6 +1768,7 @@ router.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAc
   };
 
   if (!orderId || !category) {
+    if (wantsJson) return res.status(400).json({ error: "Datos invalidos para actualizar pedido" });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent("Datos invalidos para actualizar pedido")}`);
   }
@@ -1718,9 +1787,11 @@ router.post("/panel/pedidos/category", requireClientAuth, requireClientSectionAc
       body: { state, archived: archived ? 1 : 0, category },
     });
 
+    if (wantsJson) return res.json({ ok: true, state, archived });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}updatedCategory=1`);
   } catch (e) {
+    if (wantsJson) return res.status(500).json({ error: e?.message || String(e) });
     const next = redirectBase();
     return res.redirect(`${next}${next.includes("?") ? "&" : "?"}error=${encodeURIComponent(e?.message || e)}`);
   }
