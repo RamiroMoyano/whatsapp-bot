@@ -367,7 +367,7 @@ router.get("/admin", requireDashboardAuth, async (req, res) => {
             </div>
             <form method="POST" action="/admin/maintenance/toggle" style="display:flex;flex-direction:column;gap:6px">
               <input type="hidden" name="enabled" value="${maintenanceState?.maintenanceMode ? "0" : "1"}" />
-              <input type="text" name="message" value="${escapeHtml(maintenanceState?.message || "")}" placeholder="Mensaje para clientes..." style="font-size:11px;padding:4px 6px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:#e2e8f0;width:100%" />
+              <input type="text" name="message" value="${escapeHtml(maintenanceState?.message || "")}" placeholder="Mensaje para clientes..." class="admin-maintenance-input" />
               <button type="submit" class="btn ${maintenanceState?.maintenanceMode ? "secondary" : "danger"}" style="font-size:11px;padding:5px 8px">
                 ${maintenanceState?.maintenanceMode ? "✅ Desactivar" : "⚠️ Activar"}
               </button>
