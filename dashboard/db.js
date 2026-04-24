@@ -178,6 +178,43 @@ if (DASHBOARD_DATABASE_URL) {
       );
       return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
     },
+    async getAllOrders(options = {}) {
+      const q = String(options.q || "").trim().toLowerCase();
+      const filterCompanyId = String(options.companyId || "").trim();
+      const limit = Math.max(1, Math.min(500, Number(options.limit) || 50));
+      const clauses = [];
+      const params = [];
+      if (filterCompanyId) {
+        clauses.push(`companyid = ?`);
+        params.push(filterCompanyId);
+      }
+      if (q) {
+        clauses.push(`(LOWER(id) LIKE ? OR LOWER(fromnumber) LIKE ? OR LOWER(name) LIKE ? OR LOWER(contact) LIKE ?)`);
+        const like = `%${q}%`;
+        params.push(like, like, like, like);
+      }
+      params.push(limit);
+      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+      const result = await query(
+        `SELECT
+            id,
+            createdat AS "createdAt",
+            fromnumber AS "fromNumber",
+            companyid AS "companyId",
+            name,
+            contact,
+            total,
+            paymentstatus AS "paymentStatus",
+            paymentmethod AS "paymentMethod",
+            orderstatus AS "orderStatus"
+           FROM orders
+          ${where}
+          ORDER BY createdat DESC
+          LIMIT ?`,
+        params,
+      );
+      return Array.isArray(result.rows) ? result.rows.map(normalizeRowKeys) : [];
+    },
     async saveCompanyById(companyId, payload = {}) {
       const id = String(companyId || "").trim();
       if (!id) throw new Error("Company ID requerido");

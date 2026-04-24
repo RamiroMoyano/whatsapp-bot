@@ -32,6 +32,7 @@ import {
   buildFrequentQuestions, buildOverviewAlerts, buildClientConversationSummary,
   normalizeCatalogItemRecord,
 } from "../lib/helpers.js";
+import { dashboardDb } from "../db.js";
 
 const router = Router();
 
@@ -2356,7 +2357,9 @@ router.get("/admin/orders", requireDashboardAuth, async (req, res) => {
     params.set("limit", String(limit));
 
     const [orders, companiesResult] = await Promise.all([
-      api(`/api/orders?${params.toString()}`),
+      dashboardDb.enabled
+        ? dashboardDb.getAllOrders({ q, companyId: filterCompanyId, limit })
+        : api(`/api/orders?${params.toString()}`),
       loadAdminCompanies({ preferCache: true }),
     ]);
     const companies = companiesResult.items || [];
@@ -2453,7 +2456,9 @@ router.get("/admin/orders/export.csv", requireDashboardAuth, async (req, res) =>
     if (q) params.set("q", q);
     params.set("limit", String(limit));
 
-    const orders = await api(`/api/orders?${params.toString()}`);
+    const orders = dashboardDb.enabled
+      ? await dashboardDb.getAllOrders({ q, limit })
+      : await api(`/api/orders?${params.toString()}`);
     const csv = toCsv(orders);
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
