@@ -3008,6 +3008,18 @@ body.admin-light-ui .btn {
 
 body.admin-light-ui .btn:hover {
   transform: translateY(-1px);
+  filter: brightness(0.96);
+  color: #1c4476;
+}
+
+body.admin-light-ui .btn.primary:hover {
+  filter: brightness(1.08);
+  color: #fff;
+}
+
+body.admin-light-ui .btn.danger:hover {
+  filter: brightness(1.06);
+  color: #fff;
 }
 
 body.admin-light-ui .btn.primary {
@@ -3019,6 +3031,7 @@ body.admin-light-ui .btn.primary {
 
 body.admin-light-ui .btn.secondary {
   background: linear-gradient(145deg, #ffffff, #f0f6ff);
+  color: #1c4476;
 }
 
 body.admin-light-ui .btn.danger {
