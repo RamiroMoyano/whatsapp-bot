@@ -31,6 +31,7 @@ import {
   buildPriceChart, buildBotActivitySeries, buildOrdersBarChartSvg,
   buildFrequentQuestions, buildOverviewAlerts, buildClientConversationSummary,
   normalizeCatalogItemRecord,
+  normalizeDashboardMode, extractDashboardAccessFromRules, getDashboardAccessForCompany,
 } from "../lib/helpers.js";
 import { dashboardDb } from "../db.js";
 
