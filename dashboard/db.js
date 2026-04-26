@@ -24,12 +24,13 @@ function normalizeRowKeys(row) {
   if (!row || typeof row !== "object") return row;
   const out = {};
   for (const [key, value] of Object.entries(row)) {
-    if (key === "rulesjson") out.rulesJson = value;
-    else if (key === "catalogjson") out.catalogJson = value;
-    else if (key === "createdat") out.createdAt = value;
-    else if (key === "updatedat") out.updatedAt = value;
-    else if (key === "companyid") out.companyId = value;
-    else out[key] = value;
+    const v = value instanceof Date ? value.toISOString() : value;
+    if (key === "rulesjson") out.rulesJson = v;
+    else if (key === "catalogjson") out.catalogJson = v;
+    else if (key === "createdat") out.createdAt = v;
+    else if (key === "updatedat") out.updatedAt = v;
+    else if (key === "companyid") out.companyId = v;
+    else out[key] = v;
   }
   return out;
 }
