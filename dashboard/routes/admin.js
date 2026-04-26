@@ -499,30 +499,73 @@ router.get("/admin", requireDashboardAuth, async (req, res) => {
     <script>
       (function() {
         var body = document.getElementById("admin-activity-body");
-        var ts = document.getElementById("admin-activity-ts");
+        var ts   = document.getElementById("admin-activity-ts");
         var POLL_MS = 30000;
-        var knownIds = new Set();
+        var knownIds     = new Set();
+        var openCompanies = new Set();
 
         function fmt(at) {
           if (!at) return "-";
           var d = new Date(at);
-          return d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) +
-            " " + d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
-        }
-
-        function renderRows(msgs) {
-          if (!msgs || !msgs.length) return '<div class="muted">Sin mensajes recientes.</div>';
-          return '<div class="admin-activity-table-wrap"><table class="admin-activity-table"><thead><tr><th>Hora</th><th>Empresa</th><th>Numero</th><th>Mensaje</th></tr></thead><tbody>' +
-            msgs.map(function(m) {
-              var isNew = !knownIds.has(String(m.id));
-              knownIds.add(String(m.id));
-              return '<tr class="' + (isNew ? "admin-activity-new" : "") + '"><td>' + fmt(m.at) + '</td><td>' + esc(m.companyId) + '</td><td>' + esc(m.from) + '</td><td class="admin-activity-content">' + esc(m.content) + '</td></tr>';
-            }).join("") +
-            '</tbody></table></div>';
+          return d.toLocaleTimeString("es-AR", { hour:"2-digit", minute:"2-digit", second:"2-digit" }) +
+                 " " + d.toLocaleDateString("es-AR", { day:"2-digit", month:"2-digit" });
         }
 
         function esc(v) {
           return String(v || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        }
+
+        function toUid(cid) {
+          return "act-" + cid.replace(/[^a-z0-9]/gi, "_");
+        }
+
+        window.toggleActCompany = function(cid) {
+          var id  = toUid(cid);
+          var el  = document.getElementById(id);
+          var arr = document.getElementById("arr-" + id);
+          if (!el) return;
+          var isOpen = el.style.display !== "none";
+          el.style.display  = isOpen ? "none" : "";
+          if (arr) arr.textContent = isOpen ? "▶" : "▼";
+          if (isOpen) openCompanies.delete(cid);
+          else        openCompanies.add(cid);
+        };
+
+        function renderRows(msgs) {
+          if (!msgs || !msgs.length) return '<div class="muted">Sin mensajes recientes.</div>';
+
+          var groups = {}, order = [];
+          msgs.forEach(function(m) {
+            var cid = m.companyId || "unknown";
+            if (!groups[cid]) { groups[cid] = []; order.push(cid); }
+            groups[cid].push(m);
+          });
+
+          var html = '<div class="admin-act-accordion">';
+          order.forEach(function(cid) {
+            var items  = groups[cid];
+            var hasNew = items.some(function(m) { return !knownIds.has(String(m.id)); });
+            items.forEach(function(m) { knownIds.add(String(m.id)); });
+            var last   = items[0];
+            var id     = toUid(cid);
+            var label  = items.length === 1 ? "1 mensaje" : items.length + " mensajes";
+            html += '<div class="admin-act-group' + (hasNew ? " admin-act-group-new" : "") + '">';
+            html += '<div class="admin-act-header" onclick="toggleActCompany(' + JSON.stringify(cid) + ')">';
+            html += '<span class="admin-act-cname">' + esc(cid) + '</span>';
+            html += '<span class="admin-act-meta">';
+            html += '<span class="admin-act-count">' + label + '</span>';
+            html += '<span class="admin-act-time muted">' + fmt(last.at) + '</span>';
+            html += '<span class="admin-act-arrow" id="arr-' + id + '">▶</span>';
+            html += '</span></div>';
+            html += '<div class="admin-act-detail" id="' + id + '" style="display:none">';
+            html += '<table class="admin-activity-table"><thead><tr><th>Hora</th><th>Numero</th><th>Mensaje</th></tr></thead><tbody>';
+            items.forEach(function(m) {
+              html += '<tr><td>' + fmt(m.at) + '</td><td>' + esc(m.from) + '</td><td class="admin-activity-content">' + esc(m.content) + '</td></tr>';
+            });
+            html += '</tbody></table></div></div>';
+          });
+          html += '</div>';
+          return html;
         }
 
         function load() {
@@ -531,6 +574,13 @@ router.get("/admin", requireDashboardAuth, async (req, res) => {
             .then(function(data) {
               if (!data || !data.ok) return;
               body.innerHTML = renderRows(data.messages);
+              openCompanies.forEach(function(cid) {
+                var id = toUid(cid);
+                var el  = document.getElementById(id);
+                var arr = document.getElementById("arr-" + id);
+                if (el)  el.style.display = "";
+                if (arr) arr.textContent  = "▼";
+              });
               ts.textContent = "Actualizado " + new Date().toLocaleTimeString("es-AR");
             })
             .catch(function() { ts.textContent = "Error al cargar"; });

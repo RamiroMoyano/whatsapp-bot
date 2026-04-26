@@ -5385,6 +5385,90 @@ body.client-saas-ui .cp-day-check:has(input:checked) {
   margin-top: 18px;
 }
 
+/* --- Admin: activity accordion ------------------------------------ */
+.admin-act-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.admin-act-group {
+  border: 1px solid rgba(100,130,180,0.2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.admin-act-group-new {
+  border-color: rgba(99,179,237,0.45);
+}
+
+.admin-act-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255,255,255,0.03);
+  transition: background 0.15s;
+}
+
+.admin-act-header:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.admin-act-group-new .admin-act-header {
+  background: rgba(99,179,237,0.07);
+}
+
+.admin-act-cname {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.admin-act-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.admin-act-count {
+  background: rgba(100,130,180,0.18);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.admin-act-group-new .admin-act-count {
+  background: rgba(99,179,237,0.22);
+  color: #63b3ed;
+}
+
+.admin-act-time {
+  font-size: 11px;
+}
+
+.admin-act-arrow {
+  font-size: 9px;
+  color: #64748b;
+}
+
+.admin-act-detail {
+  border-top: 1px solid rgba(100,130,180,0.15);
+}
+
+/* light-ui overrides */
+body.admin-light-ui .admin-act-group           { border-color: #dde6f0; }
+body.admin-light-ui .admin-act-group-new       { border-color: #93c5fd; }
+body.admin-light-ui .admin-act-header          { background: #f8fafd; }
+body.admin-light-ui .admin-act-header:hover    { background: #eef3fa; }
+body.admin-light-ui .admin-act-group-new .admin-act-header { background: rgba(219,234,254,0.5); }
+body.admin-light-ui .admin-act-cname           { color: #1e3a5f; }
+body.admin-light-ui .admin-act-count           { background: #e2eaf5; color: #2c5282; }
+body.admin-light-ui .admin-act-group-new .admin-act-count { background: #bfdbfe; color: #1d4ed8; }
+body.admin-light-ui .admin-act-detail          { border-top-color: #dde6f0; }
+
 /* --- Admin: maintenance widget ------------------------------------ */
 .admin-maintenance-widget {
   margin-top: 10px;
